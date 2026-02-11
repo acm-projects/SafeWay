@@ -22,4 +22,5 @@
 - Live Data Scraper (Automation + NLP)
 - Contextual APIs
 - Client Side Server (model)
+- Future Implementation: Travel Planner (Traveling Salesman)
 
