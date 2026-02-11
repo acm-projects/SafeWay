@@ -164,3 +164,28 @@
 
 </details>
 
+## Tech Stack 💻
+
+<strong> IDE: </strong> VSCode                                                                        
+<strong> Emulator: </strong> Expo or XCode                                                
+<strong> Wireframe: </strong> Figma
+
+<strong> 1st Choice Stack: </strong> 
+- Mobile App (Frontend): React Native (via Expo)
+- Map Interface: react-native-maps
+- Backend API: FastAPI (Python)
+- Database: PostgreSQL + PostGIS
+- Routing Engine: NetworkX (Python)
+- Data Processing: Pandas & GeoPandas
+- Machine Learning: Scikit-Learn
+- Map Data Source: OSMnx
+
+## Helpful Resources/Tutorials 🔎
+
+ <strong> React Native: </strong>
+- [React Native Basics](https://reactnative.dev/docs/tutorial?language=javascript)
+- [Environment Setup](https://reactnative.dev/docs/environment-setup)
+- [Environment Setup with Expo](https://docs.expo.dev/router/installation/)
+- [Build Full Stack App in React Native](https://www.youtube.com/watch?v=eYByUtXQbEo)
+- [React Native Course](https://www.youtube.com/watch?v=ZBCUegTZF7M&t=1396s)
+- [React Native Tutorial](https://www.youtube.com/watch?v=6ZnfsJ6mM5c)
