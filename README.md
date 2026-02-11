@@ -62,20 +62,66 @@
 </details>
 
 <details closed>
-<summary>  <strong> Week 3/4: Coding ⚙️ </strong> </summary>
+<summary>  <strong> Week 3: Coding ⚙️ </strong> </summary>
 <br>
   
 - Frontend:
   - Login/Sign Up Pages
   - Home Page
-  - Integrate the colored lines to the Frontend
+  - Fetch and display a static list of coordinates (Polyline) from the backend
+  - Color-code the line (Green/Red) based on a dummy "risk score" sent by the server.
+  - Deliverable: A colored line appears on the map.
 - Backend:
   - Ingest historical crime CSV into the Database (spatially join to nearest streets)
   - Write a script to calculate a Base_Risk_Score (0-10) for every street segment
   - Create groups, Join groups
   - Create an API endpoint GET /risk_map that returns colored lines
+  - Deliverable: API returns JSON with street segments and scores.
  
 - Milestone: The phone map displays streets colored by their historical safety score.
 
 </details>
 
+<details closed>
+<summary>  <strong> Week 4: More Coding ⚙️ </strong> </summary>
+<br>
+  
+- Frontend:
+  - Add text input for "Destination."
+  - Implement Geocoding (convert "Library" to lat/long) using a free API (example: Nominatim)
+  - Deliverable: User types a place, map pins it
+- Backend:
+  - Build the Graph in NetworkX
+  - Implement the Cost Function. (example: Cost = Length + (Risk * Weight))
+  - Write search algorithm logic. (Dijkstra’s Algorithm or A* Search)
+  - Deliverable: Script prints "Safe Path" nodes between two points.
+
+</details>
+
+<details closed>
+<summary>  <strong> Week 5/6: Middle Stretch 💫 </strong> </summary>
+<br>
+  
+- Integrate backend features with finished frontend pages (User Auth)
+- Frontend
+  - Navigation Controls: 
+    - Send start and end coordinates to the backend.
+    - Receive the route_geometry array
+    - Draw the specific path on the map
+    - Deliverable: "Get Route" button draws the calculated path.
+  - User Controls:
+    - Add "Safety vs. Speed" Slider (0.0 - 1.0)
+    - Pass slider value to the backend API.
+    - Deliverable: Moving slider refreshes the route line.
+- Backend
+   - The Routing API:
+    - Create endpoint POST /get_route
+    - Accept start, end, and safety_preference
+    - Return the calculated path as GeoJSON.
+    - Deliverable: API returns the optimal path coordinates
+  - Dynamic Weighting:
+    - Update routing logic to use the safety_preference multiplier.
+    - Tuning: Adjust math so the route actually changes when slider moves.
+    - Deliverable: API returns different paths for Safety=0 vs Safety=1.
+
+</details>
