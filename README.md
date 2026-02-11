@@ -143,3 +143,24 @@
   - Deliverable: API returns readable steps.
 
 </details>
+
+<details closed>
+<summary>  <strong> Week 8: Wrapping Up 🌙 </strong> </summary>
+<br>
+  
+- Finish backend/frontend integration
+- Add finishing touches
+- Finish stretch goals if possible
+- Begin work on presentation 
+
+</details>
+
+<details closed>
+<summary>  <strong> Week 9/10: Presentation Prep 🎬 </strong> </summary>
+<br>
+  
+- Prep for Presentation Night
+- Finish Slides + Script + Demo
+
+</details>
+
