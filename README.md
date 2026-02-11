@@ -43,7 +43,7 @@
 </details>
 
 <details closed>
-<summary>  <strong> Week 2: More Preparation 💡 </strong> </summary>
+<summary>  <strong> Week 2: Ramp-Up 💡 </strong> </summary>
 <br>
   
 - Frontend:
@@ -62,3 +62,20 @@
 </details>
 
 <details closed>
+<summary>  <strong> Week 3/4: Coding ⚙️ </strong> </summary>
+<br>
+  
+- Frontend:
+  - Login/Sign Up Pages
+  - Home Page
+  - Integrate the colored lines to the Frontend
+- Backend:
+  - Ingest historical crime CSV into the Database (spatially join to nearest streets)
+  - Write a script to calculate a Base_Risk_Score (0-10) for every street segment
+  - Create groups, Join groups
+  - Create an API endpoint GET /risk_map that returns colored lines
+ 
+- Milestone: The phone map displays streets colored by their historical safety score.
+
+</details>
+
