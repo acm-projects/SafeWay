@@ -16,3 +16,10 @@
 - Historial Data Collection
 - Edge Weight Algorithm
 - User Controls / Preferences
+
+## Stretch Goals 🌟
+- Predictive Layer (ML)
+- Live Data Scraper (Automation + NLP)
+- Contextual APIs
+- Client Side Server
+
