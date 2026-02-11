@@ -193,6 +193,9 @@
 <strong> XCode: </strong>
 - [Install IOS Simulator](https://www.youtube.com/watch?v=Ws-wnDywtMI)
 
+<strong> FastAPI: </strong>
+- [Installing FastAPI (make sure to understand virtual environments](https://fastapi.tiangolo.com/#installation)
+
 <strong> APIs: </strong>
 - [Fetching Data from an API in React Native](https://www.youtube.com/watch?v=KJhg761xb3c)
 - [React Native Tutorial - POST Request](https://www.youtube.com/watch?v=BecN2PxyR_0)
