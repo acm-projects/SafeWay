@@ -21,5 +21,5 @@
 - Predictive Layer (ML)
 - Live Data Scraper (Automation + NLP)
 - Contextual APIs
-- Client Side Server
+- Client Side Server (model)
 
