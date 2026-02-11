@@ -7,3 +7,12 @@
 <h1 align="center"> SafeWay 🗺️ </h1>
 
 <div align="center">SafeWay is a safety-focused navigation app that calculates walking/driving routes based on crime data, street lighting, and environmental factors rather than just distance. Unlike standard maps that optimize for speed, SafeStep empowers users to choose their own balance between efficiency and safety using dynamic risk weighting and predictive machine learning.</div>
+
+## MVP 🏆
+- Map Interface
+- Search
+- Visual Routing
+- Location Tracking
+- Historial Data Collection
+- Edge Weight Algorithm
+- User Controls / Preferences
