@@ -189,3 +189,69 @@
 - [Build Full Stack App in React Native](https://www.youtube.com/watch?v=eYByUtXQbEo)
 - [React Native Course](https://www.youtube.com/watch?v=ZBCUegTZF7M&t=1396s)
 - [React Native Tutorial](https://www.youtube.com/watch?v=6ZnfsJ6mM5c)
+
+<strong> XCode: </strong>
+- [Install IOS Simulator](https://www.youtube.com/watch?v=Ws-wnDywtMI)
+
+<strong> APIs: </strong>
+- [Fetching Data from an API in React Native](https://www.youtube.com/watch?v=KJhg761xb3c)
+- [React Native Tutorial - POST Request](https://www.youtube.com/watch?v=BecN2PxyR_0)
+- [React Native tutorial - API Call](https://www.youtube.com/watch?v=NuKQk7nbk0k) 
+- [Google Calendar API with Node.js](https://www.youtube.com/watch?v=2byT7fYT8UE)
+- [Postman Tutorial](https://www.youtube.com/watch?v=MFxk5BZulVU)
+- [RapidAPI](https://rapidapi.com/search/restaurants)
+- [Google Cloud Natural Language API](https://cloud.google.com/natural-language)
+
+<strong> Other Technologies for Finding Free Time Slots: </strong>
+- [GraphQL Course for Beginners](https://www.youtube.com/watch?v=5199E50O7SI)
+- [GraphQL With React Tutorial - Apollo Client](https://www.youtube.com/watch?v=YyUWW04HwKY)
+- [date-fns](https://www.youtube.com/watch?v=9YZIQAmgD0o)
+- [AWS Lambda](https://www.youtube.com/watch?v=UsaiOEFdfs0)
+- [Associating a Lambda function to your Amazon Lex v2 bot](https://www.youtube.com/watch?v=57ZqpzHtQX4) 
+- [Amazon Lex: Validate Slot data with Lambda](https://www.youtube.com/watch?v=1xRl8Ipa018)
+
+<strong> Optional/Stretch Goals: </strong>
+- [Amazon Kendra: Search Calendars](https://www.youtube.com/watch?v=Yo9YQCGG5zM)
+- [Amazon Lex: Voice Activated Scheduling](https://www.youtube.com/watch?v=3AZ1n2oHtEI)
+
+Git Cheat Sheets:      
+- [Git Cheat Sheet 1](https://education.github.com/git-cheat-sheet-education.pdf)                                                                                                                                                
+- [Git Cheat Sheet 2](https://drive.google.com/file/d/1OddwoSvNJ3dQuEBw3RERieMXmOicif9_/view)  
+
+Resources for Design:    
+- [Best App Design](https://dribbble.com/tags/best-app-design) - copy and paste link if it takes you to forbidden                                                                                                                 
+- [Dribble](https://dribbble.com/)  - copy and paste link if it takes you to forbidden                                                                                                                                            
+- [Color Palettes](https://www.canva.com/colors/color-palettes/)                                                                                                                                                                  
+- [More Color Palettes](https://colorhunt.co/)                                                                                                                                                                                    
+- [Do's and Don'ts of Mobile App Design](https://realmonkey.co/mobile-app-design/the-dos-and-donts-of-mobile-app-design/)
+
+
+
+Other Resources:           
+- [Git Tutorial](https://www.youtube.com/watch?v=USjZcfj8yxE)  
+- [Figma](https://www.figma.com/files/project/81846282/Team-project?fuid=1155168864304822849)                                                                                              
+- [How to be Successful in Projects](https://docs.google.com/document/d/18Zi3DrKG5e6g5Bojr8iqxIu6VIGl86YBSFlsnJnlM88/edit)
+
+## GitHub Cheat Sheet ⚡️
+
+General Use
+
+| Command | Description |
+| ------ | ------ |
+| cd "SafeWay" | Change directories over to our repository |
+| git branch | Lists branches for you |
+| git branch "branch name" | Makes new branch |
+| git checkout "branch name" | Switch to branch |
+| git checkout -b "branch name" | Same as 2 previous commands together |
+| git add . | Finds all changed files |
+| git commit -m "Testing123" | Commit with message |
+| git push origin "branch" | Push to branch |
+| git pull origin "branch" | Pull updates from a specific branch |
+
+## Project Manager
+- Mathew Biji
+
+## Industry Mentor
+- Thilak Jayachandran
+
+## Developers‼️‼️ 
