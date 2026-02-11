@@ -125,3 +125,21 @@
     - Deliverable: API returns different paths for Safety=0 vs Safety=1.
 
 </details>
+
+<details closed>
+<summary>  <strong> Week 7: Almost There ⏳ </strong> </summary>
+<br>
+  
+- Integrate finished backend features with finished frontend pages
+- Finish all MVP features
+- Work on stretch goals if possible
+- Frontend
+  - Implement "Camera Follow" mode (map centers on user)
+  - Add "Step-by-Step" text box ("Turn left on Main St")
+  - Deliverable: App feels like a real GPS 
+- Backend
+  - Generate text instructions from the route ("Head North")
+  - Send instructions along with geometry
+  - Deliverable: API returns readable steps.
+
+</details>
