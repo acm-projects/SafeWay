@@ -174,7 +174,7 @@
 - Mobile App (Frontend): React Native (via Expo)
 - Map Interface: react-native-maps
 - Backend API: FastAPI (Python)
-- Database: PostgreSQL + PostGIS
+- Database: PostgreSQL + PostGIS (Supabase)
 - Routing Engine: NetworkX (Python)
 - Data Processing: Pandas & GeoPandas
 - Machine Learning: Scikit-Learn
