@@ -1,3 +1,6 @@
 .venv
 .env
 __pycache__/
+backend/.env
+frontend/.env
+backend/__pycache__/

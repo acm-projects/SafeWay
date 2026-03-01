@@ -5,25 +5,54 @@
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+const palette = {
+  white: '#FCFCFC',
+  rosewood: '#B56576',
+  midnightViolet: '#230C33',
+  teal: '#177E89',
+  sunlitClay: '#F4B966',
+};
 
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
-    tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    text: palette.midnightViolet,
+    background: palette.white,
+    tint: palette.teal,
+    icon: '#7A6B85',
+    tabIconDefault: '#7A6B85',
+    tabIconSelected: palette.teal,
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
-    tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    text: palette.white,
+    background: '#150B21',
+    tint: palette.teal,
+    icon: '#C8BACF',
+    tabIconDefault: '#C8BACF',
+    tabIconSelected: palette.sunlitClay,
+  },
+};
+
+export const AppTheme = {
+  palette,
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 20,
+    xxl: 28,
+  },
+  radius: {
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 24,
+  },
+  typography: {
+    heading: 26,
+    title: 20,
+    body: 16,
+    caption: 13,
   },
 };
 
