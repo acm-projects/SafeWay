@@ -4,3 +4,4 @@ __pycache__/
 backend/.env
 frontend/.env
 backend/__pycache__/
+backend/model/output/
