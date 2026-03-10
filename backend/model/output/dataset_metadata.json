@@ -1,0 +1,8 @@
+{
+  "n_intersections": 29497,
+  "feature_window": "2020-01-01 to 2025-01-31",
+  "label_window": "2025-02-01 to 2026-01-31",
+  "target_variable": "future_risk_score",
+  "model_type": "XGBRegressor",
+  "spatial_cv_folds": 5
+}

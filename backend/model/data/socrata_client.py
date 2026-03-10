@@ -1,17 +1,27 @@
 """
 Socrata API client for Chicago Open Data.
 Paginated fetch for large datasets (Crashes, Vehicles, People, Crimes).
+Uses SOCRATA_APP_TOKEN from backend .env if set (higher rate limits; fewer throttling/500 errors).
 """
-from sodapy import Socrata
+import os
+from pathlib import Path
+
 import pandas as pd
+from dotenv import load_dotenv
+from sodapy import Socrata
+
+# Load backend/.env when client is used (e.g. from analysis or build_crash_map)
+_backend_dir = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_backend_dir / ".env")
 
 _DEFAULT_TIMEOUT = 60
 _DEFAULT_CHUNK = 50_000
 
 
 def get_client(domain: str = "data.cityofchicago.org", timeout: int = _DEFAULT_TIMEOUT) -> Socrata:
-    """Return a Socrata client (no token required for public data)."""
-    return Socrata(domain, None, timeout=timeout)
+    """Return a Socrata client. Uses SOCRATA_APP_TOKEN from env if set for higher rate limits."""
+    app_token = os.getenv("SOCRATA_APP_TOKEN") or None
+    return Socrata(domain, app_token, timeout=timeout)
 
 
 def fetch_all(
@@ -21,6 +31,7 @@ def fetch_all(
     chunk_size: int = _DEFAULT_CHUNK,
     domain: str = "data.cityofchicago.org",
     max_rows: int | None = None,
+    log_label: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch rows from a Socrata dataset matching the where clause.
@@ -40,6 +51,8 @@ def fetch_all(
             break
         frames.append(pd.DataFrame.from_records(rows))
         offset += len(rows)
+        if log_label:
+            print(f"  [{log_label}] {offset} rows...", flush=True)
         if len(rows) < chunk_size or (max_rows is not None and offset >= max_rows):
             break
     if not frames:

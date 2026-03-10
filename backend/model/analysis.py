@@ -2,9 +2,18 @@
 Chicago crash analysis: merged Crashes + Vehicles + People, visualizations and maps.
 Run from repo root: python -m backend.model.analysis
 Default date range: 2021-2025; default limit 50_000 rows for faster runs. Use --no-limit for full dataset.
+
+Tip: run with python -u or PYTHONUNBUFFERED=1 so logs appear immediately in files/CI.
 """
 import sys
 from pathlib import Path
+
+# Line-buffer stdout when not a TTY (background jobs otherwise show nothing until exit)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 # Ensure repo root on path for backend.model imports
 _repo_root = Path(__file__).resolve().parent.parent.parent

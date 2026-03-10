@@ -61,6 +61,25 @@ def _row_to_record(row, people_cols):
         "has_bike": bool(row.get("has_bike", False)),
         "is_fsi": bool(row.get("is_fsi", False)),
     }
+    # Optional columns (migration 007) — only sent if present in row
+    optional_str = (
+        "device_condition", "crash_type", "trafficway_type", "lane_cnt",
+        "alignment", "roadway_surface_cond", "road_defect",
+        "intersection_related_i", "work_zone_i",
+    )
+    for col in optional_str:
+        if col in row.index and pd.notna(row.get(col)):
+            record[col] = str(row[col])
+    if "num_units" in row.index and pd.notna(row.get("num_units")):
+        try:
+            record["num_units"] = int(row["num_units"])
+        except (TypeError, ValueError):
+            pass
+    if "crash_day_of_week" in row.index and pd.notna(row.get("crash_day_of_week")):
+        try:
+            record["crash_day_of_week"] = int(row["crash_day_of_week"])
+        except (TypeError, ValueError):
+            pass
     if people_cols:
         people_injuries = {}
         for c in people_cols:

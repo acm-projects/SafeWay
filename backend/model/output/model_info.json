@@ -1,0 +1,32 @@
+{
+  "feature_cols": [
+    "past_n_crash_total",
+    "past_n_crash_fsi",
+    "past_n_crash_ped",
+    "past_n_crash_bike",
+    "past_n_crash_night",
+    "past_n_crash_weekend",
+    "past_prop_fsi",
+    "past_prop_ped",
+    "past_prop_bike",
+    "past_prop_night",
+    "past_prop_angle",
+    "past_prop_rear_end",
+    "past_prop_turning",
+    "past_prop_cause_speed",
+    "past_prop_cause_yield",
+    "past_n_crime_total",
+    "past_n_crime_violent",
+    "past_n_crime_property",
+    "past_prop_violent",
+    "past_n_crime_night",
+    "speed_limit_mean",
+    "speed_limit_max",
+    "n_arms"
+  ],
+  "target_mean": 50.00169508763603,
+  "target_std": 27.869347996443192,
+  "mean_cv_r2": 0.5788396248855332,
+  "std_cv_r2": 0.04020259066108125,
+  "spearman_rho_fit": 0.7778107531768726
+}

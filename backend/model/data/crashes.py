@@ -14,13 +14,24 @@ CRASH_COLS = [
     "crash_record_id",
     "crash_date",
     "crash_hour",
+    "crash_day_of_week",
     "latitude",
     "longitude",
     "posted_speed_limit",
     "traffic_control_device",
+    "device_condition",
     "weather_condition",
     "lighting_condition",
     "first_crash_type",
+    "crash_type",
+    "trafficway_type",
+    "lane_cnt",
+    "alignment",
+    "roadway_surface_cond",
+    "road_defect",
+    "intersection_related_i",
+    "work_zone_i",
+    "num_units",
     "prim_contributory_cause",
     "hit_and_run_i",
     "injuries_fatal",
@@ -46,8 +57,12 @@ def get_enriched_crashes(
     # When limit set, cap API rows for faster runs (Socrata is throttled without token)
     max_rows = limit if limit else None
 
-    # 1. Crashes
-    df_crash = fetch_all(CRASHES_ID, where_crash, CRASH_COLS, max_rows=max_rows)
+    # 1. Crashes (no log_label when limited to avoid noise)
+    print("  [Crashes 85ca-t3if] pagination (50k per request)...", flush=True)
+    df_crash = fetch_all(
+        CRASHES_ID, where_crash, CRASH_COLS, max_rows=max_rows,
+        log_label="Crashes" if max_rows is None else None,
+    )
     if df_crash.empty:
         return df_crash
     if limit:
@@ -61,7 +76,11 @@ def get_enriched_crashes(
 
     # 2. Vehicles: aggregate unit_type per crash, then join
     veh_max = (limit * 3) if limit else None  # enough to get many joins without full pull
-    df_veh = fetch_all(VEHICLES_ID, where_crash, VEH_COLS, max_rows=veh_max)
+    print("  [Vehicles 68nd-jvt3] pagination...", flush=True)
+    df_veh = fetch_all(
+        VEHICLES_ID, where_crash, VEH_COLS, max_rows=veh_max,
+        log_label="Vehicles" if veh_max is None else None,
+    )
     if not df_veh.empty:
         df_veh["crash_record_id"] = df_veh["crash_record_id"].astype(str)
         veh_group = df_veh.groupby("crash_record_id")["unit_type"].apply(
@@ -87,7 +106,11 @@ def get_enriched_crashes(
 
     # 3. People: injury counts per crash, then join
     people_max = (limit * 3) if limit else None
-    df_people = fetch_all(PEOPLE_ID, where_crash, PEOPLE_COLS, max_rows=people_max)
+    print("  [People u6pd-qa9d] pagination...", flush=True)
+    df_people = fetch_all(
+        PEOPLE_ID, where_crash, PEOPLE_COLS, max_rows=people_max,
+        log_label="People" if people_max is None else None,
+    )
     if not df_people.empty:
         df_people["crash_record_id"] = df_people["crash_record_id"].astype(str)
         inj = (
@@ -110,4 +133,5 @@ def get_enriched_crashes(
         pi = pd.Series(0, index=df_crash.index)
     df_crash["is_fsi"] = (pf.astype(int) > 0) | (pi.astype(int) > 0)
 
+    print(f"  Crashes merge done: {len(df_crash)} rows.", flush=True)
     return df_crash
