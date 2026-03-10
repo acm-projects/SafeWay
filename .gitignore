@@ -4,6 +4,7 @@ __pycache__/
 backend/.env
 frontend/.env
 backend/__pycache__/
+backend/venv
 # Large CSVs and map HTML in model output (keep .json, .pkl, .png tracked)
 backend/model/output/*.csv
 backend/model/output/*.html

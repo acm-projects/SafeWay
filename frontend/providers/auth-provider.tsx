@@ -21,14 +21,6 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-function parseUrlParams(url: string): Record<string, string> {
-  const [baseAndQuery, fragment = ''] = url.split('#');
-  const queryString = baseAndQuery.includes('?') ? baseAndQuery.split('?')[1] : '';
-  const combined = [queryString, fragment].filter(Boolean).join('&');
-  const params = new URLSearchParams(combined);
-  return Object.fromEntries(params.entries());
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,28 +28,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
+    // Hard fallback — never block app longer than 5s
+    const hardTimeout = setTimeout(() => {
+      if (isMounted) setIsLoading(false);
+    }, 5000);
+
     supabase.auth
       .getSession()
       .then(({ data }) => {
-        if (isMounted) {
-          setSession(data.session ?? null);
-        }
+        if (isMounted) setSession(data.session ?? null);
       })
+      .catch(() => {})
       .finally(() => {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        clearTimeout(hardTimeout);
+        if (isMounted) setIsLoading(false);
       });
 
+    // Listen for auth state changes (handles Google OAuth callback too)
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (isMounted) {
-        setSession(nextSession);
-      }
+      if (isMounted) setSession(nextSession);
     });
+
+    // Handle deep link callback from Google OAuth
+    const handleUrl = async (url: string) => {
+      if (!url) return;
+      // Extract tokens from fragment (#) or query string
+      const fragment = url.includes('#') ? url.split('#')[1] : url.split('?')[1] ?? '';
+      const params = new URLSearchParams(fragment);
+      const accessToken  = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+      if (accessToken && refreshToken) {
+        await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      }
+    };
+
+    // Handle URL if app was opened via deep link
+    Linking.getInitialURL().then(url => { if (url) handleUrl(url); }).catch(() => {});
+    const linkSub = Linking.addEventListener('url', ({ url }) => { handleUrl(url); });
 
     return () => {
       isMounted = false;
+      clearTimeout(hardTimeout);
       listener.subscription.unsubscribe();
+      linkSub.remove();
     };
   }, []);
 
@@ -78,31 +91,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const redirectTo = Linking.createURL('auth/callback');
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: {
-            redirectTo,
-            skipBrowserRedirect: true,
-          },
+          options: { redirectTo, skipBrowserRedirect: true },
         });
         if (error) throw error;
         if (!data?.url) throw new Error('Could not initialize Google OAuth flow.');
 
+        // Open browser for the OAuth flow
         const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-        if (result.type !== 'success' || !result.url) {
+
+        if (result.type === 'cancel') {
           throw new Error('Google sign in was cancelled.');
         }
 
-        const params = parseUrlParams(result.url);
-        const accessToken = params.access_token;
-        const refreshToken = params.refresh_token;
-        if (!accessToken || !refreshToken) {
-          throw new Error('OAuth redirect did not include session tokens.');
+        if (result.type === 'success' && result.url) {
+          // Try to extract tokens from the redirect URL fragment/query
+          const frag = result.url.includes('#')
+            ? result.url.split('#')[1]
+            : result.url.split('?')[1] ?? '';
+          const p = new URLSearchParams(frag);
+          const at = p.get('access_token');
+          const rt = p.get('refresh_token');
+          if (at && rt) {
+            const { error: se } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
+            if (se) throw se;
+            // Session is now set — onAuthStateChange will also fire and update React state
+            return;
+          }
         }
 
-        const { error: sessionError } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
+        // No tokens in URL — wait for onAuthStateChange to pick up the session
+        // (Supabase may have already stored the session via the callback URL handler)
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Sign in timed out. Please try again.')), 10_000);
+          const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+            if (newSession) {
+              clearTimeout(timeout);
+              sub.subscription.unsubscribe();
+              resolve();
+            }
+          });
         });
-        if (sessionError) throw sessionError;
       },
       async signOut() {
         const { error } = await supabase.auth.signOut();
@@ -117,8 +145,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
 }

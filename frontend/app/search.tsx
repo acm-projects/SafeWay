@@ -1,10 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,285 +12,276 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-import { AppTheme } from '@/constants/theme';
 import { searchPlaces } from '@/lib/api';
 import type { PlaceSearchResult } from '@/lib/api';
 
-const CATEGORIES = [
-  { label: 'Gas', icon: 'car-outline' as const, query: 'gas station' },
-  { label: 'Food', icon: 'restaurant-outline' as const, query: 'restaurant' },
-  { label: 'Parks', icon: 'leaf-outline' as const, query: 'park' },
-  { label: 'Coffee', icon: 'cafe-outline' as const, query: 'coffee shop' },
+// ─── Design tokens (matching new navy palette) ────────────────────────────────
+const NAVY      = '#0B1120';
+const NAVY_CARD = '#141D2E';
+const NAVY_ITEM = '#1A2540';
+const GREEN     = '#1ABC93';
+const TEXT_PRI  = '#FFFFFF';
+const TEXT_MUT  = '#7A8FA6';
+const DIVIDER   = '#1E2D45';
+// ──────────────────────────────────────────────────────────────────────────────
+
+const NEARBY = [
+  { label: 'Restaurants', icon: 'restaurant-outline' as const, q: 'restaurant' },
+  { label: 'Gas Stations', icon: 'car-outline'        as const, q: 'gas station' },
+  { label: 'Coffee',       icon: 'cafe-outline'        as const, q: 'coffee shop' },
+  { label: 'Parks',        icon: 'leaf-outline'        as const, q: 'park' },
 ];
+
+// ─── Place type → icon + color ────────────────────────────────────────────────
+function placeIconFor(name: string): { icon: string; bg: string } {
+  const t = name.toLowerCase();
+  if (t.includes('university') || t.includes('college') || t.includes('school'))
+    return { icon: 'school-outline', bg: '#3A7BD5' };
+  if (t.includes('restaurant') || t.includes('food') || t.includes('burger') || t.includes('pizza') || t.includes('grill') || t.includes('kitchen'))
+    return { icon: 'restaurant-outline', bg: '#E05C5C' };
+  if (t.includes('coffee') || t.includes('cafe') || t.includes('starbucks'))
+    return { icon: 'cafe-outline', bg: '#A0522D' };
+  if (t.includes('smoothie') || t.includes('juice') || t.includes('boba'))
+    return { icon: 'nutrition-outline', bg: '#C06090' };
+  if (t.includes('gas') || t.includes('fuel') || t.includes('shell') || t.includes('chevron'))
+    return { icon: 'car-outline', bg: '#5A8A5A' };
+  if (t.includes('park') || t.includes('trail') || t.includes('nature'))
+    return { icon: 'leaf-outline', bg: '#4A9A4A' };
+  if (t.includes('library') || t.includes('museum'))
+    return { icon: 'library-outline', bg: '#3A7BD5' };
+  if (t.includes('target') || t.includes('walmart') || t.includes('costco') || t.includes('store') || t.includes('wholesale'))
+    return { icon: 'cart-outline', bg: '#C05050' };
+  if (t.includes('hospital') || t.includes('medical') || t.includes('clinic'))
+    return { icon: 'medical-outline', bg: '#E05C5C' };
+  return { icon: 'location-outline', bg: '#4A5FC4' };
+}
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
+  const debRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<PlaceSearchResult[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [query, setQuery]           = useState('');
+  const [results, setResults]       = useState<PlaceSearchResult[]>([]);
+  const [suggestions, setSugg]      = useState<PlaceSearchResult[]>([]);
+  const [busy, setBusy]             = useState(false);
+  const [suggBusy, setSuggBusy]     = useState(false);
+  const [searched, setSearched]     = useState(false);
+  const [recents, setRecents]       = useState<string[]>([]);
+  const [showDrop, setShowDrop]     = useState(false);
 
-  async function runSearch(searchText: string) {
-    const trimmed = searchText.trim();
-    if (!trimmed) return;
-    setQuery(trimmed);
-    setBusy(true);
-    setHasSearched(true);
+  // Live autocomplete
+  useEffect(() => {
+    if (debRef.current) clearTimeout(debRef.current);
+    const t = query.trim();
+    if (t.length < 2) { setSugg([]); setShowDrop(false); return; }
+    debRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try {
+        const data = await searchPlaces(t);
+        setSugg(data.slice(0, 5));
+        setShowDrop(data.length > 0);
+      } catch { setSugg([]); setShowDrop(false); }
+      finally { setSuggBusy(false); }
+    }, 350);
+    return () => { if (debRef.current) clearTimeout(debRef.current); };
+  }, [query]);
+
+  async function runSearch(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    setShowDrop(false); setQuery(t); setBusy(true); setSearched(true);
     try {
-      const data = await searchPlaces(trimmed);
+      const data = await searchPlaces(t);
       setResults(data);
-      // Add to recent searches (deduplicate, keep last 3)
-      setRecentSearches((prev) => {
-        const filtered = prev.filter((s) => s.toLowerCase() !== trimmed.toLowerCase());
-        return [trimmed, ...filtered].slice(0, 3);
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('429')) {
-        Alert.alert('Rate limit reached', 'Daily API limit exceeded. Please try again tomorrow.');
-      } else {
-        Alert.alert('Search failed', error instanceof Error ? error.message : 'Unable to search places.');
-      }
-    } finally {
-      setBusy(false);
-    }
+      setRecents(prev => [t, ...prev.filter(s => s.toLowerCase() !== t.toLowerCase())].slice(0, 5));
+    } catch { setResults([]); }
+    finally { setBusy(false); }
   }
 
-  function handleSelectPlace(place: PlaceSearchResult) {
+  function goToPlace(place: PlaceSearchResult) {
+    setShowDrop(false);
     router.replace({
       pathname: '/destination',
-      params: {
-        placeId: place.place_id,
-        name: place.name,
-        address: place.address,
-        lat: String(place.lat),
-        lng: String(place.lng),
-      },
+      params: { placeId: place.place_id, name: place.name, address: place.address, lat: String(place.lat), lng: String(place.lng) },
     });
   }
 
+  function handleClear() {
+    setQuery(''); setResults([]); setSugg([]); setSearched(false); setShowDrop(false);
+    inputRef.current?.focus();
+  }
+
+  const showResults  = searched && !showDrop && results.length > 0;
+  const showEmpty    = searched && !busy && !showDrop && results.length === 0;
+  const showPre      = !searched && !showDrop;
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
-      {/* Search header */}
-      <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color={AppTheme.palette.midnightViolet} />
-        </Pressable>
-        <View style={styles.inputWrapper}>
-          <Ionicons name="search" size={18} color="#7A6B85" />
+    <View style={[s.container, { paddingTop: insets.top }]}>
+
+      {/* Search bar */}
+      <View style={s.searchRow}>
+        <View style={s.inputWrap}>
+          <Ionicons name="search" size={18} color={TEXT_MUT} />
           <TextInput
             ref={inputRef}
             value={query}
-            onChangeText={setQuery}
-            placeholder="Search a destination"
-            placeholderTextColor="#7A6B85"
+            onChangeText={t => { setQuery(t); if (searched) { setSearched(false); setResults([]); } }}
+            placeholder="Where to?"
+            placeholderTextColor={TEXT_MUT}
             autoFocus
             returnKeyType="search"
             onSubmitEditing={() => runSearch(query)}
-            style={styles.input}
+            style={s.input}
+            selectionColor={GREEN}
           />
-          {query.length > 0 && (
-            <Pressable onPress={() => { setQuery(''); setResults([]); setHasSearched(false); }}>
-              <Ionicons name="close-circle" size={20} color="#7A6B85" />
-            </Pressable>
-          )}
+          {suggBusy
+            ? <ActivityIndicator size="small" color={GREEN} />
+            : query.length > 0
+              ? <Pressable onPress={handleClear}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+              : <Ionicons name="mic-outline" size={18} color={TEXT_MUT} />}
         </View>
+        <Pressable style={s.cancelBtn} onPress={() => router.back()}>
+          <Text style={s.cancelText}>Cancel</Text>
+        </Pressable>
       </View>
 
-      {/* Results */}
-      {results.length > 0 ? (
-        <FlatList
-          data={results}
-          keyExtractor={(item) => item.place_id}
-          contentContainerStyle={styles.resultsList}
-          renderItem={({ item }) => (
-            <Pressable style={styles.resultItem} onPress={() => handleSelectPlace(item)}>
-              <View style={styles.resultIcon}>
-                <Ionicons name="location-outline" size={20} color={AppTheme.palette.teal} />
-              </View>
-              <View style={styles.resultContent}>
-                <Text style={styles.resultName}>{item.name}</Text>
-                <Text style={styles.resultAddress}>{item.address}</Text>
-              </View>
-            </Pressable>
-          )}
-        />
-      ) : hasSearched && !busy ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="search-outline" size={48} color="#D7CFDB" />
-          <Text style={styles.emptyText}>No results found</Text>
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.suggestionsContent}>
-          {/* Title */}
-          <Text style={styles.sectionTitle}>Search destinations</Text>
-
-          {/* Category chips */}
-          <View style={styles.categoryRow}>
-            {CATEGORIES.map((cat) => (
-              <Pressable
-                key={cat.label}
-                style={styles.categoryChip}
-                onPress={() => runSearch(cat.query)}>
-                <Ionicons name={cat.icon} size={18} color={AppTheme.palette.teal} />
-                <Text style={styles.categoryLabel}>{cat.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-
-          {/* Recent searches */}
-          {recentSearches.length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>Recent</Text>
-              {recentSearches.map((term) => (
-                <Pressable
-                  key={term}
-                  style={styles.recentItem}
-                  onPress={() => runSearch(term)}>
-                  <Ionicons name="time-outline" size={18} color="#7A6B85" />
-                  <Text style={styles.recentText}>{term}</Text>
+      {/* Autocomplete dropdown */}
+      {showDrop && suggestions.length > 0 && (
+        <View style={s.dropdown}>
+          {suggestions.map((item, i) => {
+            const { icon, bg } = placeIconFor(item.name);
+            return (
+            <View key={item.place_id}>
+              <Pressable style={s.dropRow} onPress={() => goToPlace(item)}>
+                <View style={[s.dropIcon, { backgroundColor: bg }]}>
+                  <Ionicons name={icon as any} size={16} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.dropTitle} numberOfLines={1}>{item.name}</Text>
+                  <Text style={s.dropSub} numberOfLines={1}>{item.address}</Text>
+                </View>
+                <Pressable onPress={() => { setQuery(item.name); setShowDrop(false); }}>
+                  <Ionicons name="return-up-back-outline" size={16} color={TEXT_MUT} />
                 </Pressable>
-              ))}
+              </Pressable>
+              {i < suggestions.length - 1 && <View style={s.rowDiv} />}
+            </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Pre-search: recents + nearby */}
+      {showPre && (
+        <>
+          {recents.length > 0 && (
+            <>
+              <Text style={s.sectionLabel}>RECENTS</Text>
+              <View style={s.listCard}>
+                {recents.map((term, i) => (
+                  <View key={term}>
+                    <Pressable style={s.listRow} onPress={() => runSearch(term)}>
+                      <View style={s.listIcon}>
+                        <Ionicons name="time-outline" size={18} color={TEXT_MUT} />
+                      </View>
+                      <Text style={s.listTitle}>{term}</Text>
+                    </Pressable>
+                    {i < recents.length - 1 && <View style={s.rowDiv} />}
+                  </View>
+                ))}
+              </View>
             </>
           )}
 
-        </ScrollView>
+          <Text style={[s.sectionLabel, recents.length > 0 && { marginTop: 22 }]}>FIND NEARBY</Text>
+          <View style={s.listCard}>
+            {NEARBY.map((item, i) => (
+              <View key={item.label}>
+                <Pressable style={s.listRow} onPress={() => runSearch(item.q)}>
+                  <View style={s.listIcon}>
+                    <Ionicons name={item.icon} size={18} color={GREEN} />
+                  </View>
+                  <Text style={s.listTitle}>{item.label}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={TEXT_MUT} />
+                </Pressable>
+                {i < NEARBY.length - 1 && <View style={s.rowDiv} />}
+              </View>
+            ))}
+          </View>
+        </>
       )}
 
-      {/* Loading overlay */}
+      {/* Full results */}
+      {showResults && (
+        <>
+          <Text style={s.sectionLabel}>RESULTS</Text>
+          <FlatList
+            data={results}
+            keyExtractor={item => item.place_id}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingHorizontal: 16 }}
+            ItemSeparatorComponent={() => <View style={s.rowDivFull} />}
+            renderItem={({ item }) => {
+              const { icon, bg } = placeIconFor(item.name);
+              return (
+              <Pressable style={s.listRow} onPress={() => goToPlace(item)}>
+                <View style={[s.listIcon, { backgroundColor: bg }]}>
+                  <Ionicons name={icon as any} size={18} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.listTitle} numberOfLines={1}>{item.name}</Text>
+                  <Text style={s.dropSub} numberOfLines={1}>{item.address}</Text>
+                </View>
+              </Pressable>
+              );
+            }}
+          />
+        </>
+      )}
+
+      {showEmpty && (
+        <View style={s.empty}>
+          <Ionicons name="search-outline" size={48} color={TEXT_MUT} />
+          <Text style={s.emptyText}>No results found</Text>
+        </View>
+      )}
+
       {busy && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={AppTheme.palette.teal} />
+        <View style={s.loadOverlay}>
+          <ActivityIndicator size="large" color={GREEN} />
         </View>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: AppTheme.palette.white,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: AppTheme.spacing.md,
-    gap: AppTheme.spacing.sm,
-    paddingBottom: AppTheme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8DEE9',
-  },
-  backButton: {
-    padding: AppTheme.spacing.xs,
-  },
-  inputWrapper: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F0F6',
-    borderRadius: AppTheme.radius.md,
-    paddingHorizontal: AppTheme.spacing.md,
-    paddingVertical: 10,
-    gap: AppTheme.spacing.sm,
-  },
-  input: {
-    flex: 1,
-    color: AppTheme.palette.midnightViolet,
-    fontSize: AppTheme.typography.body,
-  },
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: NAVY },
 
-  /* Suggestions (before search) */
-  suggestionsContent: {
-    padding: AppTheme.spacing.lg,
-    gap: AppTheme.spacing.lg,
-  },
-  sectionTitle: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    gap: AppTheme.spacing.sm,
-  },
-  categoryChip: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#E8F5F6',
-    borderRadius: AppTheme.radius.md,
-    paddingVertical: 14,
-  },
-  categoryLabel: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  searchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, gap: 10 },
+  inputWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: NAVY_CARD, borderRadius: 28, paddingHorizontal: 16, paddingVertical: 12 },
+  input: { flex: 1, color: TEXT_PRI, fontSize: 16 },
+  cancelBtn: { paddingHorizontal: 4, paddingVertical: 8 },
+  cancelText: { color: TEXT_PRI, fontSize: 15, fontWeight: '500' },
 
-  /* Recent searches */
-  recentItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-    paddingVertical: AppTheme.spacing.sm,
-  },
-  recentText: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 15,
-  },
+  dropdown: { marginHorizontal: 16, marginBottom: 8, backgroundColor: NAVY_CARD, borderRadius: 18, overflow: 'hidden', elevation: 8 },
+  dropRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13, gap: 12 },
+  dropIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
+  dropTitle: { color: TEXT_PRI, fontSize: 14, fontWeight: '600' },
+  dropSub: { color: TEXT_MUT, fontSize: 12, marginTop: 1 },
 
-  /* Results */
-  resultsList: {
-    paddingHorizontal: AppTheme.spacing.md,
-  },
-  resultItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-    paddingVertical: AppTheme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0EBF1',
-  },
-  resultIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#E8F5F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resultContent: {
-    flex: 1,
-  },
-  resultName: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  resultAddress: {
-    color: '#7A6B85',
-    fontSize: AppTheme.typography.caption,
-    marginTop: 2,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-  },
-  emptyText: {
-    color: '#7A6B85',
-    fontSize: AppTheme.typography.body,
-  },
+  sectionLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, paddingHorizontal: 20, marginBottom: 10 },
 
-  /* Loading */
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(252, 252, 252, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  listCard: { marginHorizontal: 16, backgroundColor: NAVY_CARD, borderRadius: 18, overflow: 'hidden' },
+  listRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, gap: 14 },
+  listIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
+  listTitle: { flex: 1, color: TEXT_PRI, fontSize: 15, fontWeight: '600' },
+
+  rowDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 68 },
+  rowDivFull: { height: 1, backgroundColor: DIVIDER },
+
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  emptyText: { color: TEXT_MUT, fontSize: 16 },
+  loadOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(11,17,32,0.7)', justifyContent: 'center', alignItems: 'center' },
 });
