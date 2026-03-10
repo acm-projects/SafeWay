@@ -96,11 +96,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error;
         if (!data?.url) throw new Error('Could not initialize Google OAuth flow.');
 
-        // Open browser — onAuthStateChange listener above will pick up the new session
+        // Open browser for the OAuth flow
         const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
 
+        if (result.type === 'cancel') {
+          throw new Error('Google sign in was cancelled.');
+        }
+
         if (result.type === 'success' && result.url) {
-          // Parse tokens from the redirect URL and set session manually as a fallback
+          // Try to extract tokens from the redirect URL fragment/query
           const frag = result.url.includes('#')
             ? result.url.split('#')[1]
             : result.url.split('?')[1] ?? '';
@@ -110,12 +114,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (at && rt) {
             const { error: se } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
             if (se) throw se;
+            // Session is now set — onAuthStateChange will also fire and update React state
+            return;
           }
-          // If no tokens in URL, onAuthStateChange already fired — that's fine
-        } else if (result.type === 'cancel') {
-          throw new Error('Google sign in was cancelled.');
         }
-        // type === 'dismiss' is treated as success (browser may auto-close after redirect)
+
+        // No tokens in URL — wait for onAuthStateChange to pick up the session
+        // (Supabase may have already stored the session via the callback URL handler)
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Sign in timed out. Please try again.')), 10_000);
+          const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+            if (newSession) {
+              clearTimeout(timeout);
+              sub.subscription.unsubscribe();
+              resolve();
+            }
+          });
+        });
       },
       async signOut() {
         const { error } = await supabase.auth.signOut();

@@ -14,7 +14,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Heatmap, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,6 +33,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { getRoute, searchPlaces } from '@/lib/api';
 import type { PlaceSearchResult, RoutePoint } from '@/lib/api';
+import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
+import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -64,6 +66,16 @@ const DARK_MAP_STYLE = [
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
 interface ModeRouteData { coords: RoutePoint[]; distance: number; durationSecs: number; }
+
+// Heatmap filters — mirrors index.tsx
+const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
+  { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
+  { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
+  { id: 'fatal', label: 'Fatal / Serious', icon: 'skull-outline',     color: '#FF3333', desc: 'Fatal or serious injury crashes' },
+  { id: 'ped',   label: 'Pedestrian',      icon: 'walk-outline',      color: '#FFA500', desc: 'Crashes involving pedestrians' },
+  { id: 'bike',  label: 'Bicycle',         icon: 'bicycle-outline',   color: '#1ABC93', desc: 'Crashes involving cyclists' },
+  { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
+];
 
 function SheetBg({ style }: { style?: any }) {
   return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: SHEET_BG }, style]} />;
@@ -369,7 +381,15 @@ export default function DirectionsScreen() {
   const [zoomDelta, setZoomDelta] = useState(0.05);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
-  const [activeHeatmap, setActiveHeatmap] = useState<string | null>(null);
+  const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
+
+  // Real crash heatmap from Supabase
+  const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
+    filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
+    enabled: heatmapFilter !== 'off',
+    limit: 10_000,
+  });
+  const activeHeatmapInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
   useEffect(() => {
     (async () => {
@@ -529,6 +549,19 @@ export default function DirectionsScreen() {
         )}
         {destCoords && <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor="#FF4444" />}
         {activeData?.coords?.length ? <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} /> : null}
+        {/* Real crash heatmap from Supabase */}
+        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
+          <Heatmap
+            points={crashPoints}
+            opacity={0.72}
+            radius={20}
+            gradient={{
+              colors: ['#00E5FF', '#FFD600', '#FF1744'],
+              startPoints: [0.1, 0.5, 1.0],
+              colorMapSize: 256,
+            }}
+          />
+        )}
       </MapView>
 
       {/* Zoom */}
@@ -541,34 +574,60 @@ export default function DirectionsScreen() {
       <Animated.View style={[styles.floatBtn, locateAnimStyle]}>
         <Pressable style={styles.floatBtnInner} onPress={handleLocate}><Ionicons name="locate" size={20} color={GREEN} /></Pressable>
       </Animated.View>
-      {/* Heatmap */}
+      {/* Heatmap pill */}
       <Animated.View style={[styles.heatmapWrap, hmAnimStyle]}>
-        <Pressable style={styles.heatmapInner} onPress={() => setShowHeatmapModal(true)}>
-          <Ionicons name="layers-outline" size={14} color={GREEN} />
-          <Text style={styles.heatmapText}>{activeHeatmap ?? 'Safety Heatmap'}</Text>
+        <Pressable
+          style={[styles.heatmapInner, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
+          onPress={() => setShowHeatmapModal(true)}
+        >
+          {crashLoading && heatmapFilter !== 'off'
+            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? GREEN) : GREEN} />
+          }
+          <Text style={[styles.heatmapText, heatmapFilter !== 'off' && { color: activeHeatmapInfo?.color ?? GREEN }]}>
+            {heatmapFilter === 'off' ? 'Safety Heatmap' : activeHeatmapInfo?.label ?? 'Heatmap'}
+          </Text>
         </Pressable>
       </Animated.View>
 
-      {/* Heatmap picker modal */}
+      {/* Heatmap filter modal */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
           <Pressable style={hm.card} onPress={() => {}}>
-            <Text style={hm.title}>Choose Map</Text>
-            <View style={hm.grid}>
-              {[
-                { id: 'safety',  label: 'Safety Score' },
-                { id: 'crime',   label: 'Crime Rate'   },
-                { id: 'traffic', label: 'Traffic Flow' },
-                { id: 'light',   label: 'Street Light' },
-              ].map(item => (
-                <Pressable
-                  key={item.id}
-                  style={[hm.tile, activeHeatmap === item.label && hm.tileActive]}
-                  onPress={() => { setActiveHeatmap(item.label); setShowHeatmapModal(false); }}>
-                  <View style={hm.tilePreview} />
-                  <Text style={[hm.tileLabel, activeHeatmap === item.label && { color: TEXT_PRI }]}>{item.label}</Text>
-                </Pressable>
-              ))}
+            <View style={hm.header}>
+              <Text style={hm.title}>Safety Heatmap</Text>
+              {heatmapFilter !== 'off' && (
+                <View style={hm.countBadge}>
+                  {crashLoading
+                    ? <ActivityIndicator size="small" color={GREEN} />
+                    : <Text style={hm.countText}>{crashPoints.length.toLocaleString()} points</Text>
+                  }
+                </View>
+              )}
+            </View>
+            <Text style={hm.subtitle}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={hm.filterList}>
+              {HEATMAP_FILTERS.map((f, i) => {
+                const active = heatmapFilter === f.id;
+                return (
+                  <View key={f.id}>
+                    <Pressable
+                      style={[hm.filterRow, active && hm.filterRowActive]}
+                      onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
+                    >
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : ITEM_BG }]}>
+                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[hm.filterLabel, active && { color: TEXT_PRI }]}>{f.label}</Text>
+                        <Text style={hm.filterDesc}>{f.desc}</Text>
+                      </View>
+                      {active && <Ionicons name="checkmark-circle" size={20} color={GREEN} />}
+                    </Pressable>
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={hm.filterDiv} />}
+                  </View>
+                );
+              })}
             </View>
           </Pressable>
         </Pressable>
@@ -765,6 +824,7 @@ const styles = StyleSheet.create({
   floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
   heatmapWrap: { position: 'absolute', right: 14 },
   heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: ITEM_BG, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#00FF8840' },
+  heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
   heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
 
   // Map markers
@@ -890,11 +950,17 @@ const dm = StyleSheet.create({
 // ─── Heatmap Modal Styles ─────────────────────────────────────────────────────
 const hm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  card: { backgroundColor: CARD_BG, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36 },
-  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700', marginBottom: 20 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tile: { width: '47%', backgroundColor: ITEM_BG, borderRadius: 14, overflow: 'hidden', borderWidth: 2, borderColor: 'transparent' },
-  tileActive: { borderColor: '#4A90E2' },
-  tilePreview: { height: 110, backgroundColor: '#1d2533' },
-  tileLabel: { color: TEXT_MUT, fontSize: 13, fontWeight: '600', padding: 10, backgroundColor: 'rgba(255,255,255,0.04)' },
+  card: { backgroundColor: CARD_BG, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700' },
+  subtitle: { color: TEXT_MUT, fontSize: 13, marginBottom: 20, lineHeight: 18 },
+  countBadge: { backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  countText: { color: GREEN, fontSize: 12, fontWeight: '600' },
+  filterList: { backgroundColor: ITEM_BG, borderRadius: 18, overflow: 'hidden' },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  filterRowActive: { backgroundColor: 'rgba(26,188,147,0.08)' },
+  filterIcon: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  filterLabel: { color: TEXT_MUT, fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  filterDesc: { color: TEXT_MUT, fontSize: 12, opacity: 0.7 },
+  filterDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 70 },
 });

@@ -12,7 +12,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +25,8 @@ import Animated, {
 import { listBookmarks, deleteBookmark, getWeather, createBookmark, searchPlaces } from '@/lib/api';
 import type { Bookmark, WeatherData } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
+import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
+import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 const NAVY       = '#0B1120';
@@ -51,12 +53,14 @@ const DARK_MAP_STYLE = [
   { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
 ];
 
-// Map style options for heatmap chooser
-const MAP_STYLES = [
-  { id: 'default',  label: 'Default',  icon: 'map-outline' as const },
-  { id: 'safety',   label: 'Safety',   icon: 'shield-checkmark-outline' as const },
-  { id: 'traffic',  label: 'Traffic',  icon: 'car-outline' as const },
-  { id: 'terrain',  label: 'Terrain',  icon: 'earth-outline' as const },
+// Heatmap filter options — maps to HeatmapFilter type in useCrashHeatmap
+const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
+  { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
+  { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
+  { id: 'fatal', label: 'Fatal / Serious', icon: 'skull-outline',     color: '#FF3333', desc: 'Fatal or serious injury crashes' },
+  { id: 'ped',   label: 'Pedestrian',      icon: 'walk-outline',      color: '#FFA500', desc: 'Crashes involving pedestrians' },
+  { id: 'bike',  label: 'Bicycle',         icon: 'bicycle-outline',   color: '#1ABC93', desc: 'Crashes involving cyclists' },
+  { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
 ];
 
 function SheetBg({ style }: { style?: any }) {
@@ -66,7 +70,61 @@ function SheetBg({ style }: { style?: any }) {
   );
 }
 
-// ── Profile modal ──────────────────────────────────────────────────────────────
+// ── Heatmap chooser modal ──────────────────────────────────────────────────────
+function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading }: {
+  visible: boolean;
+  activeFilter: HeatmapFilter | 'off';
+  onSelect: (id: HeatmapFilter | 'off') => void;
+  onClose: () => void;
+  crashCount: number;
+  loading: boolean;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={hm.backdrop} onPress={onClose}>
+        <Pressable style={hm.card} onPress={() => {}}>
+          <View style={hm.header}>
+            <Text style={hm.title}>Safety Heatmap</Text>
+            {activeFilter !== 'off' && (
+              <View style={hm.countBadge}>
+                {loading
+                  ? <ActivityIndicator size="small" color={GREEN} />
+                  : <Text style={hm.countText}>{crashCount.toLocaleString()} points</Text>
+                }
+              </View>
+            )}
+          </View>
+          <Text style={hm.subtitle}>Crash data from traffic records. Brighter = higher density.</Text>
+          <View style={hm.filterList}>
+            {HEATMAP_FILTERS.map((f, i) => {
+              const active = activeFilter === f.id;
+              return (
+                <View key={f.id}>
+                  <Pressable
+                    style={[hm.filterRow, active && hm.filterRowActive]}
+                    onPress={() => { onSelect(f.id); onClose(); }}
+                  >
+                    <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : NAVY_ITEM }]}>
+                      <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[hm.filterLabel, active && { color: TEXT_PRI }]}>{f.label}</Text>
+                      <Text style={hm.filterDesc}>{f.desc}</Text>
+                    </View>
+                    {active && <Ionicons name="checkmark-circle" size={20} color={GREEN} />}
+                  </Pressable>
+                  {i < HEATMAP_FILTERS.length - 1 && <View style={hm.filterDiv} />}
+                </View>
+              );
+            })}
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+
 function ProfileModal({ visible, onClose, user, signOut }: {
   visible: boolean; onClose: () => void; user: any; signOut: () => void;
 }) {
@@ -116,33 +174,6 @@ function ProfileModal({ visible, onClose, user, signOut }: {
   );
 }
 
-// ── Heatmap chooser modal ──────────────────────────────────────────────────────
-function HeatmapModal({ visible, selected, onSelect, onClose }: {
-  visible: boolean; selected: string; onSelect: (id: string) => void; onClose: () => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={hm.backdrop} onPress={onClose}>
-        <Pressable style={hm.card} onPress={() => {}}>
-          <Text style={hm.title}>Choose Map</Text>
-          <View style={hm.grid}>
-            {MAP_STYLES.map(s => (
-              <Pressable
-                key={s.id}
-                style={[hm.tile, selected === s.id && hm.tileActive]}
-                onPress={() => { onSelect(s.id); onClose(); }}>
-                <View style={hm.tilePreview}>
-                  <Ionicons name={s.icon} size={28} color={selected === s.id ? GREEN : TEXT_MUT} />
-                </View>
-                <Text style={[hm.tileLabel, selected === s.id && { color: GREEN }]}>{s.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
 
 // ── Place type → icon + color ─────────────────────────────────────────────────
 function placeIconFor(title: string): { icon: string; bg: string } {
@@ -189,7 +220,7 @@ export default function HomeScreen() {
   const [locationLoading, setLocationLoading] = useState(true);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
-  const [selectedMap, setSelectedMap]       = useState('default');
+  const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
   const [weather, setWeather]               = useState<WeatherData | null>(null);
   const [sheetIndex, setSheetIndex]         = useState(1);
@@ -202,6 +233,15 @@ export default function HomeScreen() {
   const [homeLabel, setHomeLabel]           = useState<string | null>(null);
   const [workLabel, setWorkLabel]           = useState<string | null>(null);
   const [schoolLabel, setSchoolLabel]       = useState<string | null>(null);
+
+  // ── Crash heatmap data from Supabase ────────────────────────────────────────
+  const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
+    filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
+    enabled: heatmapFilter !== 'off',
+    limit: 10_000,
+  });
+  // Active filter label for the pill
+  const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
   useEffect(() => {
     let cancelled = false;
@@ -347,6 +387,19 @@ export default function HomeScreen() {
           <Marker key={bm.id} coordinate={{ latitude: bm.lat, longitude: bm.lng }}
             title={bm.title} description={bm.address} pinColor={GREEN} />
         ))}
+        {/* Real crash heatmap from Supabase enriched_crashes */}
+        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
+          <Heatmap
+            points={crashPoints}
+            opacity={0.75}
+            radius={20}
+            gradient={{
+              colors: ['#00E5FF', '#FFD600', '#FF1744'],
+              startPoints: [0.1, 0.5, 1.0],
+              colorMapSize: 256,
+            }}
+          />
+        )}
       </MapView>
 
       {/* Zoom */}
@@ -365,9 +418,21 @@ export default function HomeScreen() {
 
       {/* Heatmap pill */}
       <Animated.View style={[s.heatmapWrap, heatmapAnim]}>
-        <Pressable style={s.heatmapInner} onPress={() => setShowHeatmapModal(true)}>
-          <Ionicons name="layers-outline" size={14} color={GREEN} />
-          <Text style={s.heatmapText}>Safety Heatmap</Text>
+        <Pressable
+          style={[s.heatmapInner, heatmapFilter !== 'off' && s.heatmapInnerActive]}
+          onPress={() => setShowHeatmapModal(true)}
+        >
+          {crashLoading && heatmapFilter !== 'off'
+            ? <ActivityIndicator size="small" color={GREEN} style={{ marginRight: 2 }} />
+            : <Ionicons
+                name="layers-outline"
+                size={14}
+                color={heatmapFilter !== 'off' ? (activeFilterInfo?.color ?? GREEN) : GREEN}
+              />
+          }
+          <Text style={[s.heatmapText, heatmapFilter !== 'off' && { color: activeFilterInfo?.color ?? GREEN }]}>
+            {heatmapFilter === 'off' ? 'Safety Heatmap' : activeFilterInfo?.label ?? 'Heatmap'}
+          </Text>
         </Pressable>
       </Animated.View>
 
@@ -375,8 +440,14 @@ export default function HomeScreen() {
       <ProfileModal visible={showProfileModal} onClose={() => setShowProfileModal(false)} user={user} signOut={signOut} />
 
       {/* Heatmap chooser */}
-      <HeatmapModal visible={showHeatmapModal} selected={selectedMap}
-        onSelect={setSelectedMap} onClose={() => setShowHeatmapModal(false)} />
+      <HeatmapModal
+        visible={showHeatmapModal}
+        activeFilter={heatmapFilter}
+        onSelect={setHeatmapFilter}
+        onClose={() => setShowHeatmapModal(false)}
+        crashCount={crashPoints.length}
+        loading={crashLoading}
+      />
 
       {/* Home/Work/School picker */}
       <Modal visible={placeModal !== null} transparent animationType="slide"
@@ -536,6 +607,7 @@ const s = StyleSheet.create({
   floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
   heatmapWrap: { position: 'absolute', right: 14 },
   heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: NAVY_ITEM, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8 },
+  heatmapInnerActive: { backgroundColor: '#0B1120', borderWidth: 1, borderColor: '#1ABC9340' },
   heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
 
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
@@ -589,12 +661,18 @@ const pm = StyleSheet.create({
 const hm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   card: { backgroundColor: NAVY_CARD, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
-  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700', marginBottom: 20 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tile: { width: '47%', backgroundColor: NAVY_ITEM, borderRadius: 16, overflow: 'hidden', borderWidth: 2, borderColor: 'transparent' },
-  tileActive: { borderColor: GREEN },
-  tilePreview: { height: 110, justifyContent: 'center', alignItems: 'center' },
-  tileLabel: { color: TEXT_MUT, fontSize: 13, fontWeight: '600', textAlign: 'center', paddingVertical: 10, backgroundColor: '#0E1728' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700' },
+  subtitle: { color: TEXT_MUT, fontSize: 13, marginBottom: 20, lineHeight: 18 },
+  countBadge: { backgroundColor: NAVY_ITEM, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  countText: { color: GREEN, fontSize: 12, fontWeight: '600' },
+  filterList: { backgroundColor: NAVY_ITEM, borderRadius: 18, overflow: 'hidden' },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
+  filterRowActive: { backgroundColor: 'rgba(26,188,147,0.08)' },
+  filterIcon: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  filterLabel: { color: TEXT_MUT, fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  filterDesc: { color: TEXT_MUT, fontSize: 12, opacity: 0.7 },
+  filterDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 70 },
 });
 
 const hw = StyleSheet.create({

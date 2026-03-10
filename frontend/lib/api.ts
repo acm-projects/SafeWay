@@ -1,5 +1,15 @@
+import Constants from 'expo-constants';
+
 const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://10.0.2.2:8000';
-const googleMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
+// `EXPO_PUBLIC_*` vars are inlined at build time. When running via `npx expo start`
+// with a local .env they work directly. As a fallback we also read from
+// Constants.expoConfig.extra (set in app.config.ts) so the key is available in
+// development even if the env var wasn't exported to the shell.
+const googleMapsKey: string =
+  (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined) ||
+  (Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined) ||
+  '';
 
 export type PlaceSearchResult = {
   place_id: string;

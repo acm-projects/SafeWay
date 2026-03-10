@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Image, Linking, Pressable, ScrollView,
+  Alert, ActivityIndicator, Image, Linking, Pressable, ScrollView,
   StyleSheet, Text, View, useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 import { createBookmark, getPlaceDetails } from '@/lib/api';
 import type { PlaceDetails } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
+import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 const NAVY      = '#0B1120';
@@ -90,10 +91,19 @@ export default function DestinationScreen() {
   const [sheetIndex, setSheetIndex] = useState(1);
   const handleSheetChange = useCallback((i: number) => setSheetIndex(i), []);
 
-  const [details, setDetails]     = useState<PlaceDetails | null>(null);
-  const [saved, setSaved]         = useState(false);
+  const [details, setDetails]       = useState<PlaceDetails | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [saved, setSaved]           = useState(false);
   const [zoomDelta, setZoomDelta] = useState(0.012);
   const [currentAddress, setCurrentAddress] = useState('My Location');
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false);
+
+  // Crash heatmap data — only fetches when toggled on
+  const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
+    filter: 'all',
+    enabled: heatmapEnabled,
+    limit: 5_000,
+  });
 
   // Reverse-geocode user's current position for the directions label
   useEffect(() => {
@@ -115,12 +125,14 @@ export default function DestinationScreen() {
     })();
   }, []);
 
-  // Fetch rich place details (via direct Google Places API if backend 404s)
+  // Fetch rich place details directly from Google Places API v1
   useEffect(() => {
     if (params.placeId) {
+      setDetailsLoading(true);
       getPlaceDetails(params.placeId)
         .then(d => { if (d) setDetails(d); })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => setDetailsLoading(false));
     }
     setTimeout(() => {
       mapRef.current?.animateToRegion(
@@ -206,22 +218,21 @@ export default function DestinationScreen() {
     aboutRows.push({ icon: 'location-outline', label: placeAddr });
   }
   if (ohText) {
-    // Show all weekday lines if available
     const lines = ohText.split('\n').filter(Boolean);
     aboutRows.push({
       icon: 'time-outline',
       label: lines.length > 1 ? lines.join('\n') : lines[0] ?? 'Hours not available',
     });
-  } else {
+  } else if (!detailsLoading) {
     aboutRows.push({ icon: 'time-outline', label: 'Hours not available' });
   }
   if (details?.phone) {
     aboutRows.push({
       icon: 'call-outline',
       label: details.phone,
-      onPress: () => Linking.openURL(`tel:${details.phone}`),
+      onPress: () => Linking.openURL(`tel:${details!.phone!}`),
     });
-  } else {
+  } else if (!detailsLoading) {
     aboutRows.push({ icon: 'call-outline', label: 'Phone not available' });
   }
   if (details?.website) {
@@ -234,7 +245,7 @@ export default function DestinationScreen() {
     aboutRows.push({
       icon: 'map-outline',
       label: 'View on Google Maps',
-      onPress: () => Linking.openURL(details.google_maps_uri!),
+      onPress: () => Linking.openURL(details!.google_maps_uri!),
     });
   }
 
@@ -252,6 +263,19 @@ export default function DestinationScreen() {
         zoomEnabled
       >
         <Marker coordinate={{ latitude: lat, longitude: lng }} pinColor={GREEN} />
+        {/* Real crash heatmap — only rendered when toggled on */}
+        {heatmapEnabled && crashPoints.length > 0 && (
+          <Heatmap
+            points={crashPoints}
+            opacity={0.75}
+            radius={22}
+            gradient={{
+              colors: ['#00E5FF', '#FFD600', '#FF1744'],
+              startPoints: [0.1, 0.5, 1.0],
+              colorMapSize: 256,
+            }}
+          />
+        )}
       </MapView>
 
       {/* Back */}
@@ -266,11 +290,24 @@ export default function DestinationScreen() {
         </Pressable>
       </Animated.View>
 
-      {/* Heatmap pill */}
+      {/* Heatmap pill — tap to toggle */}
       <Animated.View style={[s.heatmapWrap, heatmapAnim]}>
-        <Pressable style={s.heatmapInner}>
-          <Ionicons name="layers-outline" size={14} color={GREEN} />
-          <Text style={s.heatmapText}>Safety Heatmap</Text>
+        <Pressable
+          style={[s.heatmapInner, heatmapEnabled && s.heatmapInnerActive]}
+          onPress={() => setHeatmapEnabled(e => !e)}
+        >
+          {crashLoading
+            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={14} color={heatmapEnabled ? '#FF6B6B' : GREEN} />
+          }
+          <Text style={[s.heatmapText, heatmapEnabled && { color: '#FF6B6B' }]}>
+            {heatmapEnabled
+              ? crashPoints.length > 0
+                ? `${crashPoints.length.toLocaleString()} crashes`
+                : 'Loading…'
+              : 'Safety Heatmap'
+            }
+          </Text>
         </Pressable>
       </Animated.View>
 
@@ -416,20 +453,27 @@ export default function DestinationScreen() {
               {/* ── About ── */}
               <View style={{ marginTop: 16, marginBottom: 8 }}>
                 <Text style={s.sectionTitle}>About</Text>
-                <View style={s.aboutCard}>
-                  {aboutRows.map((item, i) => (
-                    <View key={i}>
-                      <Pressable
-                        style={s.aboutRow}
-                        onPress={item.onPress ?? (() => {})}
-                      >
-                        <Ionicons name={item.icon as any} size={18} color={GREEN} style={{ marginTop: 2 }} />
-                        <Text style={s.aboutText}>{item.label}</Text>
-                      </Pressable>
-                      {i < aboutRows.length - 1 && <View style={s.aboutDiv} />}
-                    </View>
-                  ))}
-                </View>
+                {detailsLoading ? (
+                  <View style={[s.aboutCard, { alignItems: 'center', paddingVertical: 24 }]}>
+                    <ActivityIndicator color={GREEN} />
+                    <Text style={{ color: TEXT_MUT, fontSize: 13, marginTop: 10 }}>Loading details…</Text>
+                  </View>
+                ) : (
+                  <View style={s.aboutCard}>
+                    {aboutRows.map((item, i) => (
+                      <View key={i}>
+                        <Pressable
+                          style={s.aboutRow}
+                          onPress={item.onPress ?? (() => {})}
+                        >
+                          <Ionicons name={item.icon as any} size={18} color={item.onPress ? GREEN : TEXT_MUT} style={{ marginTop: 2 }} />
+                          <Text style={[s.aboutText, item.onPress && { color: GREEN }]}>{item.label}</Text>
+                        </Pressable>
+                        {i < aboutRows.length - 1 && <View style={s.aboutDiv} />}
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
             </>
           )}
@@ -457,7 +501,9 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: NAVY_ITEM, borderRadius: 22,
     paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'transparent',
   },
+  heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
   heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
   sheetContent: { paddingHorizontal: 16, paddingTop: 8 },
