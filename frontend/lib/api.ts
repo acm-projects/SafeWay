@@ -52,12 +52,18 @@ export type RoutePoint = {
   longitude: number;
 };
 
-export type RouteResponse = {
+export type RouteInfo = {
   distance_meters: number;
   duration: string;
-  travel_mode: string;
   polyline: string;
   coordinates: RoutePoint[];
+  safety_score?: number;
+  safety_label?: string;
+};
+
+export type RouteResponse = {
+  routes: RouteInfo[];
+  travel_mode: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

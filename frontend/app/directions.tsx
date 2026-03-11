@@ -25,10 +25,7 @@ import Animated, {
   useAnimatedStyle,
   interpolate,
   Extrapolation,
-  withSpring,
-  runOnJS,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { getRoute, searchPlaces } from '@/lib/api';
@@ -65,7 +62,8 @@ const DARK_MAP_STYLE = [
 ];
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
-interface ModeRouteData { coords: RoutePoint[]; distance: number; durationSecs: number; }
+interface RouteData { coords: RoutePoint[]; distance: number; durationSecs: number; safetyScore?: number; safetyLabel?: string; }
+interface ModeRouteData { routes: RouteData[]; }
 
 // Heatmap filters — mirrors index.tsx
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
@@ -105,7 +103,7 @@ function RouteDetailsModal({
   originAddress: string;
   destLabel: string;
   destAddress?: string;
-  activeData: ModeRouteData | null;
+  activeData: RouteData | null;
   travelMode: TravelMode;
   destLat?: number;
   destLng?: number;
@@ -307,50 +305,9 @@ function RouteDetailsModal({
 
 
 
-// ─── Draggable stop ───────────────────────────────────────────────────────────
-function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
-  label: string; sub: string; isOrigin: boolean;
-  onPressLabel: () => void; onSwap: () => void;
-}) {
-  const translateY = useSharedValue(0);
-  const isActive   = useSharedValue(false);
-  const pan = Gesture.Pan()
-    .onBegin(() => { isActive.value = true; })
-    .onUpdate(e => { translateY.value = e.translationY; })
-    .onEnd(e => {
-      if (Math.abs(e.translationY) > 40) runOnJS(onSwap)();
-      translateY.value = withSpring(0, { damping: 18, stiffness: 200 });
-      isActive.value = false;
-    });
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
-    zIndex: isActive.value ? 20 : 1,
-  }));
-
-  return (
-    <Animated.View style={[styles.stopRow, animStyle]}>
-      <View style={styles.stopIconWrap}>
-        {isOrigin
-          ? <View style={styles.originCircle} />
-          : <Ionicons name="location" size={22} color={GREEN} />}
-      </View>
-      <Pressable style={styles.stopLabelWrap} onPress={onPressLabel}>
-        <Text style={styles.stopLabel} numberOfLines={1}>{label}</Text>
-        <Text style={styles.stopSub}>{sub}</Text>
-      </Pressable>
-      <GestureDetector gesture={pan}>
-        <View style={styles.dragHandle}>
-          <Ionicons name="reorder-two-outline" size={22} color={TEXT_MUT} />
-        </View>
-      </GestureDetector>
-    </Animated.View>
-  );
-}
-
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function DirectionsScreen() {
-  const params = useLocalSearchParams<{ destLat: string; destLng: string; destName: string; originAddress?: string }>();
+  const params = useLocalSearchParams<{ destLat: string; destLng: string; destName: string; originAddress?: string; originLat?: string; originLng?: string }>();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
@@ -365,18 +322,22 @@ export default function DirectionsScreen() {
   const [originLabel, setOriginLabel] = useState(params.originAddress ?? 'My Location');
   const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [originAddress, setOriginAddress] = useState(params.originAddress ?? 'My Location');
-  const destCoords = params.destLat && params.destLng
-    ? { lat: parseFloat(params.destLat), lng: parseFloat(params.destLng) } : null;
-  const destLabel = params.destName ?? 'Destination';
-  const [stopsSwapped, setStopsSwapped] = useState(false);
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(
+    params.destLat && params.destLng ? { lat: parseFloat(params.destLat), lng: parseFloat(params.destLng) } : null
+  );
+  const [destLabel, setDestLabel] = useState(params.destName ?? 'Destination');
 
   const [editingOrigin, setEditingOrigin] = useState(false);
+  const [editingDest, setEditingDest] = useState(false);
   const [originQuery, setOriginQuery] = useState('');
+  const [destQuery, setDestQuery] = useState('');
   const [originSuggestions, setOriginSuggestions] = useState<PlaceSearchResult[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<PlaceSearchResult[]>([]);
   const [suggBusy, setSuggBusy] = useState(false);
 
   const [travelMode, setTravelMode] = useState<TravelMode>('DRIVE');
   const [routeByMode, setRouteByMode] = useState<Partial<Record<TravelMode, ModeRouteData>>>({});
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [routeBusy, setRouteBusy] = useState(false);
   const [zoomDelta, setZoomDelta] = useState(0.05);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -387,11 +348,20 @@ export default function DirectionsScreen() {
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
-    limit: 10_000,
+    limit: 200_000,
   });
   const activeHeatmapInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
   useEffect(() => {
+    // If origin params provided from destination screen, use them directly
+    if (params.originLat && params.originLng) {
+      setOriginCoords({ lat: parseFloat(params.originLat), lng: parseFloat(params.originLng) });
+      if (params.originAddress) {
+        setOriginLabel(params.originAddress);
+        setOriginAddress(params.originAddress);
+      }
+      return;
+    }
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -402,7 +372,6 @@ export default function DirectionsScreen() {
           ]);
           if (loc) {
             setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-            // Only reverse geocode if no address was passed in
             if (!params.originAddress) {
               try {
                 const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
@@ -421,14 +390,22 @@ export default function DirectionsScreen() {
   }, []);
 
   useEffect(() => {
+    if (params.destLat && params.destLng) {
+      setDestCoords({ lat: parseFloat(params.destLat), lng: parseFloat(params.destLng) });
+      setDestLabel(params.destName ?? 'Destination');
+    }
+  }, [params.destLat, params.destLng, params.destName]);
+
+  useEffect(() => {
     if (originCoords && destCoords) void fetchAllRoutes();
-  }, [originCoords]);
+  }, [originCoords, destCoords]);
 
   async function fetchAllRoutes() {
     if (!originCoords || !destCoords) return;
     setRouteBusy(true);
-    const from = stopsSwapped ? destCoords : originCoords;
-    const to   = stopsSwapped ? originCoords! : destCoords;
+    setSelectedRouteIndex(0);
+    const from = originCoords;
+    const to = destCoords;
     try {
       const [driveRes, walkRes, bikeRes] = await Promise.allSettled([
         getRoute({ origin: from, destination: to, travel_mode: 'DRIVE' }),
@@ -436,17 +413,33 @@ export default function DirectionsScreen() {
         getRoute({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
       ]);
       const nd: Partial<Record<TravelMode, ModeRouteData>> = {};
-      const parse = (r: PromiseSettledResult<any>, mode: TravelMode) => {
-        if (r.status === 'fulfilled') {
-          nd[mode] = { coords: r.value.coordinates, distance: r.value.distance_meters, durationSecs: parseInt(r.value.duration.replace('s',''), 10) };
+      const toRouteData = (r: any): RouteData => ({
+        coords: r.coordinates ?? [],
+        distance: r.distance_meters ?? 0,
+        durationSecs: parseInt(String(r.duration || '0').replace('s',''), 10),
+        safetyScore: r.safety_score ?? undefined,
+        safetyLabel: r.safety_label ?? undefined,
+      });
+      const parse = (res: PromiseSettledResult<any>, mode: TravelMode) => {
+        if (res.status === 'fulfilled' && res.value?.routes?.length) {
+          nd[mode] = { routes: res.value.routes.map(toRouteData) };
         }
       };
       parse(driveRes, 'DRIVE'); parse(walkRes, 'WALK'); parse(bikeRes, 'BICYCLE');
-      const ds = nd.DRIVE?.durationSecs ?? 0;
-      if (!nd.WALK && nd.DRIVE)    nd.WALK    = { ...nd.DRIVE, durationSecs: Math.round(ds * 3.8) };
-      if (!nd.BICYCLE && nd.DRIVE) nd.BICYCLE = { ...nd.DRIVE, durationSecs: Math.round(ds * 2.1) };
-      nd.BUS      = nd.DRIVE ? { ...nd.DRIVE, durationSecs: Math.round(ds * 1.4) } : undefined;
-      nd.RIDESHARE = nd.DRIVE ? { ...nd.DRIVE, durationSecs: Math.round(ds * 1.1) } : undefined;
+      const driveRoutes = nd.DRIVE?.routes ?? [];
+      const ds = driveRoutes[0]?.durationSecs ?? 0;
+      if (!nd.WALK && driveRoutes.length) {
+        nd.WALK = { routes: [{ ...driveRoutes[0], durationSecs: Math.round(ds * 3.8) }] };
+      }
+      if (!nd.BICYCLE && driveRoutes.length) {
+        nd.BICYCLE = { routes: [{ ...driveRoutes[0], durationSecs: Math.round(ds * 2.1) }] };
+      }
+      if (driveRoutes.length && !nd.BUS) {
+        nd.BUS = { routes: [{ ...driveRoutes[0], durationSecs: Math.round(ds * 1.4) }] };
+      }
+      if (driveRoutes.length && !nd.RIDESHARE) {
+        nd.RIDESHARE = { routes: [{ ...driveRoutes[0], durationSecs: Math.round(ds * 1.1) }] };
+      }
       setRouteByMode(nd);
     } catch (e) {
       Alert.alert('Route error', e instanceof Error ? e.message : 'Could not fetch route.');
@@ -454,17 +447,57 @@ export default function DirectionsScreen() {
   }
 
   useEffect(() => {
-    const data = routeByMode[travelMode];
+    const modeData = routeByMode[travelMode];
+    const routesForMode = modeData?.routes ?? [];
+    const safeIdx = Math.min(selectedRouteIndex, Math.max(0, routesForMode.length - 1));
+    const active = routesForMode[safeIdx] ?? null;
     if (!mapRef.current) return;
-    const coords = data?.coords?.length ? data.coords
+    const coords = active?.coords?.length ? active.coords
       : (originCoords && destCoords ? [{ latitude: originCoords.lat, longitude: originCoords.lng }, { latitude: destCoords.lat, longitude: destCoords.lng }] : null);
     if (coords) mapRef.current.fitToCoordinates(coords, { edgePadding: { top: 80, right: 60, bottom: 300, left: 60 }, animated: true });
-  }, [travelMode, routeByMode]);
+  }, [travelMode, routeByMode, selectedRouteIndex]);
 
-  function handleSwapStops() {
-    setStopsSwapped(s => !s);
+  function handleSwapOriginDest() {
+    if (!originCoords || !destCoords) return;
+    const o = { label: originLabel, address: originAddress, coords: originCoords };
+    const d = { label: destLabel, coords: destCoords };
+    setOriginLabel(d.label);
+    setOriginAddress(d.label);
+    setOriginCoords(d.coords);
+    setDestLabel(o.label);
+    setDestCoords(o.coords);
     setRouteByMode({});
     setTimeout(() => { void fetchAllRoutes(); }, 50);
+  }
+
+  function resetOriginToMyLocation() {
+    setEditingOrigin(false);
+    setOriginQuery('');
+    setOriginSuggestions([]);
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          try {
+            const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+            if (geo) {
+              const parts = [geo.streetNumber, geo.street, geo.city].filter(Boolean);
+              const addr = parts.join(' ') || 'My Location';
+              setOriginLabel(addr);
+              setOriginAddress(addr);
+            } else {
+              setOriginLabel('My Location');
+              setOriginAddress('My Location');
+            }
+          } catch {
+            setOriginLabel('My Location');
+            setOriginAddress('My Location');
+          }
+        }
+      } catch {}
+    })();
   }
 
   function handleOriginQueryChange(text: string) {
@@ -482,7 +515,30 @@ export default function DirectionsScreen() {
   function handleSelectOrigin(place: PlaceSearchResult) {
     setOriginLabel(place.name);
     setOriginCoords({ lat: place.lat, lng: place.lng });
-    setEditingOrigin(false); setOriginQuery(''); setOriginSuggestions([]);
+    setOriginAddress(place.address ?? place.name);
+    setEditingOrigin(false);
+    setOriginQuery('');
+    setOriginSuggestions([]);
+  }
+
+  function handleDestQueryChange(text: string) {
+    setDestQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (text.trim().length < 2) { setDestSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try { setDestSuggestions((await searchPlaces(text.trim())).slice(0, 4)); }
+      catch { setDestSuggestions([]); }
+      finally { setSuggBusy(false); }
+    }, 350);
+  }
+
+  function handleSelectDest(place: PlaceSearchResult) {
+    setDestLabel(place.name);
+    setDestCoords({ lat: place.lat, lng: place.lng });
+    setEditingDest(false);
+    setDestQuery('');
+    setDestSuggestions([]);
   }
 
   function doZoom(factor: number) {
@@ -508,11 +564,13 @@ export default function DirectionsScreen() {
     };
   });
 
-  const zoomAnimStyle   = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 116 }));
-  const locateAnimStyle = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 60  }));
-  const hmAnimStyle     = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 10  }));
+  // Fixed top position so controls stay in map area and never cover sheet content
+  const mapControlsTop = insets.top + 130;
 
-  const activeData = routeByMode[travelMode];
+  const modeData = routeByMode[travelMode];
+  const routesForMode = modeData?.routes ?? [];
+  const safeIdx = Math.min(selectedRouteIndex, Math.max(0, routesForMode.length - 1));
+  const activeData = routesForMode[safeIdx] ?? null;
   const activeSecs = activeData?.durationSecs ?? 0;
 
   const modeItems: { mode: TravelMode; icon: any }[] = [
@@ -527,15 +585,24 @@ export default function DirectionsScreen() {
     ? { latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }
     : { latitude: 40.7291, longitude: -73.9965, latitudeDelta: 0.05, longitudeDelta: 0.05 };
 
-  const topLabel    = stopsSwapped ? destLabel   : originLabel;
-  const topSub      = 'Starting point';
-  const bottomLabel = stopsSwapped ? originLabel : destLabel;
-  const bottomSub   = 'Destination';
 
-  const routeCards = [
-    { matchPct: 93, title: 'Fastest Route', dist: fmtDist(activeData?.distance ?? 21000), time: fmtSecs(activeSecs), traffic: 'Low Traffic', highlight: true },
-    { matchPct: 87, title: 'Safest Route',  dist: fmtDist(activeData?.distance ? activeData.distance * 1.12 : 23500), time: fmtSecs(Math.round(activeSecs * 1.15)), traffic: 'Low Traffic', highlight: false },
-  ];
+  const routeCards = routesForMode.map((r, i) => {
+    const isFastest = i === 0;
+    const safestIdx = routesForMode.reduce((best, rr, idx) =>
+      ((rr.safetyScore ?? 999) < (routesForMode[best]?.safetyScore ?? 999)) ? idx : best, 0);
+    const isSafest = i === safestIdx && routesForMode.length > 1;
+    const title = isFastest && isSafest ? 'Fastest & Safest' : isFastest ? 'Fastest Route' : isSafest ? 'Safest Route' : `Route ${i + 1}`;
+    return {
+      ...r,
+      index: i,
+      title,
+      dist: fmtDist(r.distance),
+      time: fmtSecs(r.durationSecs),
+      riskPct: r.safetyScore != null ? Math.round(r.safetyScore) : null,
+      safetyLabel: r.safetyLabel,
+      isSelected: i === safeIdx,
+    };
+  });
 
   return (
     <View style={styles.container}>
@@ -549,7 +616,6 @@ export default function DirectionsScreen() {
         )}
         {destCoords && <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor="#FF4444" />}
         {activeData?.coords?.length ? <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} /> : null}
-        {/* Real crash heatmap from Supabase */}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap
             points={crashPoints}
@@ -564,18 +630,108 @@ export default function DirectionsScreen() {
         )}
       </MapView>
 
-      {/* Zoom */}
-      <Animated.View style={[styles.zoomWrap, zoomAnimStyle]}>
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
-        <View style={styles.zoomDiv} />
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
-      </Animated.View>
-      {/* Locate */}
-      <Animated.View style={[styles.floatBtn, locateAnimStyle]}>
-        <Pressable style={styles.floatBtnInner} onPress={handleLocate}><Ionicons name="locate" size={20} color={GREEN} /></Pressable>
-      </Animated.View>
-      {/* Heatmap pill */}
-      <Animated.View style={[styles.heatmapWrap, hmAnimStyle]}>
+      {/* Origin / Destination — top of screen, search-bar style */}
+      <View style={[styles.topRouteCard, { top: insets.top + 10 }]}>
+        <View style={styles.topRouteRows}>
+          <View style={styles.routeInputRow}>
+            <View style={styles.routeInputIcon}><View style={styles.originDotSmall} /></View>
+            {editingOrigin ? (
+              <View style={styles.inlineSearchWrap}>
+                <View style={styles.inlineInputRow}>
+                  <TextInput
+                    value={originQuery}
+                    onChangeText={handleOriginQueryChange}
+                    placeholder="Search starting point…"
+                    placeholderTextColor={TEXT_MUT}
+                    autoFocus
+                    style={styles.inlineInputText}
+                    selectionColor={GREEN}
+                  />
+                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
+                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                </View>
+                {originSuggestions.length > 0 && (
+                  <View style={styles.suggList}>
+                    {originSuggestions.map((s) => (
+                      <Pressable key={s.place_id} style={styles.suggRow} onPress={() => handleSelectOrigin(s)}>
+                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
+                          <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Pressable style={styles.routeInputLabelWrap} onPress={() => { setEditingDest(false); setEditingOrigin(true); setOriginQuery(''); }}>
+                <Text style={styles.routeInputLabel} numberOfLines={1}>{originLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={TEXT_MUT} /></Pressable>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={styles.routeInputRow}>
+            <View style={styles.routeInputIcon}><Ionicons name="location" size={18} color={GREEN} /></View>
+            {editingDest ? (
+              <View style={styles.inlineSearchWrap}>
+                <View style={styles.inlineInputRow}>
+                  <TextInput
+                    value={destQuery}
+                    onChangeText={handleDestQueryChange}
+                    placeholder="Search destination…"
+                    placeholderTextColor={TEXT_MUT}
+                    autoFocus
+                    style={styles.inlineInputText}
+                    selectionColor={GREEN}
+                  />
+                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
+                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                </View>
+                {destSuggestions.length > 0 && (
+                  <View style={styles.suggList}>
+                    {destSuggestions.map((s) => (
+                      <Pressable key={s.place_id} style={styles.suggRow} onPress={() => handleSelectDest(s)}>
+                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
+                          <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Pressable style={styles.routeInputLabelWrap} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
+                <Text style={styles.routeInputLabel} numberOfLines={1}>{destLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={TEXT_MUT} /></Pressable>
+              </Pressable>
+            )}
+          </View>
+        </View>
+        <Pressable style={styles.swapBtnRight} onPress={handleSwapOriginDest}>
+          <Ionicons name="swap-vertical" size={20} color={TEXT_MUT} />
+        </Pressable>
+      </View>
+
+      {/* Back */}
+      <Pressable style={[styles.backBtn, { top: insets.top + 10 }]} onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={20} color={TEXT_PRI} />
+      </Pressable>
+
+      {/* Map controls — fixed in top map area so they never cover the sheet */}
+      <View style={[styles.mapControlsColumn, { top: mapControlsTop }]}>
+        <View style={styles.zoomWrap}>
+          <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
+          <View style={styles.zoomDiv} />
+          <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
+        </View>
+        <View style={styles.floatBtn}>
+          <Pressable style={styles.floatBtnInner} onPress={handleLocate}><Ionicons name="locate" size={20} color={GREEN} /></Pressable>
+        </View>
+        <View style={styles.heatmapWrap}>
         <Pressable
           style={[styles.heatmapInner, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
           onPress={() => setShowHeatmapModal(true)}
@@ -584,11 +740,9 @@ export default function DirectionsScreen() {
             ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
             : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? GREEN) : GREEN} />
           }
-          <Text style={[styles.heatmapText, heatmapFilter !== 'off' && { color: activeHeatmapInfo?.color ?? GREEN }]}>
-            {heatmapFilter === 'off' ? 'Safety Heatmap' : activeHeatmapInfo?.label ?? 'Heatmap'}
-          </Text>
         </Pressable>
-      </Animated.View>
+      </View>
+      </View>
 
       {/* Heatmap filter modal */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
@@ -662,7 +816,12 @@ export default function DirectionsScreen() {
           {sheetIndex === 0 ? (
             <View style={styles.miniRow}>
               <Ionicons name="navigate-outline" size={16} color={GREEN} />
-              <Text style={styles.miniLabel}>Directions</Text>
+              <View style={styles.miniLabelWrap}>
+                <Text style={styles.miniLabel}>Directions</Text>
+                {originLabel && destLabel && (
+                  <Text style={styles.miniSub} numberOfLines={1}>{originLabel} → {destLabel}</Text>
+                )}
+              </View>
               {activeData && <Text style={styles.miniMeta}>{fmtSecs(activeSecs)} · {fmtDist(activeData.distance)}</Text>}
               <Pressable style={styles.miniClose} onPress={() => router.back()}><Ionicons name="close" size={14} color={TEXT_PRI} /></Pressable>
             </View>
@@ -690,52 +849,6 @@ export default function DirectionsScreen() {
                 })}
               </View>
 
-              {/* Stops card */}
-              <View style={styles.routeCard}>
-                <DraggableStopRow label={topLabel} sub={topSub} isOrigin onPressLabel={() => { setEditingOrigin(true); setOriginQuery(''); }} onSwap={handleSwapStops} />
-
-                {editingOrigin && (
-                  <View style={styles.inlineSearchWrap}>
-                    <View style={styles.inlineInputRow}>
-                      <TextInput value={originQuery} onChangeText={handleOriginQueryChange}
-                        placeholder="Search starting point…" placeholderTextColor={TEXT_MUT}
-                        autoFocus style={styles.inlineInputText} selectionColor={GREEN} />
-                      {suggBusy ? <ActivityIndicator size="small" color={GREEN} />
-                        : <Pressable onPress={() => { setEditingOrigin(false); setOriginSuggestions([]); }}><Ionicons name="close-circle" size={16} color={TEXT_MUT} /></Pressable>}
-                    </View>
-                    {originSuggestions.length > 0 && (
-                      <View style={styles.suggList}>
-                        {originSuggestions.map((s, i) => (
-                          <View key={s.place_id}>
-                            <Pressable style={styles.suggRow} onPress={() => handleSelectOrigin(s)}>
-                              <Ionicons name="location-outline" size={14} color={GREEN} />
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
-                                <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
-                              </View>
-                            </Pressable>
-                            {i < originSuggestions.length - 1 && <View style={styles.suggDivider} />}
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                <View style={styles.connectorWrap}>
-                  {[0,1,2,3].map(i => <View key={i} style={styles.connectorDash} />)}
-                </View>
-
-                <DraggableStopRow label={bottomLabel} sub={bottomSub} isOrigin={false} onPressLabel={() => {}} onSwap={handleSwapStops} />
-
-                <View style={styles.divLine} />
-                <View style={styles.addStopRow}>
-                  <View style={styles.addStopIcon}><Ionicons name="add" size={18} color={GREEN} /></View>
-                  <Text style={styles.addStopLabel}>My Location</Text>
-                  <View style={styles.dragHandle}><Ionicons name="reorder-two-outline" size={22} color={TEXT_MUT} /></View>
-                </View>
-              </View>
-
               {/* Now / Avoid filters */}
               <View style={styles.filterRow}>
                 <Pressable style={styles.filterChip}>
@@ -755,12 +868,16 @@ export default function DirectionsScreen() {
                 </View>
               )}
 
-              {/* Route option cards */}
+              {/* Route option cards — each with risk %, selectable */}
               {!routeBusy && activeData && routeCards.map((card, i) => (
-                <View key={i} style={[styles.routeOptionCard, card.highlight && styles.routeOptionCardActive]}>
-                  {/* Match badge — LinearGradient when highlighted */}
-                  <View style={[styles.matchBadge, card.highlight && styles.matchBadgeActive]}>
-                    {card.highlight && (
+                <Pressable
+                  key={i}
+                  style={[styles.routeOptionCard, card.isSelected && styles.routeOptionCardActive]}
+                  onPress={() => setSelectedRouteIndex(card.index)}
+                >
+                  {/* Risk badge — shows actual risk % from ML model */}
+                  <View style={[styles.riskBadge, card.isSelected && styles.riskBadgeActive]}>
+                    {card.isSelected && (
                       <LinearGradient
                         colors={['#0A9E6E', '#1ABC93', '#12B882']}
                         start={{ x: 0, y: 0 }}
@@ -769,23 +886,36 @@ export default function DirectionsScreen() {
                       />
                     )}
                     <View style={styles.matchBadgeContent}>
-                      <Text style={[styles.matchWord, { color: card.highlight ? '#fff' : TEXT_MUT }]}>MATCH</Text>
-                      <Text style={[styles.matchPct, { color: card.highlight ? '#fff' : TEXT_PRI }]}>{card.matchPct}%</Text>
+                      <Text style={[styles.riskWord, { color: card.isSelected ? '#fff' : TEXT_MUT }]}>RISK</Text>
+                      <Text style={[styles.matchPct, { color: card.isSelected ? '#fff' : TEXT_PRI }]}>
+                        {card.riskPct != null ? `${card.riskPct}%` : '–'}
+                      </Text>
                     </View>
                   </View>
                   <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
-                    <Text style={styles.routeOptionTitle}>{card.title}</Text>
+                    <View style={styles.routeOptionTitleRow}>
+                      <Text style={styles.routeOptionTitle}>{card.title}</Text>
+                      {card.isSelected && (
+                        <View style={styles.selectedChip}>
+                          <Ionicons name="checkmark-circle" size={14} color={GREEN} />
+                          <Text style={styles.selectedChipText}>Selected</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={styles.routeOptionMeta}>{card.time}  •  {card.dist}</Text>
-                    <Text style={[styles.routeOptionTraffic, { color: card.traffic === 'Low Traffic' ? '#1ABC93' : '#FFA500' }]}>{card.traffic}</Text>
+                    {card.safetyLabel && card.safetyLabel !== 'unknown' && (
+                      <Text style={[styles.routeOptionTraffic, {
+                        color: card.safetyLabel === 'low' ? '#1ABC93' : card.safetyLabel === 'medium' ? '#FFA500' : '#FF4444',
+                      }]}>
+                        {card.safetyLabel === 'low' ? 'Low risk' : card.safetyLabel === 'medium' ? 'Moderate risk' : 'High risk'}
+                      </Text>
+                    )}
                   </Pressable>
-                  {/* Start button — real LinearGradient */}
                   <Pressable
                     style={styles.startBtnWrap}
                     onPress={() => {
                       const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
-                      const from = stopsSwapped ? destCoords : originCoords;
-                      const to   = stopsSwapped ? originCoords : destCoords;
-                      Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                      Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${originCoords?.lat},${originCoords?.lng}&destination=${destCoords?.lat},${destCoords?.lng}&travelmode=${modeMap[travelMode]}`);
                     }}
                   >
                     <LinearGradient
@@ -796,7 +926,7 @@ export default function DirectionsScreen() {
                     />
                     <Text style={styles.startBtnText}>Start</Text>
                   </Pressable>
-                </View>
+                </Pressable>
               ))}
 
               {!routeBusy && !activeData && (
@@ -816,16 +946,16 @@ export default function DirectionsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  // Floating buttons
-  zoomWrap: { position: 'absolute', right: 14, backgroundColor: ITEM_BG, borderRadius: 14, overflow: 'hidden', width: 42 },
+  // Map controls — fixed in top area so they never cover the sheet
+  mapControlsColumn: { position: 'absolute', right: 14, flexDirection: 'column', gap: 8 },
+  zoomWrap: { backgroundColor: ITEM_BG, borderRadius: 14, overflow: 'hidden', width: 42 },
   zoomBtn: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
   zoomDiv: { height: 1, backgroundColor: DIVIDER, marginHorizontal: 8 },
-  floatBtn: { position: 'absolute', right: 14, width: 42, height: 42, borderRadius: 21 },
+  floatBtn: { width: 42, height: 42, borderRadius: 21 },
   floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
-  heatmapWrap: { position: 'absolute', right: 14 },
-  heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: ITEM_BG, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#00FF8840' },
+  heatmapWrap: {},
+  heatmapInner: { width: 42, height: 42, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#00FF8840' },
   heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
-  heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
 
   // Map markers
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
@@ -834,8 +964,33 @@ const styles = StyleSheet.create({
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: DIVIDER },
   sheetContent: { paddingHorizontal: 16, paddingTop: 6 },
 
-  miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  miniLabel: { flex: 1, color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
+  // Top route card (origin/destination bar)
+  topRouteCard: {
+    position: 'absolute',
+    left: 56,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: CARD_BG,
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    gap: 8,
+    zIndex: 10,
+  },
+  topRouteRows: { flex: 1 },
+  routeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 },
+  routeInputIcon: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
+  originDotSmall: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: 'rgba(74,144,226,0.4)' },
+  routeInputLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  routeInputLabel: { flex: 1, color: TEXT_PRI, fontSize: 14, fontWeight: '600' },
+  swapBtnRight: { padding: 8, justifyContent: 'center' },
+  backBtn: { position: 'absolute', left: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: CARD_BG, justifyContent: 'center', alignItems: 'center', zIndex: 11 },
+
+  miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 },
+  miniLabelWrap: { flex: 1, minWidth: 0 },
+  miniLabel: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
+  miniSub: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
   miniMeta: { color: TEXT_MUT, fontSize: 13 },
   miniClose: { width: 26, height: 26, borderRadius: 13, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
 
@@ -859,7 +1014,7 @@ const styles = StyleSheet.create({
   stopSub: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
   dragHandle: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
 
-  inlineSearchWrap: { marginLeft: 38, marginBottom: 8 },
+  inlineSearchWrap: { flex: 1, marginBottom: 4 },
   inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
   inlineInputText: { flex: 1, color: TEXT_PRI, fontSize: 14 },
 
@@ -884,16 +1039,19 @@ const styles = StyleSheet.create({
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 },
   loadingText: { color: TEXT_MUT, fontSize: 14 },
 
-  // Route option cards — match image: badge | info (pressable) | start button
+  // Route option cards — risk badge | info (pressable) | start button
   routeOptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
-  routeOptionCardActive: { borderColor: GREEN },
-  matchBadge: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center', minWidth: 68, overflow: 'hidden', position: 'relative', backgroundColor: ITEM_BG },
-  matchBadgeActive: { backgroundColor: 'transparent' },
+  routeOptionCardActive: { borderColor: GREEN, borderWidth: 2 },
+  riskBadge: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center', minWidth: 68, overflow: 'hidden', position: 'relative', backgroundColor: ITEM_BG },
+  riskBadgeActive: { backgroundColor: 'transparent' },
   matchBadgeContent: { alignItems: 'center' },
-  matchWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  riskWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   matchPct: { fontSize: 22, fontWeight: '800' },
   routeOptionInfo: { flex: 1 },
-  routeOptionTitle: { color: TEXT_PRI, fontSize: 15, fontWeight: '700', marginBottom: 3 },
+  routeOptionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' },
+  routeOptionTitle: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
+  selectedChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(26,188,147,0.2)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  selectedChipText: { color: GREEN, fontSize: 11, fontWeight: '700' },
   routeOptionMeta: { color: TEXT_MUT, fontSize: 13, marginBottom: 2 },
   routeOptionTraffic: { fontSize: 12, fontWeight: '600' },
   // Gradient Start button
@@ -945,6 +1103,10 @@ const dm = StyleSheet.create({
   statLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 6 },
   statValue: { color: TEXT_PRI, fontSize: 28, fontWeight: '800', marginBottom: 4 },
   statDelta: { fontSize: 13, fontWeight: '600' },
+
+  safetyBadge: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 14, borderWidth: 1, marginBottom: 14 },
+  safetyLabelText: { fontSize: 15, fontWeight: '700' },
+  safetyScoreText: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
 });
 
 // ─── Heatmap Modal Styles ─────────────────────────────────────────────────────

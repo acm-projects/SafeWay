@@ -21,7 +21,7 @@ app = FastAPI(title="SafeWay API")
 # ---------------------------------------------------------------------------
 # Simple in-memory daily rate limiter for Google API calls (free-tier guard)
 # ---------------------------------------------------------------------------
-DAILY_API_LIMIT = 40  # hard cap — keeps us well under 50
+DAILY_API_LIMIT = 200  # hard cap — keeps us well under 50
 
 _api_call_count = 0
 _api_call_date = datetime.now(timezone.utc).date()
@@ -320,33 +320,58 @@ def compute_route(payload: RouteRequest):
         },
         "travelMode": payload.travel_mode,
     }
-    # routingPreference is only valid for DRIVE and TWO_WHEELER modes.
-    # Google Routes API rejects it for WALK and BICYCLE.
     if payload.travel_mode in ("DRIVE", "TWO_WHEELER"):
         body["routingPreference"] = "TRAFFIC_UNAWARE"
+        body["computeAlternativeRoutes"] = True
 
-    response = requests.post(url, headers=headers, json=body, timeout=20)
+    response = requests.post(url, headers=headers, json=body, timeout=25)
     if response.status_code >= 400:
         raise HTTPException(
             status_code=response.status_code,
             detail=f"Routes API error: {response.text}",
         )
 
-    routes = response.json().get("routes", [])
-    if not routes:
+    raw_routes = response.json().get("routes", [])
+    if not raw_routes:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No routes found")
 
-    route = routes[0]
-    polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
-    coordinates = decode_polyline(polyline) if polyline else []
+    result_routes = []
+    try:
+        from risk_cache import score_coordinates
+        for route in raw_routes:
+            polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
+            coordinates = decode_polyline(polyline) if polyline else []
+            safety_score = None
+            safety_label = "unknown"
+            try:
+                safety = score_coordinates(coordinates, sample_every=5)
+                safety_score = safety.get("score")
+                safety_label = safety.get("label", "unknown")
+            except Exception:
+                pass
+            result_routes.append({
+                "distance_meters": route.get("distanceMeters"),
+                "duration": route.get("duration"),
+                "polyline": polyline,
+                "coordinates": coordinates,
+                "safety_score": safety_score,
+                "safety_label": safety_label,
+            })
+    except Exception as e:
+        print(f"[route] safety scoring skipped: {e}")
+        for route in raw_routes:
+            polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
+            coordinates = decode_polyline(polyline) if polyline else []
+            result_routes.append({
+                "distance_meters": route.get("distanceMeters"),
+                "duration": route.get("duration"),
+                "polyline": polyline,
+                "coordinates": coordinates,
+                "safety_score": None,
+                "safety_label": "unknown",
+            })
 
-    return {
-        "distance_meters": route.get("distanceMeters"),
-        "duration": route.get("duration"),
-        "travel_mode": payload.travel_mode,
-        "polyline": polyline,
-        "coordinates": coordinates,
-    }
+    return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
 
 @app.get("/maps/usage")

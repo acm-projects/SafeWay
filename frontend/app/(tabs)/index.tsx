@@ -238,7 +238,7 @@ export default function HomeScreen() {
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
-    limit: 10_000,
+    limit: 200_000,
   });
   // Active filter label for the pill
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
@@ -350,10 +350,8 @@ export default function HomeScreen() {
     return { borderTopLeftRadius: r, borderTopRightRadius: r, borderBottomLeftRadius: bR, borderBottomRightRadius: bR, marginLeft: mg, marginRight: mg };
   });
 
-  const TAB_H = 0;
-  const zoomAnim    = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 116 }));
-  const locateAnim  = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 60  }));
-  const heatmapAnim = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 10  }));
+  // Fixed top position so controls stay in map area and never cover sheet content
+  const mapControlsTop = insets.top + 20;
 
   const mapRegion = userLocation
     ? { latitude: userLocation.lat, longitude: userLocation.lng, latitudeDelta: 0.04, longitudeDelta: 0.04 }
@@ -402,39 +400,34 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* Zoom */}
-      <Animated.View style={[s.zoomWrap, zoomAnim]}>
-        <Pressable style={s.zoomBtn} onPress={handleZoomIn}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
-        <View style={s.zoomDiv} />
-        <Pressable style={s.zoomBtn} onPress={handleZoomOut}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
-      </Animated.View>
-
-      {/* Locate */}
-      <Animated.View style={[s.floatBtn, locateAnim]}>
-        <Pressable style={s.floatBtnInner} onPress={handleMyLocation}>
-          <Ionicons name="locate" size={20} color={GREEN} />
-        </Pressable>
-      </Animated.View>
-
-      {/* Heatmap pill */}
-      <Animated.View style={[s.heatmapWrap, heatmapAnim]}>
+      {/* Map controls — fixed in top map area so they never cover the sheet */}
+      <View style={[s.mapControlsColumn, { top: mapControlsTop }]}>
+        <View style={s.zoomWrap}>
+          <Pressable style={s.zoomBtn} onPress={handleZoomIn}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
+          <View style={s.zoomDiv} />
+          <Pressable style={s.zoomBtn} onPress={handleZoomOut}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
+        </View>
+        <View style={s.floatBtn}>
+          <Pressable style={s.floatBtnInner} onPress={handleMyLocation}>
+            <Ionicons name="locate" size={20} color={GREEN} />
+          </Pressable>
+        </View>
+        <View style={s.heatmapWrap}>
         <Pressable
           style={[s.heatmapInner, heatmapFilter !== 'off' && s.heatmapInnerActive]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={GREEN} style={{ marginRight: 2 }} />
+            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
             : <Ionicons
                 name="layers-outline"
                 size={14}
                 color={heatmapFilter !== 'off' ? (activeFilterInfo?.color ?? GREEN) : GREEN}
               />
           }
-          <Text style={[s.heatmapText, heatmapFilter !== 'off' && { color: activeFilterInfo?.color ?? GREEN }]}>
-            {heatmapFilter === 'off' ? 'Safety Heatmap' : activeFilterInfo?.label ?? 'Heatmap'}
-          </Text>
         </Pressable>
-      </Animated.View>
+      </View>
+      </View>
 
       {/* Profile modal */}
       <ProfileModal visible={showProfileModal} onClose={() => setShowProfileModal(false)} user={user} signOut={signOut} />
@@ -600,15 +593,15 @@ const s = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: NAVY },
   loadingText: { marginTop: 16, color: GREEN, fontSize: 14, fontWeight: '500' },
 
-  zoomWrap: { position: 'absolute', right: 14, backgroundColor: NAVY_ITEM, borderRadius: 14, overflow: 'hidden', width: 42 },
+  mapControlsColumn: { position: 'absolute', right: 14, flexDirection: 'column', gap: 8 },
+  zoomWrap: { backgroundColor: NAVY_ITEM, borderRadius: 14, overflow: 'hidden', width: 42 },
   zoomBtn: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
   zoomDiv: { height: 1, backgroundColor: '#2A3A55', marginHorizontal: 8 },
-  floatBtn: { position: 'absolute', right: 14, width: 42, height: 42, borderRadius: 21 },
+  floatBtn: { width: 42, height: 42, borderRadius: 21 },
   floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
-  heatmapWrap: { position: 'absolute', right: 14 },
-  heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: NAVY_ITEM, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8 },
+  heatmapWrap: {},
+  heatmapInner: { width: 42, height: 42, borderRadius: 21, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
   heatmapInnerActive: { backgroundColor: '#0B1120', borderWidth: 1, borderColor: '#1ABC9340' },
-  heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
 
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
   sheetContent: { paddingHorizontal: 16, paddingTop: 10 },

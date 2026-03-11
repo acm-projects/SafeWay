@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, ActivityIndicator, Image, Linking, Pressable, ScrollView,
-  StyleSheet, Text, View, useWindowDimensions,
+  StyleSheet, Text, TextInput, View, useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -14,8 +14,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import * as Location from 'expo-location';
 
-import { createBookmark, getPlaceDetails } from '@/lib/api';
-import type { PlaceDetails } from '@/lib/api';
+import { createBookmark, getPlaceDetails, searchPlaces } from '@/lib/api';
+import type { PlaceDetails, PlaceSearchResult } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 
@@ -80,11 +80,12 @@ export default function DestinationScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { height: windowHeight } = useWindowDimensions();
   const jwt = session?.access_token ?? '';
 
-  const lat = parseFloat(params.lat ?? '0');
-  const lng = parseFloat(params.lng ?? '0');
+  const initialLat = parseFloat(params.lat ?? '0');
+  const initialLng = parseFloat(params.lng ?? '0');
 
   const snapPoints = useMemo(() => ['12%', '48%', '90%'], []);
   const animatedPosition = useSharedValue(windowHeight);
@@ -98,57 +99,167 @@ export default function DestinationScreen() {
   const [currentAddress, setCurrentAddress] = useState('My Location');
   const [heatmapEnabled, setHeatmapEnabled] = useState(false);
 
+  // Origin/destination for route input card (Google Maps-style)
+  const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [originLabel, setOriginLabel] = useState('My Location');
+  const [originAddress, setOriginAddress] = useState('');
+  const [originPlaceId, setOriginPlaceId] = useState('');
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number }>({ lat: initialLat, lng: initialLng });
+  const [destLabel, setDestLabel] = useState(params.name ?? 'Destination');
+  const [destAddress, setDestAddress] = useState(params.address ?? '');
+  const [destPlaceId, setDestPlaceId] = useState(params.placeId ?? '');
+  const [editingOrigin, setEditingOrigin] = useState(false);
+  const [editingDest, setEditingDest] = useState(false);
+  const [originQuery, setOriginQuery] = useState('');
+  const [destQuery, setDestQuery] = useState('');
+  const [originSuggestions, setOriginSuggestions] = useState<PlaceSearchResult[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<PlaceSearchResult[]>([]);
+  const [suggBusy, setSuggBusy] = useState(false);
+
   // Crash heatmap data — only fetches when toggled on
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: 'all',
     enabled: heatmapEnabled,
-    limit: 5_000,
+    limit: 200_000,
   });
 
-  // Reverse-geocode user's current position for the directions label
+  // Reverse-geocode user's current position for origin label + coords
   useEffect(() => {
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
           const [geo] = await Location.reverseGeocodeAsync({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
           });
           if (geo) {
             const parts = [geo.streetNumber, geo.street, geo.city].filter(Boolean);
-            setCurrentAddress(parts.join(' ') || 'My Location');
+            const addr = parts.join(' ') || 'My Location';
+            setCurrentAddress(addr);
+            setOriginLabel(addr);
           }
         }
       } catch {}
     })();
   }, []);
 
-  // Fetch rich place details directly from Google Places API v1
+  // Initialize destination from params on first load
   useEffect(() => {
-    if (params.placeId) {
+    setDestCoords({ lat: initialLat, lng: initialLng });
+    setDestLabel(params.name ?? 'Destination');
+    setDestPlaceId(params.placeId ?? '');
+  }, [params.placeId, params.name, params.lat, params.lng]);
+
+  // Fetch rich place details when destination has a place ID
+  useEffect(() => {
+    if (destPlaceId) {
       setDetailsLoading(true);
-      getPlaceDetails(params.placeId)
+      getPlaceDetails(destPlaceId)
         .then(d => { if (d) setDetails(d); })
         .catch(() => {})
         .finally(() => setDetailsLoading(false));
+    } else {
+      setDetails(null);
     }
     setTimeout(() => {
       mapRef.current?.animateToRegion(
-        { latitude: lat, longitude: lng, latitudeDelta: 0.012, longitudeDelta: 0.012 },
+        { latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: 0.012, longitudeDelta: 0.012 },
         400,
       );
     }, 400);
-  }, [params.placeId]);
+  }, [destPlaceId, destCoords.lat, destCoords.lng]);
+
+  function handleOriginQueryChange(text: string) {
+    setOriginQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (text.trim().length < 2) { setOriginSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try { setOriginSuggestions((await searchPlaces(text.trim())).slice(0, 4)); }
+      catch { setOriginSuggestions([]); }
+      finally { setSuggBusy(false); }
+    }, 350);
+  }
+
+  function handleDestQueryChange(text: string) {
+    setDestQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (text.trim().length < 2) { setDestSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try { setDestSuggestions((await searchPlaces(text.trim())).slice(0, 4)); }
+      catch { setDestSuggestions([]); }
+      finally { setSuggBusy(false); }
+    }, 350);
+  }
+
+  function handleSelectOrigin(place: PlaceSearchResult) {
+    setOriginLabel(place.name);
+    setOriginCoords({ lat: place.lat, lng: place.lng });
+    setOriginPlaceId(place.place_id);
+    setEditingOrigin(false);
+    setOriginQuery('');
+    setOriginSuggestions([]);
+  }
+
+  function handleSelectDest(place: PlaceSearchResult) {
+    setDestLabel(place.name);
+    setDestAddress(place.address);
+    setDestCoords({ lat: place.lat, lng: place.lng });
+    setDestPlaceId(place.place_id);
+    setEditingDest(false);
+    setDestQuery('');
+    setDestSuggestions([]);
+  }
+
+  function handleSwapOriginDest() {
+    const o = { label: originLabel, address: originAddress, coords: originCoords, placeId: originPlaceId };
+    const d = { label: destLabel, address: destAddress, coords: destCoords, placeId: destPlaceId };
+    setOriginLabel(d.label);
+    setOriginAddress(d.address);
+    setOriginCoords(d.coords);
+    setOriginPlaceId(d.placeId);
+    setDestLabel(o.label);
+    setDestAddress(o.address);
+    setDestCoords(o.coords ?? destCoords);
+    setDestPlaceId(o.placeId);
+    if (!o.placeId) setDetails(null);
+  }
+
+  function resetOriginToMyLocation() {
+    setEditingOrigin(false);
+    setOriginQuery('');
+    setOriginSuggestions([]);
+    setOriginLabel('My Location');
+    setOriginAddress('');
+    setOriginPlaceId('');
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          if (geo) {
+            const parts = [geo.streetNumber, geo.street, geo.city].filter(Boolean);
+            setOriginLabel(parts.join(' ') || 'My Location');
+          }
+        }
+      } catch {}
+    })();
+  }
 
   async function handleSave() {
     if (!jwt) { Alert.alert('Sign in to save places'); return; }
     try {
       await createBookmark(jwt, {
-        title: details?.name ?? params.name,
-        address: details?.address ?? params.address,
-        lat, lng,
+        title: details?.name ?? destLabel,
+        address: details?.address ?? destAddress,
+        lat: destCoords.lat,
+        lng: destCoords.lng,
       });
       setSaved(true);
     } catch (e) {
@@ -160,15 +271,14 @@ export default function DestinationScreen() {
   function openWebsite() {
     const url = details?.website;
     if (!url) {
-      // Fallback: Google search for the place
       Linking.openURL(
-        `https://www.google.com/search?q=${encodeURIComponent(params.name ?? '')}`,
+        `https://www.google.com/search?q=${encodeURIComponent(destLabel ?? '')}`,
       );
       return;
     }
     Linking.openURL(url).catch(() => {
       Linking.openURL(
-        `https://www.google.com/search?q=${encodeURIComponent(params.name ?? '')}`,
+        `https://www.google.com/search?q=${encodeURIComponent(destLabel ?? '')}`,
       );
     });
   }
@@ -186,11 +296,11 @@ export default function DestinationScreen() {
     };
   });
 
-  const locateAnim  = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 60 }));
-  const heatmapAnim = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 10 }));
+  // Fixed top position so controls stay in map area and never cover sheet content
+  const mapControlsTop = insets.top + 130;
 
-  const placeName = details?.name    ?? params.name    ?? 'Place';
-  const placeAddr = details?.address ?? params.address ?? '';
+  const placeName = details?.name    ?? destLabel       ?? 'Place';
+  const placeAddr = details?.address ?? destAddress       ?? '';
   const rawType   = details?.types?.[0] ?? '';
   const placeType = rawType
     ? rawType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -207,7 +317,7 @@ export default function DestinationScreen() {
 
   function handleCenter() {
     mapRef.current?.animateToRegion(
-      { latitude: lat, longitude: lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta },
+      { latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta },
       400,
     );
   }
@@ -256,13 +366,13 @@ export default function DestinationScreen() {
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
         customMapStyle={DARK_MAP_STYLE}
-        initialRegion={{ latitude: lat, longitude: lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
+        initialRegion={{ latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
         showsUserLocation
         showsMyLocationButton={false}
         scrollEnabled
         zoomEnabled
       >
-        <Marker coordinate={{ latitude: lat, longitude: lng }} pinColor={GREEN} />
+        <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor={GREEN} />
         {/* Real crash heatmap — only rendered when toggled on */}
         {heatmapEnabled && crashPoints.length > 0 && (
           <Heatmap
@@ -278,20 +388,105 @@ export default function DestinationScreen() {
         )}
       </MapView>
 
+      {/* Origin / Destination — top of screen, search-bar style */}
+      <View style={[s.topRouteCard, { top: insets.top + 10 }]}>
+        <View style={s.topRouteRows}>
+          <View style={s.routeInputRow}>
+            <View style={s.routeInputIcon}><View style={s.originDot} /></View>
+            {editingOrigin ? (
+              <View style={s.inlineSearchWrap}>
+                <View style={s.inlineInputRow}>
+                  <TextInput
+                    value={originQuery}
+                    onChangeText={handleOriginQueryChange}
+                    placeholder="Search starting point…"
+                    placeholderTextColor={TEXT_MUT}
+                    autoFocus
+                    style={s.inlineInputText}
+                    selectionColor={GREEN}
+                  />
+                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
+                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                </View>
+                {originSuggestions.length > 0 && (
+                  <View style={s.suggList}>
+                    {originSuggestions.map((place) => (
+                      <Pressable key={place.place_id} style={s.suggRow} onPress={() => handleSelectOrigin(place)}>
+                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.suggTitle} numberOfLines={1}>{place.name}</Text>
+                          <Text style={s.suggSub} numberOfLines={1}>{place.address}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Pressable style={s.routeInputLabelWrap} onPress={() => { setEditingDest(false); setEditingOrigin(true); setOriginQuery(''); }}>
+                <Text style={s.routeInputLabel} numberOfLines={1}>{originLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={TEXT_MUT} /></Pressable>
+              </Pressable>
+            )}
+          </View>
+
+          <View style={s.routeInputRow}>
+            <View style={s.routeInputIcon}><Ionicons name="location" size={18} color={GREEN} /></View>
+            {editingDest ? (
+              <View style={s.inlineSearchWrap}>
+                <View style={s.inlineInputRow}>
+                  <TextInput
+                    value={destQuery}
+                    onChangeText={handleDestQueryChange}
+                    placeholder="Search destination…"
+                    placeholderTextColor={TEXT_MUT}
+                    autoFocus
+                    style={s.inlineInputText}
+                    selectionColor={GREEN}
+                  />
+                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
+                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                </View>
+                {destSuggestions.length > 0 && (
+                  <View style={s.suggList}>
+                    {destSuggestions.map((place) => (
+                      <Pressable key={place.place_id} style={s.suggRow} onPress={() => handleSelectDest(place)}>
+                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.suggTitle} numberOfLines={1}>{place.name}</Text>
+                          <Text style={s.suggSub} numberOfLines={1}>{place.address}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ) : (
+              <Pressable style={s.routeInputLabelWrap} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
+                <Text style={s.routeInputLabel} numberOfLines={1}>{destLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={TEXT_MUT} /></Pressable>
+              </Pressable>
+            )}
+          </View>
+        </View>
+        <Pressable style={s.swapBtnRight} onPress={handleSwapOriginDest}>
+          <Ionicons name="swap-vertical" size={20} color={TEXT_MUT} />
+        </Pressable>
+      </View>
+
       {/* Back */}
       <Pressable style={[s.backBtn, { top: insets.top + 10 }]} onPress={() => router.back()}>
         <Ionicons name="arrow-back" size={20} color={TEXT_PRI} />
       </Pressable>
 
-      {/* Locate / Center */}
-      <Animated.View style={[s.floatBtn, locateAnim]}>
-        <Pressable style={s.floatBtnInner} onPress={handleCenter}>
-          <Ionicons name="navigate-outline" size={20} color={GREEN} />
-        </Pressable>
-      </Animated.View>
-
-      {/* Heatmap pill — tap to toggle */}
-      <Animated.View style={[s.heatmapWrap, heatmapAnim]}>
+      {/* Map controls — fixed in top map area so they never cover the sheet */}
+      <View style={[s.mapControlsColumn, { top: mapControlsTop }]}>
+        <View style={s.floatBtn}>
+          <Pressable style={s.floatBtnInner} onPress={handleCenter}>
+            <Ionicons name="navigate-outline" size={20} color={GREEN} />
+          </Pressable>
+        </View>
+        <View style={s.heatmapWrap}>
         <Pressable
           style={[s.heatmapInner, heatmapEnabled && s.heatmapInnerActive]}
           onPress={() => setHeatmapEnabled(e => !e)}
@@ -300,16 +495,9 @@ export default function DestinationScreen() {
             ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
             : <Ionicons name="layers-outline" size={14} color={heatmapEnabled ? '#FF6B6B' : GREEN} />
           }
-          <Text style={[s.heatmapText, heatmapEnabled && { color: '#FF6B6B' }]}>
-            {heatmapEnabled
-              ? crashPoints.length > 0
-                ? `${crashPoints.length.toLocaleString()} crashes`
-                : 'Loading…'
-              : 'Safety Heatmap'
-            }
-          </Text>
         </Pressable>
-      </Animated.View>
+      </View>
+      </View>
 
       <BottomSheet
         ref={bottomSheetRef}
@@ -379,17 +567,21 @@ export default function DestinationScreen() {
               {/* ── View Routes — real gradient button ── */}
               <Pressable
                 style={s.routesBtn}
-                onPress={() =>
+                onPress={() => {
+                  if (!originCoords) return;
                   router.push({
                     pathname: '/directions',
                     params: {
-                      destLat: String(lat),
-                      destLng: String(lng),
-                      destName: placeName,
-                      originAddress: currentAddress,
+                      destLat: String(destCoords.lat),
+                      destLng: String(destCoords.lng),
+                      destName: destLabel,
+                      originAddress: originLabel,
+                      originLat: String(originCoords.lat),
+                      originLng: String(originCoords.lng),
                     },
-                  })
-                }
+                  });
+                }}
+                disabled={!originCoords}
               >
                 <LinearGradient
                   colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
@@ -491,20 +683,19 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(11,17,32,0.9)',
     justifyContent: 'center', alignItems: 'center',
   },
-  floatBtn: { position: 'absolute', right: 14, width: 42, height: 42, borderRadius: 21 },
+  mapControlsColumn: { position: 'absolute', right: 14, flexDirection: 'column', gap: 8 },
+  floatBtn: { width: 42, height: 42, borderRadius: 21 },
   floatBtnInner: {
     flex: 1, borderRadius: 21, backgroundColor: NAVY_ITEM,
     justifyContent: 'center', alignItems: 'center',
   },
-  heatmapWrap: { position: 'absolute', right: 14 },
+  heatmapWrap: {},
   heatmapInner: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: NAVY_ITEM, borderRadius: 22,
-    paddingHorizontal: 12, paddingVertical: 8,
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: 'transparent',
   },
   heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
-  heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
   sheetContent: { paddingHorizontal: 16, paddingTop: 8 },
   miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
@@ -526,6 +717,35 @@ const s = StyleSheet.create({
   hoursRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   openTag: { fontSize: 13, fontWeight: '700' },
   hoursText: { flex: 1, color: TEXT_MUT, fontSize: 13 },
+  topRouteCard: {
+    position: 'absolute',
+    left: 56,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: NAVY_CARD,
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    gap: 8,
+    zIndex: 10,
+  },
+  topRouteRows: { flex: 1 },
+  routeInputCard: { backgroundColor: NAVY_CARD, borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: DIVIDER },
+  routeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 },
+  routeInputIcon: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
+  originDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: 'rgba(74,144,226,0.4)' },
+  routeInputLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  routeInputLabel: { flex: 1, color: TEXT_PRI, fontSize: 14, fontWeight: '600' },
+  swapBtn: { alignSelf: 'center', padding: 8, marginVertical: 4 },
+  swapBtnRight: { padding: 8, justifyContent: 'center' },
+  inlineSearchWrap: { flex: 1, marginBottom: 4 },
+  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: NAVY_ITEM, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
+  inlineInputText: { flex: 1, color: TEXT_PRI, fontSize: 14 },
+  suggList: { backgroundColor: NAVY_ITEM, borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
+  suggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
+  suggTitle: { color: TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 },
+  suggSub: { color: TEXT_MUT, fontSize: 11, marginTop: 1 },
   // Gradient button — overflow:hidden clips the absolute fill columns to borderRadius
   routesBtn: {
     height: 52,
