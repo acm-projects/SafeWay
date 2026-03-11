@@ -15,13 +15,12 @@ interface UseCrashHeatmapOptions {
   limit?: number;
 }
 
-// Supabase/PostgREST caps responses at 1000 rows per request; paginate with this size
 const PAGE = 1000;
 
 export function useCrashHeatmap({
   filter,
   enabled = true,
-  limit = 200_000,
+  limit = 10_000,
 }: UseCrashHeatmapOptions): { points: HeatmapPoint[]; loading: boolean } {
   const [points, setPoints] = useState<HeatmapPoint[]>([]);
   const [loading, setLoading] = useState(false);

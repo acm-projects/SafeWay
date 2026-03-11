@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -423,3 +424,304 @@ def get_weather(lat: float = Query(...), lng: float = Query(...)):
         "weather_code": code,
         "wind_speed": current.get("wind_speed_10m"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Recent Searches
+# ---------------------------------------------------------------------------
+class RecentSearchCreate(BaseModel):
+    query: str = Field(min_length=1, max_length=255)
+    place_id: str | None = None
+    place_name: str | None = None
+    place_address: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+
+
+@app.get("/recent-searches")
+def list_recent_searches(user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, query, place_id, place_name, place_address, lat, lng, searched_at
+                FROM public.recent_searches
+                WHERE user_id = %s
+                ORDER BY searched_at DESC
+                LIMIT 20
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": str(r[0]), "query": r[1], "place_id": r[2],
+                "place_name": r[3], "place_address": r[4],
+                "lat": r[5], "lng": r[6],
+                "searched_at": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@app.post("/recent-searches", status_code=status.HTTP_201_CREATED)
+def save_recent_search(payload: RecentSearchCreate, user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.recent_searches
+                    (user_id, query, place_id, place_name, place_address, lat, lng)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, query, place_id, place_name, place_address, lat, lng, searched_at
+                """,
+                (user_id, payload.query, payload.place_id, payload.place_name,
+                 payload.place_address, payload.lat, payload.lng),
+            )
+            r = cur.fetchone()
+        conn.commit()
+        return {
+            "id": str(r[0]), "query": r[1], "place_id": r[2],
+            "place_name": r[3], "place_address": r[4],
+            "lat": r[5], "lng": r[6],
+            "searched_at": r[7].isoformat() if r[7] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.delete("/recent-searches/{search_id}")
+def delete_recent_search(search_id: str, user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM public.recent_searches WHERE id = %s AND user_id = %s RETURNING id",
+                (search_id, user_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        if not row:
+            raise HTTPException(status_code=404, detail="Search not found")
+        return {"deleted": True}
+    finally:
+        conn.close()
+
+
+@app.delete("/recent-searches")
+def clear_recent_searches(user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.recent_searches WHERE user_id = %s", (user_id,))
+        conn.commit()
+        return {"cleared": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Emergency Contacts
+# ---------------------------------------------------------------------------
+class EmergencyContactCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=1, max_length=20)
+    relationship: str | None = None
+    priority: int = 0
+
+
+@app.get("/emergency-contacts")
+def list_emergency_contacts(user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, phone, relationship, priority, created_at
+                FROM public.emergency_contacts
+                WHERE user_id = %s ORDER BY priority
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            {"id": str(r[0]), "name": r[1], "phone": r[2], "relationship": r[3],
+             "priority": r[4], "created_at": r[5].isoformat() if r[5] else None}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+@app.post("/emergency-contacts", status_code=status.HTTP_201_CREATED)
+def create_emergency_contact(payload: EmergencyContactCreate, user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.emergency_contacts (user_id, name, phone, relationship, priority)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, name, phone, relationship, priority, created_at
+                """,
+                (user_id, payload.name, payload.phone, payload.relationship, payload.priority),
+            )
+            r = cur.fetchone()
+        conn.commit()
+        return {"id": str(r[0]), "name": r[1], "phone": r[2], "relationship": r[3],
+                "priority": r[4], "created_at": r[5].isoformat() if r[5] else None}
+    finally:
+        conn.close()
+
+
+@app.delete("/emergency-contacts/{contact_id}")
+def delete_emergency_contact(contact_id: str, user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM public.emergency_contacts WHERE id = %s AND user_id = %s RETURNING id",
+                (contact_id, user_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        if not row:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        return {"deleted": True}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# User Settings (SOS prefs)
+# ---------------------------------------------------------------------------
+class UserSettingsUpdate(BaseModel):
+    sos_direct_911: bool = True
+    sos_silent_share: bool = True
+
+
+@app.get("/user-settings")
+def get_user_settings(user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sos_direct_911, sos_silent_share FROM public.user_settings WHERE user_id = %s",
+                (user_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return {"sos_direct_911": True, "sos_silent_share": True}
+        return {"sos_direct_911": row[0], "sos_silent_share": row[1]}
+    finally:
+        conn.close()
+
+
+@app.put("/user-settings")
+def update_user_settings(payload: UserSettingsUpdate, user_id: str = Depends(get_current_user_id)):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.user_settings (user_id, sos_direct_911, sos_silent_share, updated_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    sos_direct_911 = EXCLUDED.sos_direct_911,
+                    sos_silent_share = EXCLUDED.sos_silent_share,
+                    updated_at = now()
+                """,
+                (user_id, payload.sos_direct_911, payload.sos_silent_share),
+            )
+        conn.commit()
+        return {"sos_direct_911": payload.sos_direct_911, "sos_silent_share": payload.sos_silent_share}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# News (NewsData.io proxy with 15-min cache)
+# ---------------------------------------------------------------------------
+_news_cache: dict[str, tuple[float, list]] = {}
+NEWS_CACHE_TTL = 300  # 5 minutes
+
+
+@app.get("/news")
+def get_news(
+    category: str = Query(default="general"),
+    location: str | None = Query(default=None),
+):
+    """Fetch safety/traffic news via NewsData.io. Cached for 15 minutes."""
+    location = (location or "").strip()
+    cache_key = f"{category}:{location.lower()}"
+    if cache_key in _news_cache:
+        cached_at, articles = _news_cache[cache_key]
+        if time.time() - cached_at < NEWS_CACHE_TTL:
+            return {"articles": articles}
+
+    newsdata_key = os.getenv("NEWSDATA_API_KEY", "")
+    if not newsdata_key:
+        raise HTTPException(status_code=500, detail="Missing NEWSDATA_API_KEY in backend .env")
+
+    keyword_map = {
+        "traffic": "traffic accident road safety highway crash",
+        "weather": "weather storm warning flood",
+        "safety": "pedestrian safety crime public safety",
+        "general": "traffic road safety accident public safety",
+    }
+    base_query = keyword_map.get(category, keyword_map["general"])
+    q = f"{location} {base_query}".strip()
+
+    url = "https://newsdata.io/api/1/latest"
+    params = {
+        "apikey": newsdata_key,
+        "q": q,
+        "language": "en",
+        "size": 10,
+        "country": "us",
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        if resp.status_code >= 400:
+            import logging
+            logging.warning(f"NewsData API error: {resp.status_code} - {resp.text[:500]}")
+            raise HTTPException(status_code=resp.status_code, detail=f"NewsData error: {resp.text[:200]}")
+        data = resp.json()
+        if data.get("status") == "error":
+            raise HTTPException(
+                status_code=502,
+                detail=f"NewsData error: {data.get('message') or 'Unknown error'}",
+            )
+        articles = [
+            {
+                "title": a.get("title"),
+                "description": a.get("description"),
+                "url": a.get("link"),
+                "image": a.get("image_url"),
+                "publishedAt": a.get("pubDate"),
+                "source": a.get("source_name"),
+            }
+            for a in data.get("results", [])
+        ]
+        deduped: list[dict] = []
+        seen_urls: set[str] = set()
+        for article in sorted(
+            articles,
+            key=lambda item: item.get("publishedAt") or "",
+            reverse=True,
+        ):
+            url = article.get("url") or ""
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            deduped.append(article)
+        final_articles = deduped[:10]
+        _news_cache[cache_key] = (time.time(), final_articles)
+        return {"articles": final_articles}
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")

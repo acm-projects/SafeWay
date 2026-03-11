@@ -32,34 +32,13 @@ import { getRoute, searchPlaces } from '@/lib/api';
 import type { PlaceSearchResult, RoutePoint } from '@/lib/api';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
+import { palette, Gradients, Colors, MapStyles } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
-
-// ─── Tokens ───────────────────────────────────────────────────────────────────
-const BG       = '#0B1120';
-const SHEET_BG = '#0B1120';
-const CARD_BG  = '#141D2E';
-const ITEM_BG  = '#1A2540';
-const GREEN    = '#1ABC93';
-const TEXT_PRI = '#FFFFFF';
-const TEXT_MUT = '#7A8FA6';
-const DIVIDER  = '#1E2D45';
-
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#212a37' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
 interface RouteData { coords: RoutePoint[]; distance: number; durationSecs: number; safetyScore?: number; safetyLabel?: string; }
@@ -75,8 +54,8 @@ const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string;
   { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
 ];
 
-function SheetBg({ style }: { style?: any }) {
-  return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: SHEET_BG }, style]} />;
+function SheetBg({ style, bgColor }: { style?: any; bgColor: string }) {
+  return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: bgColor }, style]} />;
 }
 
 function fmtSecs(s: number): string {
@@ -110,6 +89,8 @@ function RouteDetailsModal({
   originLat?: number;
   originLng?: number;
 }) {
+  const colorScheme = useColorScheme() ?? 'light';
+  const c = Colors[colorScheme];
   const [tab, setTab] = useState<'details' | 'insights'>('details');
   const { height: screenH } = useWindowDimensions();
   // Card gets an explicit pixel height so flex:1 children can expand
@@ -139,20 +120,20 @@ function RouteDetailsModal({
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={dm.backdrop}>
         {/* Card has explicit height so inner flex:1 ScrollViews work */}
-        <View style={[dm.card, { height: CARD_HEIGHT }]}>
+        <View style={[dm.card, { height: CARD_HEIGHT, backgroundColor: c.background }]}>
 
           {/* ── Tab row + close ── */}
           <View style={dm.tabRow}>
-            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && dm.tabActive]}>
-              <Text style={[dm.tabText, tab === 'details' && dm.tabTextActive]}>Details</Text>
+            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && [dm.tabActive, { borderBottomColor: c.text }]]}>
+              <Text style={[dm.tabText, { color: c.textSecondary }, tab === 'details' && [dm.tabTextActive, { color: c.text }]]}>Details</Text>
             </Pressable>
-            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && dm.tabActive]}>
-              <Text style={[dm.tabText, tab === 'insights' && dm.tabTextActive]}>Route Insights</Text>
+            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && [dm.tabActive, { borderBottomColor: c.text }]]}>
+              <Text style={[dm.tabText, { color: c.textSecondary }, tab === 'insights' && [dm.tabTextActive, { color: c.text }]]}>Route Insights</Text>
             </Pressable>
             <View style={{ flex: 1 }} />
             <Pressable onPress={onClose}>
-              <View style={dm.closeBtnCircle}>
-                <Ionicons name="close" size={16} color={TEXT_PRI} />
+              <View style={[dm.closeBtnCircle, { backgroundColor: c.inputBg }]}>
+                <Ionicons name="close" size={16} color={c.text} />
               </View>
             </Pressable>
           </View>
@@ -166,11 +147,11 @@ function RouteDetailsModal({
                   <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
                 </View>
                 <View style={dm.stepContent}>
-                  <Text style={dm.stepDist}>From {originLabel}</Text>
-                  <Text style={dm.stepInst} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
+                  <Text style={[dm.stepDist, { color: c.text }]}>From {originLabel}</Text>
+                  <Text style={[dm.stepInst, { color: c.textSecondary }]} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
                 </View>
               </View>
-              <View style={dm.lineDivider} />
+              <View style={[dm.lineDivider, { backgroundColor: c.divider }]} />
 
               {steps.length > 0 ? steps.map((step, i) => (
                 <View key={i}>
@@ -185,7 +166,7 @@ function RouteDetailsModal({
                             : 'arrow-up'
                         }
                         size={24}
-                        color={TEXT_PRI}
+                        color={c.text}
                         style={{
                           transform: [{
                             rotate: step.instruction.toLowerCase().includes('right') && !step.instruction.toLowerCase().includes('keep')
@@ -198,16 +179,16 @@ function RouteDetailsModal({
                       />
                     </View>
                     <View style={dm.stepContent}>
-                      <Text style={dm.stepDist}>{step.dist}</Text>
-                      <Text style={dm.stepInst}>{step.instruction}</Text>
+                      <Text style={[dm.stepDist, { color: c.text }]}>{step.dist}</Text>
+                      <Text style={[dm.stepInst, { color: c.textSecondary }]}>{step.instruction}</Text>
                     </View>
                   </View>
-                  <View style={dm.lineDivider} />
+                  <View style={[dm.lineDivider, { backgroundColor: c.divider }]} />
                 </View>
               )) : (
                 <View style={dm.stepRow}>
                   <View style={dm.stepContent}>
-                    <Text style={{ color: TEXT_MUT, fontSize: 13 }}>Loading directions…</Text>
+                    <Text style={{ color: c.textSecondary, fontSize: 13 }}>Loading directions…</Text>
                   </View>
                 </View>
               )}
@@ -215,11 +196,11 @@ function RouteDetailsModal({
               {/* Destination */}
               <View style={dm.stepRow}>
                 <View style={[dm.stepIcon, { backgroundColor: '#1ABC9322' }]}>
-                  <Ionicons name="location" size={20} color={GREEN} />
+                  <Ionicons name="location" size={20} color={palette.brightPurple} />
                 </View>
                 <View style={dm.stepContent}>
-                  <Text style={dm.stepDist}>{destLabel}</Text>
-                  <Text style={dm.stepInst}>Destination</Text>
+                  <Text style={[dm.stepDist, { color: c.text }]}>{destLabel}</Text>
+                  <Text style={[dm.stepInst, { color: c.textSecondary }]}>Destination</Text>
                 </View>
               </View>
             </ScrollView>
@@ -238,7 +219,7 @@ function RouteDetailsModal({
                   <MapView
                     style={dm.insightMap}
                     provider={PROVIDER_GOOGLE}
-                    customMapStyle={DARK_MAP_STYLE}
+                    customMapStyle={colorScheme === 'dark' ? MapStyles.dark : MapStyles.light}
                     initialRegion={{
                       latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
                       longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
@@ -262,33 +243,33 @@ function RouteDetailsModal({
                   </MapView>
                   {activeData && (
                     <View style={dm.routeTimeBubble}>
-                      <Text style={dm.routeTimeBubbleText}>{fmtSecs(activeData.durationSecs)}</Text>
+                      <Text style={[dm.routeTimeBubbleText, { color: c.text }]}>{fmtSecs(activeData.durationSecs)}</Text>
                     </View>
                   )}
                 </View>
               ) : (
-                <View style={dm.insightMapPlaceholder}>
-                  <Text style={{ color: TEXT_MUT, fontSize: 12 }}>Route preview unavailable</Text>
+                <View style={[dm.insightMapPlaceholder, { backgroundColor: c.cardSolid }]}>
+                  <Text style={{ color: c.textSecondary, fontSize: 12 }}>Route preview unavailable</Text>
                 </View>
               )}
 
               {/* Stats from real API data */}
               <View style={dm.statsRow}>
-                <View style={dm.statCard}>
-                  <Text style={dm.statLabel}>📏  DISTANCE</Text>
-                  <Text style={dm.statValue}>{distMiles.toFixed(1)}</Text>
-                  <Text style={[dm.statDelta, { color: TEXT_MUT }]}>miles total</Text>
+                <View style={[dm.statCard, { backgroundColor: c.cardSolid, borderColor: c.divider }]}>
+                  <Text style={[dm.statLabel, { color: c.textSecondary }]}>📏  DISTANCE</Text>
+                  <Text style={[dm.statValue, { color: c.text }]}>{distMiles.toFixed(1)}</Text>
+                  <Text style={[dm.statDelta, { color: c.textSecondary }]}>miles total</Text>
                 </View>
-                <View style={dm.statCard}>
-                  <Text style={dm.statLabel}>🚗  AVG SPEED</Text>
-                  <Text style={dm.statValue}>{avgSpeedMph > 0 ? `${avgSpeedMph}` : '–'}</Text>
-                  <Text style={[dm.statDelta, { color: TEXT_MUT }]}>mph est.</Text>
+                <View style={[dm.statCard, { backgroundColor: c.cardSolid, borderColor: c.divider }]}>
+                  <Text style={[dm.statLabel, { color: c.textSecondary }]}>🚗  AVG SPEED</Text>
+                  <Text style={[dm.statValue, { color: c.text }]}>{avgSpeedMph > 0 ? `${avgSpeedMph}` : '–'}</Text>
+                  <Text style={[dm.statDelta, { color: c.textSecondary }]}>mph est.</Text>
                 </View>
               </View>
-              <View style={dm.statCardWide}>
-                <Text style={dm.statLabel}>⏱  TRAVEL TIME</Text>
-                <Text style={dm.statValue}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
-                <Text style={[dm.statDelta, { color: GREEN }]}>
+              <View style={[dm.statCardWide, { backgroundColor: c.cardSolid, borderColor: c.divider }]}>
+                <Text style={[dm.statLabel, { color: c.textSecondary }]}>⏱  TRAVEL TIME</Text>
+                <Text style={[dm.statValue, { color: c.text }]}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
+                <Text style={[dm.statDelta, { color: palette.brightPurple }]}>
                   ✅  {activeData ? `Arrive ~${arrivalFrom(activeData.durationSecs)}` : 'No data'}
                 </Text>
               </View>
@@ -307,6 +288,8 @@ function RouteDetailsModal({
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function DirectionsScreen() {
+  const colorScheme = useColorScheme() ?? 'light';
+  const c = Colors[colorScheme];
   const params = useLocalSearchParams<{ destLat: string; destLng: string; destName: string; originAddress?: string; originLat?: string; originLng?: string }>();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
@@ -607,7 +590,7 @@ export default function DirectionsScreen() {
   return (
     <View style={styles.container}>
       <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
-        provider={PROVIDER_GOOGLE} customMapStyle={DARK_MAP_STYLE}
+        provider={PROVIDER_GOOGLE} customMapStyle={colorScheme === 'dark' ? MapStyles.dark : MapStyles.light}
         initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}>
         {originCoords && (
           <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
@@ -631,33 +614,33 @@ export default function DirectionsScreen() {
       </MapView>
 
       {/* Origin / Destination — top of screen, search-bar style */}
-      <View style={[styles.topRouteCard, { top: insets.top + 10 }]}>
+      <View style={[styles.topRouteCard, { top: insets.top + 10, backgroundColor: c.mapOverlay, borderColor: c.divider }]}>
         <View style={styles.topRouteRows}>
           <View style={styles.routeInputRow}>
             <View style={styles.routeInputIcon}><View style={styles.originDotSmall} /></View>
             {editingOrigin ? (
               <View style={styles.inlineSearchWrap}>
-                <View style={styles.inlineInputRow}>
+                <View style={[styles.inlineInputRow, { backgroundColor: c.cardSolid }]}>
                   <TextInput
                     value={originQuery}
                     onChangeText={handleOriginQueryChange}
                     placeholder="Search starting point…"
-                    placeholderTextColor={TEXT_MUT}
+                    placeholderTextColor={c.textSecondary}
                     autoFocus
-                    style={styles.inlineInputText}
-                    selectionColor={GREEN}
+                    style={[styles.inlineInputText, { color: c.text }]}
+                    selectionColor={palette.brightPurple}
                   />
-                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
-                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                  {suggBusy ? <ActivityIndicator size="small" color={palette.brightPurple} /> : null}
+                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={c.textSecondary} /></Pressable>
                 </View>
                 {originSuggestions.length > 0 && (
-                  <View style={styles.suggList}>
+                  <View style={[styles.suggList, { backgroundColor: c.mapOverlay }]}>
                     {originSuggestions.map((s) => (
                       <Pressable key={s.place_id} style={styles.suggRow} onPress={() => handleSelectOrigin(s)}>
-                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <Ionicons name="location-outline" size={14} color={palette.brightPurple} />
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
-                          <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
+                          <Text style={[styles.suggTitle, { color: c.text }]} numberOfLines={1}>{s.name}</Text>
+                          <Text style={[styles.suggSub, { color: c.textSecondary }]} numberOfLines={1}>{s.address}</Text>
                         </View>
                       </Pressable>
                     ))}
@@ -666,37 +649,37 @@ export default function DirectionsScreen() {
               </View>
             ) : (
               <Pressable style={styles.routeInputLabelWrap} onPress={() => { setEditingDest(false); setEditingOrigin(true); setOriginQuery(''); }}>
-                <Text style={styles.routeInputLabel} numberOfLines={1}>{originLabel}</Text>
-                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={TEXT_MUT} /></Pressable>
+                <Text style={[styles.routeInputLabel, { color: c.text }]} numberOfLines={1}>{originLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={c.textSecondary} /></Pressable>
               </Pressable>
             )}
           </View>
 
           <View style={styles.routeInputRow}>
-            <View style={styles.routeInputIcon}><Ionicons name="location" size={18} color={GREEN} /></View>
+            <View style={styles.routeInputIcon}><Ionicons name="location" size={18} color={palette.brightPurple} /></View>
             {editingDest ? (
               <View style={styles.inlineSearchWrap}>
-                <View style={styles.inlineInputRow}>
+                <View style={[styles.inlineInputRow, { backgroundColor: c.inputBg }]}>
                   <TextInput
                     value={destQuery}
                     onChangeText={handleDestQueryChange}
                     placeholder="Search destination…"
-                    placeholderTextColor={TEXT_MUT}
+                    placeholderTextColor={c.textSecondary}
                     autoFocus
-                    style={styles.inlineInputText}
-                    selectionColor={GREEN}
+                    style={[styles.inlineInputText, { color: c.text }]}
+                    selectionColor={palette.brightPurple}
                   />
-                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
-                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                  {suggBusy ? <ActivityIndicator size="small" color={palette.brightPurple} /> : null}
+                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={c.textSecondary} /></Pressable>
                 </View>
                 {destSuggestions.length > 0 && (
-                  <View style={styles.suggList}>
+                  <View style={[styles.suggList, { backgroundColor: c.mapOverlay }]}>
                     {destSuggestions.map((s) => (
                       <Pressable key={s.place_id} style={styles.suggRow} onPress={() => handleSelectDest(s)}>
-                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <Ionicons name="location-outline" size={14} color={palette.brightPurple} />
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
-                          <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
+                          <Text style={[styles.suggTitle, { color: c.text }]} numberOfLines={1}>{s.name}</Text>
+                          <Text style={[styles.suggSub, { color: c.textSecondary }]} numberOfLines={1}>{s.address}</Text>
                         </View>
                       </Pressable>
                     ))}
@@ -705,80 +688,78 @@ export default function DirectionsScreen() {
               </View>
             ) : (
               <Pressable style={styles.routeInputLabelWrap} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
-                <Text style={styles.routeInputLabel} numberOfLines={1}>{destLabel}</Text>
-                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={TEXT_MUT} /></Pressable>
+                <Text style={[styles.routeInputLabel, { color: c.text }]} numberOfLines={1}>{destLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={c.textSecondary} /></Pressable>
               </Pressable>
             )}
           </View>
         </View>
         <Pressable style={styles.swapBtnRight} onPress={handleSwapOriginDest}>
-          <Ionicons name="swap-vertical" size={20} color={TEXT_MUT} />
+          <Ionicons name="swap-vertical" size={20} color={c.textSecondary} />
         </Pressable>
       </View>
 
       {/* Back */}
-      <Pressable style={[styles.backBtn, { top: insets.top + 10 }]} onPress={() => router.back()}>
-        <Ionicons name="arrow-back" size={20} color={TEXT_PRI} />
+      <Pressable style={[styles.backBtn, { top: insets.top + 10, backgroundColor: c.mapOverlay }]} onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={20} color={c.text} />
       </Pressable>
 
-      {/* Map controls — fixed in top map area so they never cover the sheet */}
+      {/* Map controls */}
       <View style={[styles.mapControlsColumn, { top: mapControlsTop }]}>
-        <View style={styles.zoomWrap}>
-          <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
-          <View style={styles.zoomDiv} />
-          <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
+        <View style={[styles.zoomWrap, { backgroundColor: c.mapOverlay }]}>
+          <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={c.text} /></Pressable>
+          <View style={[styles.zoomDiv, { backgroundColor: c.divider }]} />
+          <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={c.text} /></Pressable>
         </View>
-        <View style={styles.floatBtn}>
-          <Pressable style={styles.floatBtnInner} onPress={handleLocate}><Ionicons name="locate" size={20} color={GREEN} /></Pressable>
-        </View>
-        <View style={styles.heatmapWrap}>
+        <Pressable style={[styles.floatBtnInner, { backgroundColor: c.mapOverlay }]} onPress={handleLocate}>
+          <Ionicons name="locate" size={20} color={palette.brightPurple} />
+        </Pressable>
         <Pressable
-          style={[styles.heatmapInner, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
+          style={[styles.floatBtnInner, { backgroundColor: c.mapOverlay }, heatmapFilter !== 'off' && { borderWidth: 1.5, borderColor: palette.brightPurple + '60' }]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? GREEN) : GREEN} />
+            ? <ActivityIndicator size="small" color={palette.brightPurple} style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={16} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? palette.brightPurple) : palette.brightPurple} />
           }
         </Pressable>
-      </View>
       </View>
 
       {/* Heatmap filter modal */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
-          <Pressable style={hm.card} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: c.background }]} onPress={() => {}}>
             <View style={hm.header}>
-              <Text style={hm.title}>Safety Heatmap</Text>
+              <Text style={[hm.title, { color: c.text }]}>Safety Heatmap</Text>
               {heatmapFilter !== 'off' && (
-                <View style={hm.countBadge}>
+                <View style={[hm.countBadge, { backgroundColor: c.cardSolid }]}>
                   {crashLoading
-                    ? <ActivityIndicator size="small" color={GREEN} />
-                    : <Text style={hm.countText}>{crashPoints.length.toLocaleString()} points</Text>
+                    ? <ActivityIndicator size="small" color={palette.brightPurple} />
+                    : <Text style={[hm.countText, { color: palette.brightPurple }]}>{crashPoints.length.toLocaleString()} points</Text>
                   }
                 </View>
               )}
             </View>
-            <Text style={hm.subtitle}>Crash data from traffic records. Brighter = higher density.</Text>
-            <View style={hm.filterList}>
+            <Text style={[hm.subtitle, { color: c.textSecondary }]}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={[hm.filterList, { backgroundColor: c.cardSolid }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;
                 return (
                   <View key={f.id}>
                     <Pressable
-                      style={[hm.filterRow, active && hm.filterRowActive]}
+                      style={[hm.filterRow, active && { backgroundColor: palette.brightPurple + '14' }]}
                       onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
                     >
-                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : ITEM_BG }]}>
-                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : c.cardSolid }]}>
+                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : c.textSecondary} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[hm.filterLabel, active && { color: TEXT_PRI }]}>{f.label}</Text>
-                        <Text style={hm.filterDesc}>{f.desc}</Text>
+                        <Text style={[hm.filterLabel, { color: c.textSecondary }, active && { color: c.text }]}>{f.label}</Text>
+                        <Text style={[hm.filterDesc, { color: c.textSecondary }]}>{f.desc}</Text>
                       </View>
-                      {active && <Ionicons name="checkmark-circle" size={20} color={GREEN} />}
+                      {active && <Ionicons name="checkmark-circle" size={20} color={palette.brightPurple} />}
                     </Pressable>
-                    {i < HEATMAP_FILTERS.length - 1 && <View style={hm.filterDiv} />}
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: c.divider }]} />}
                   </View>
                 );
               })}
@@ -806,44 +787,42 @@ export default function DirectionsScreen() {
       {/* Bottom Sheet */}
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
-        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
-        handleIndicatorStyle={styles.handle} enablePanDownToClose={false}>
+        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} bgColor={c.background} />}
+        handleIndicatorStyle={[styles.handle, { backgroundColor: palette.brightPurple + '40' }]} enablePanDownToClose={false}>
 
         <BottomSheetScrollView
-          contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 28 }]}
+          contentContainerStyle={[styles.sheetContent, { paddingBottom: Math.max(insets.bottom, 12) + 100 }]}
           scrollEnabled={sheetIndex >= 1}>
 
           {sheetIndex === 0 ? (
             <View style={styles.miniRow}>
-              <Ionicons name="navigate-outline" size={16} color={GREEN} />
+              <Ionicons name="navigate-outline" size={16} color={palette.brightPurple} />
               <View style={styles.miniLabelWrap}>
-                <Text style={styles.miniLabel}>Directions</Text>
+                <Text style={[styles.miniLabel, { color: c.text }]}>Directions</Text>
                 {originLabel && destLabel && (
-                  <Text style={styles.miniSub} numberOfLines={1}>{originLabel} → {destLabel}</Text>
+                  <Text style={[styles.miniSub, { color: c.textSecondary }]} numberOfLines={1}>{originLabel} → {destLabel}</Text>
                 )}
               </View>
-              {activeData && <Text style={styles.miniMeta}>{fmtSecs(activeSecs)} · {fmtDist(activeData.distance)}</Text>}
-              <Pressable style={styles.miniClose} onPress={() => router.back()}><Ionicons name="close" size={14} color={TEXT_PRI} /></Pressable>
+              {activeData && <Text style={[styles.miniMeta, { color: c.textSecondary }]}>{fmtSecs(activeSecs)} · {fmtDist(activeData.distance)}</Text>}
+              <Pressable style={[styles.miniClose, { backgroundColor: c.cardSolid }]} onPress={() => router.back()}><Ionicons name="close" size={14} color={c.text} /></Pressable>
             </View>
           ) : (
             <>
-              {/* Title */}
               <View style={styles.titleRow}>
-                <Text style={styles.titleText}>Directions</Text>
+                <Text style={[styles.titleText, { color: c.text }]}>Directions</Text>
                 <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-                  <View style={styles.closeBtnCircle}>
-                    <Ionicons name="close" size={16} color={TEXT_PRI} />
+                  <View style={[styles.closeBtnCircle, { backgroundColor: c.cardSolid }]}>
+                    <Ionicons name="close" size={16} color={c.text} />
                   </View>
                 </Pressable>
               </View>
 
-              {/* Mode selector */}
               <View style={styles.modeRow}>
                 {modeItems.map(({ mode, icon }) => {
                   const active = travelMode === mode;
                   return (
-                    <Pressable key={mode} style={[styles.modeChip, active && styles.modeChipActive]} onPress={() => setTravelMode(mode)}>
-                      <Ionicons name={icon} size={22} color={active ? '#000' : TEXT_PRI} />
+                    <Pressable key={mode} style={[styles.modeChip, { backgroundColor: c.cardSolid, borderColor: 'transparent' }, active && { backgroundColor: palette.brightPurple, borderColor: palette.brightPurple }]} onPress={() => setTravelMode(mode)}>
+                      <Ionicons name={icon} size={22} color={active ? '#FFFFFF' : c.text} />
                     </Pressable>
                   );
                 })}
@@ -851,61 +830,59 @@ export default function DirectionsScreen() {
 
               {/* Now / Avoid filters */}
               <View style={styles.filterRow}>
-                <Pressable style={styles.filterChip}>
-                  <Text style={styles.filterText}>Now</Text>
-                  <Ionicons name="chevron-down" size={14} color={TEXT_MUT} />
+                <Pressable style={[styles.filterChip, { backgroundColor: c.cardSolid, borderColor: c.divider }]}>
+                  <Text style={[styles.filterText, { color: c.text }]}>Now</Text>
+                  <Ionicons name="chevron-down" size={14} color={c.textSecondary} />
                 </Pressable>
-                <Pressable style={styles.filterChip}>
-                  <Text style={styles.filterText}>Avoid</Text>
-                  <Ionicons name="chevron-down" size={14} color={TEXT_MUT} />
+                <Pressable style={[styles.filterChip, { backgroundColor: c.cardSolid, borderColor: c.divider }]}>
+                  <Text style={[styles.filterText, { color: c.text }]}>Avoid</Text>
+                  <Ionicons name="chevron-down" size={14} color={c.textSecondary} />
                 </Pressable>
               </View>
 
               {routeBusy && (
                 <View style={styles.loadingRow}>
-                  <ActivityIndicator size="small" color={GREEN} />
-                  <Text style={styles.loadingText}>Calculating routes…</Text>
+                  <ActivityIndicator size="small" color={palette.brightPurple} />
+                  <Text style={[styles.loadingText, { color: c.textSecondary }]}>Calculating routes…</Text>
                 </View>
               )}
 
-              {/* Route option cards — each with risk %, selectable */}
               {!routeBusy && activeData && routeCards.map((card, i) => (
                 <Pressable
                   key={i}
-                  style={[styles.routeOptionCard, card.isSelected && styles.routeOptionCardActive]}
+                  style={[styles.routeOptionCard, { backgroundColor: c.cardSolid, borderColor: 'transparent' }, card.isSelected && { borderColor: palette.brightPurple, borderWidth: 2 }]}
                   onPress={() => setSelectedRouteIndex(card.index)}
                 >
-                  {/* Risk badge — shows actual risk % from ML model */}
-                  <View style={[styles.riskBadge, card.isSelected && styles.riskBadgeActive]}>
+                  <View style={[styles.riskBadge, { backgroundColor: c.cardSolid }, card.isSelected && { backgroundColor: 'transparent' }]}>
                     {card.isSelected && (
                       <LinearGradient
-                        colors={['#0A9E6E', '#1ABC93', '#12B882']}
+                        colors={[...Gradients.button]}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 0, y: 1 }}
                         style={StyleSheet.absoluteFillObject}
                       />
                     )}
                     <View style={styles.matchBadgeContent}>
-                      <Text style={[styles.riskWord, { color: card.isSelected ? '#fff' : TEXT_MUT }]}>RISK</Text>
-                      <Text style={[styles.matchPct, { color: card.isSelected ? '#fff' : TEXT_PRI }]}>
+                      <Text style={[styles.riskWord, { color: card.isSelected ? '#fff' : c.textSecondary }]}>RISK</Text>
+                      <Text style={[styles.matchPct, { color: card.isSelected ? '#fff' : c.text }]}>
                         {card.riskPct != null ? `${card.riskPct}%` : '–'}
                       </Text>
                     </View>
                   </View>
                   <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
                     <View style={styles.routeOptionTitleRow}>
-                      <Text style={styles.routeOptionTitle}>{card.title}</Text>
+                      <Text style={[styles.routeOptionTitle, { color: c.text }]}>{card.title}</Text>
                       {card.isSelected && (
-                        <View style={styles.selectedChip}>
-                          <Ionicons name="checkmark-circle" size={14} color={GREEN} />
-                          <Text style={styles.selectedChipText}>Selected</Text>
+                        <View style={[styles.selectedChip, { backgroundColor: palette.brightPurple + '33' }]}>
+                          <Ionicons name="checkmark-circle" size={14} color={palette.brightPurple} />
+                          <Text style={[styles.selectedChipText, { color: palette.brightPurple }]}>Selected</Text>
                         </View>
                       )}
                     </View>
-                    <Text style={styles.routeOptionMeta}>{card.time}  •  {card.dist}</Text>
+                    <Text style={[styles.routeOptionMeta, { color: c.textSecondary }]}>{card.time}  •  {card.dist}</Text>
                     {card.safetyLabel && card.safetyLabel !== 'unknown' && (
                       <Text style={[styles.routeOptionTraffic, {
-                        color: card.safetyLabel === 'low' ? '#1ABC93' : card.safetyLabel === 'medium' ? '#FFA500' : '#FF4444',
+                        color: card.safetyLabel === 'low' ? palette.teal : card.safetyLabel === 'medium' ? palette.warning : palette.danger,
                       }]}>
                         {card.safetyLabel === 'low' ? 'Low risk' : card.safetyLabel === 'medium' ? 'Moderate risk' : 'High risk'}
                       </Text>
@@ -919,7 +896,7 @@ export default function DirectionsScreen() {
                     }}
                   >
                     <LinearGradient
-                      colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                      colors={[...Gradients.button]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 0 }}
                       style={StyleSheet.absoluteFillObject}
@@ -930,7 +907,8 @@ export default function DirectionsScreen() {
               ))}
 
               {!routeBusy && !activeData && (
-                <Pressable style={styles.getDirectionsBtn} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
+                <Pressable style={[styles.getDirectionsBtn, { overflow: 'hidden' }]} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
+                  <LinearGradient colors={[...Gradients.button]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
                   <Text style={styles.getDirectionsBtnText}>Get Directions</Text>
                 </Pressable>
               )}
@@ -944,24 +922,19 @@ export default function DirectionsScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+  container: { flex: 1 },
 
-  // Map controls — fixed in top area so they never cover the sheet
   mapControlsColumn: { position: 'absolute', right: 14, flexDirection: 'column', gap: 8 },
-  zoomWrap: { backgroundColor: ITEM_BG, borderRadius: 14, overflow: 'hidden', width: 42 },
+  zoomWrap: { borderRadius: 14, overflow: 'hidden', width: 42 },
   zoomBtn: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
-  zoomDiv: { height: 1, backgroundColor: DIVIDER, marginHorizontal: 8 },
-  floatBtn: { width: 42, height: 42, borderRadius: 21 },
-  floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
-  heatmapWrap: {},
-  heatmapInner: { width: 42, height: 42, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#00FF8840' },
-  heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
+  zoomDiv: { height: 1, marginHorizontal: 8 },
+  floatBtnInner: { width: 42, height: 42, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
 
   // Map markers
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
 
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: DIVIDER },
+  handle: { width: 36, height: 4, borderRadius: 2 },
   sheetContent: { paddingHorizontal: 16, paddingTop: 6 },
 
   // Top route card (origin/destination bar)
@@ -971,7 +944,6 @@ const styles = StyleSheet.create({
     right: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: CARD_BG,
     borderRadius: 28,
     paddingHorizontal: 16,
     paddingVertical: 13,
@@ -983,76 +955,76 @@ const styles = StyleSheet.create({
   routeInputIcon: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
   originDotSmall: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: 'rgba(74,144,226,0.4)' },
   routeInputLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  routeInputLabel: { flex: 1, color: TEXT_PRI, fontSize: 14, fontWeight: '600' },
+  routeInputLabel: { flex: 1, fontSize: 14, fontWeight: '600' },
   swapBtnRight: { padding: 8, justifyContent: 'center' },
-  backBtn: { position: 'absolute', left: 16, width: 40, height: 40, borderRadius: 20, backgroundColor: CARD_BG, justifyContent: 'center', alignItems: 'center', zIndex: 11 },
+  backBtn: { position: 'absolute', left: 16, width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', zIndex: 11 },
 
   miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 },
   miniLabelWrap: { flex: 1, minWidth: 0 },
-  miniLabel: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
-  miniSub: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
-  miniMeta: { color: TEXT_MUT, fontSize: 13 },
-  miniClose: { width: 26, height: 26, borderRadius: 13, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
+  miniLabel: { fontSize: 15, fontWeight: '700' },
+  miniSub: { fontSize: 12, marginTop: 2 },
+  miniMeta: { fontSize: 13 },
+  miniClose: { width: 26, height: 26, borderRadius: 13, justifyContent: 'center', alignItems: 'center' },
 
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  titleText: { color: TEXT_PRI, fontSize: 26, fontWeight: '800' },
+  titleText: { fontSize: 26, fontWeight: '800' },
   closeBtn: { width: 34, height: 34, justifyContent: 'center', alignItems: 'center' },
-  closeBtnCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
+  closeBtnCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
 
   // Mode row — evenly spaced
   modeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
-  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 14, backgroundColor: CARD_BG, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
-  modeChipActive: { backgroundColor: GREEN, borderColor: GREEN },
+  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
+  modeChipActive: { backgroundColor: palette.brightPurple, borderColor: palette.brightPurple },
 
   // Stops card
-  routeCard: { backgroundColor: CARD_BG, borderRadius: 18, paddingVertical: 4, paddingHorizontal: 14, marginBottom: 12 },
+  routeCard: { borderRadius: 18, paddingVertical: 4, paddingHorizontal: 14, marginBottom: 12 },
   stopRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 12, minHeight: 64 },
   stopIconWrap: { width: 26, alignItems: 'center' },
   originCircle: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#4A90E2', borderWidth: 2.5, borderColor: '#fff' },
   stopLabelWrap: { flex: 1 },
-  stopLabel: { color: TEXT_PRI, fontSize: 15, fontWeight: '600' },
-  stopSub: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
+  stopLabel: { fontSize: 15, fontWeight: '600' },
+  stopSub: { fontSize: 12, marginTop: 2 },
   dragHandle: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
 
   inlineSearchWrap: { flex: 1, marginBottom: 4 },
-  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
-  inlineInputText: { flex: 1, color: TEXT_PRI, fontSize: 14 },
+  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
+  inlineInputText: { flex: 1, fontSize: 14 },
 
-  suggList: { backgroundColor: ITEM_BG, borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
+  suggList: { borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
   suggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
-  suggTitle: { color: TEXT_PRI, fontSize: 13, fontWeight: '600' },
-  suggSub: { color: TEXT_MUT, fontSize: 11, marginTop: 1 },
-  suggDivider: { height: 1, backgroundColor: DIVIDER, marginLeft: 34 },
+  suggTitle: { fontSize: 13, fontWeight: '600' },
+  suggSub: { fontSize: 11, marginTop: 1 },
+  suggDivider: { height: 1, marginLeft: 34 },
 
   connectorWrap: { flexDirection: 'column', gap: 4, paddingLeft: 25, marginVertical: -6 },
-  connectorDash: { width: 2, height: 5, backgroundColor: TEXT_MUT, borderRadius: 1, opacity: 0.4 },
-  divLine: { height: 1, backgroundColor: DIVIDER, marginVertical: 4 },
+  connectorDash: { width: 2, height: 5, borderRadius: 1, opacity: 0.4 },
+  divLine: { height: 1, marginVertical: 4 },
 
   addStopRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
   addStopIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#1ABC9322', justifyContent: 'center', alignItems: 'center' },
   addStopLabel: { flex: 1, color: '#4A90E2', fontSize: 14, fontWeight: '500' },
 
   filterRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: CARD_BG, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderColor: DIVIDER },
-  filterText: { color: TEXT_PRI, fontSize: 14, fontWeight: '500' },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1 },
+  filterText: { fontSize: 14, fontWeight: '500' },
 
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 },
-  loadingText: { color: TEXT_MUT, fontSize: 14 },
+  loadingText: { fontSize: 14 },
 
   // Route option cards — risk badge | info (pressable) | start button
-  routeOptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
-  routeOptionCardActive: { borderColor: GREEN, borderWidth: 2 },
-  riskBadge: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center', minWidth: 68, overflow: 'hidden', position: 'relative', backgroundColor: ITEM_BG },
+  routeOptionCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
+  routeOptionCardActive: { borderColor: palette.brightPurple, borderWidth: 2 },
+  riskBadge: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center', minWidth: 68, overflow: 'hidden', position: 'relative' },
   riskBadgeActive: { backgroundColor: 'transparent' },
   matchBadgeContent: { alignItems: 'center' },
   riskWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   matchPct: { fontSize: 22, fontWeight: '800' },
   routeOptionInfo: { flex: 1 },
   routeOptionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' },
-  routeOptionTitle: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
+  routeOptionTitle: { fontSize: 15, fontWeight: '700' },
   selectedChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(26,188,147,0.2)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  selectedChipText: { color: GREEN, fontSize: 11, fontWeight: '700' },
-  routeOptionMeta: { color: TEXT_MUT, fontSize: 13, marginBottom: 2 },
+  selectedChipText: { color: palette.brightPurple, fontSize: 11, fontWeight: '700' },
+  routeOptionMeta: { fontSize: 13, marginBottom: 2 },
   routeOptionTraffic: { fontSize: 12, fontWeight: '600' },
   // Gradient Start button
   startBtnWrap: {
@@ -1065,7 +1037,7 @@ const styles = StyleSheet.create({
   },
   startBtnContent: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
   startBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', zIndex: 1 },
-  getDirectionsBtn: { backgroundColor: GREEN, borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
+  getDirectionsBtn: { backgroundColor: palette.brightPurple, borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
   getDirectionsBtnText: { color: '#000', fontSize: 16, fontWeight: '700' },
 });
 
@@ -1073,56 +1045,56 @@ const styles = StyleSheet.create({
 const dm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   // height is passed inline as a dynamic value based on screen height
-  card: { backgroundColor: BG, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 24 },
+  card: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 24 },
   tabRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 20 },
   tab: { paddingBottom: 8, borderBottomWidth: 2.5, borderBottomColor: 'transparent' },
-  tabActive: { borderBottomColor: TEXT_PRI },
-  tabText: { color: TEXT_MUT, fontSize: 18, fontWeight: '600' },
-  tabTextActive: { color: TEXT_PRI, fontWeight: '800' },
+  tabActive: {},
+  tabText: { fontSize: 18, fontWeight: '600' },
+  tabTextActive: { fontWeight: '800' },
   // tabBody fills remaining card height after the tabRow (tabRow ~54px + card padding 20+24 = ~98px)
   tabBody: { flex: 1 },
-  closeBtnCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
+  closeBtnCircle: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 14 },
   stepIcon: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
   stepIconSimple: { width: 44, alignItems: 'center' },
   stepContent: { flex: 1 },
-  stepDist: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
-  stepInst: { color: TEXT_MUT, fontSize: 13, marginTop: 2 },
-  lineDivider: { height: 1, backgroundColor: DIVIDER, marginLeft: 60 },
+  stepDist: { fontSize: 15, fontWeight: '700' },
+  stepInst: { fontSize: 13, marginTop: 2 },
+  lineDivider: { height: 1, marginLeft: 60 },
   insightsContent: { gap: 14, paddingBottom: 20 },
   insightMapWrap: { borderRadius: 16, overflow: 'hidden', height: 220, position: 'relative' },
   insightMap: { width: '100%', height: '100%' },
-  insightMapPlaceholder: { height: 220, backgroundColor: CARD_BG, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  insightMapPlaceholder: { height: 220, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   routeTimeBubble: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  routeTimeBubbleText: { color: TEXT_PRI, fontSize: 13, fontWeight: '700' },
+  routeTimeBubbleText: { fontSize: 13, fontWeight: '700' },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
   statsRow: { flexDirection: 'row', gap: 14 },
-  statCard: { flex: 1, backgroundColor: CARD_BG, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: DIVIDER },
-  statCardWide: { backgroundColor: CARD_BG, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: DIVIDER },
-  statLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 6 },
-  statValue: { color: TEXT_PRI, fontSize: 28, fontWeight: '800', marginBottom: 4 },
+  statCard: { flex: 1, borderRadius: 16, padding: 16, borderWidth: 1 },
+  statCardWide: { borderRadius: 16, padding: 16, borderWidth: 1 },
+  statLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 6 },
+  statValue: { fontSize: 28, fontWeight: '800', marginBottom: 4 },
   statDelta: { fontSize: 13, fontWeight: '600' },
 
   safetyBadge: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 14, borderWidth: 1, marginBottom: 14 },
   safetyLabelText: { fontSize: 15, fontWeight: '700' },
-  safetyScoreText: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
+  safetyScoreText: { fontSize: 12, marginTop: 2 },
 });
 
 // ─── Heatmap Modal Styles ─────────────────────────────────────────────────────
 const hm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  card: { backgroundColor: CARD_BG, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
+  card: { borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700' },
-  subtitle: { color: TEXT_MUT, fontSize: 13, marginBottom: 20, lineHeight: 18 },
-  countBadge: { backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
-  countText: { color: GREEN, fontSize: 12, fontWeight: '600' },
-  filterList: { backgroundColor: ITEM_BG, borderRadius: 18, overflow: 'hidden' },
+  title: { fontSize: 22, fontWeight: '700' },
+  subtitle: { fontSize: 13, marginBottom: 20, lineHeight: 18 },
+  countBadge: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  countText: { color: palette.brightPurple, fontSize: 12, fontWeight: '600' },
+  filterList: { borderRadius: 18, overflow: 'hidden' },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
   filterRowActive: { backgroundColor: 'rgba(26,188,147,0.08)' },
   filterIcon: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  filterLabel: { color: TEXT_MUT, fontSize: 15, fontWeight: '600', marginBottom: 2 },
-  filterDesc: { color: TEXT_MUT, fontSize: 12, opacity: 0.7 },
-  filterDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 70 },
+  filterLabel: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  filterDesc: { fontSize: 12, opacity: 0.7 },
+  filterDiv: { height: 1, marginLeft: 70 },
 });

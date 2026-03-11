@@ -18,41 +18,21 @@ import { createBookmark, getPlaceDetails, searchPlaces } from '@/lib/api';
 import type { PlaceDetails, PlaceSearchResult } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
+import { palette, Gradients, Colors, MapStyles } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
-// ─── Design tokens ─────────────────────────────────────────────────────────────
-const NAVY      = '#0B1120';
-const NAVY_CARD = '#141D2E';
-const NAVY_ITEM = '#1A2540';
-const GREEN     = '#1ABC93';
-const TEXT_PRI  = '#FFFFFF';
-const TEXT_MUT  = '#7A8FA6';
-const DIVIDER   = '#1E2D45';
-const GOLD      = '#FFD700';
-// ──────────────────────────────────────────────────────────────────────────────
+const GOLD = '#FFD700';
 
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#212a37' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
-
-function SheetBg({ style }: { style?: any }) {
+function SheetBg({ style, bgColor }: { style?: any; bgColor: string }) {
   return (
     <Animated.View
       pointerEvents="none"
-      style={[StyleSheet.absoluteFillObject, { backgroundColor: NAVY }, style]}
+      style={[StyleSheet.absoluteFillObject, { backgroundColor: bgColor }, style]}
     />
   );
 }
 
-function StarRating({ rating, total }: { rating: number; total?: number }) {
+function StarRating({ rating, total, secondaryColor }: { rating: number; total?: number; secondaryColor: string }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
       {[1, 2, 3, 4, 5].map(i => (
@@ -64,7 +44,7 @@ function StarRating({ rating, total }: { rating: number; total?: number }) {
         />
       ))}
       {total != null && (
-        <Text style={{ color: TEXT_MUT, fontSize: 12, marginLeft: 2 }}>
+        <Text style={{ color: secondaryColor, fontSize: 12, marginLeft: 2 }}>
           ({total.toLocaleString()})
         </Text>
       )}
@@ -73,6 +53,8 @@ function StarRating({ rating, total }: { rating: number; total?: number }) {
 }
 
 export default function DestinationScreen() {
+  const colorScheme = useColorScheme() ?? 'light';
+  const c = Colors[colorScheme];
   const params = useLocalSearchParams<{
     placeId: string; name: string; address: string; lat: string; lng: string;
   }>();
@@ -303,7 +285,7 @@ export default function DestinationScreen() {
   const placeAddr = details?.address ?? destAddress       ?? '';
   const rawType   = details?.types?.[0] ?? '';
   const placeType = rawType
-    ? rawType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    ? rawType.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase())
     : 'Location';
 
   // Determine open/closed status
@@ -360,20 +342,19 @@ export default function DestinationScreen() {
   }
 
   return (
-    <View style={s.container}>
+    <View style={[s.container, { backgroundColor: c.background }]}>
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={DARK_MAP_STYLE}
+        customMapStyle={colorScheme === 'dark' ? MapStyles.dark : MapStyles.light}
         initialRegion={{ latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
         showsUserLocation
         showsMyLocationButton={false}
         scrollEnabled
         zoomEnabled
       >
-        <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor={GREEN} />
-        {/* Real crash heatmap — only rendered when toggled on */}
+        <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor={palette.brightPurple} />
         {heatmapEnabled && crashPoints.length > 0 && (
           <Heatmap
             points={crashPoints}
@@ -388,34 +369,34 @@ export default function DestinationScreen() {
         )}
       </MapView>
 
-      {/* Origin / Destination — top of screen, search-bar style */}
-      <View style={[s.topRouteCard, { top: insets.top + 10 }]}>
+      {/* Origin / Destination — top of screen */}
+      <View style={[s.topRouteCard, { top: insets.top + 10, backgroundColor: c.mapOverlay, borderColor: c.divider }]}>
         <View style={s.topRouteRows}>
           <View style={s.routeInputRow}>
             <View style={s.routeInputIcon}><View style={s.originDot} /></View>
             {editingOrigin ? (
               <View style={s.inlineSearchWrap}>
-                <View style={s.inlineInputRow}>
+                <View style={[s.inlineInputRow, { backgroundColor: c.cardSolid }]}>
                   <TextInput
                     value={originQuery}
                     onChangeText={handleOriginQueryChange}
                     placeholder="Search starting point…"
-                    placeholderTextColor={TEXT_MUT}
+                    placeholderTextColor={c.textSecondary}
                     autoFocus
-                    style={s.inlineInputText}
-                    selectionColor={GREEN}
+                    style={[s.inlineInputText, { color: c.text }]}
+                    selectionColor={palette.brightPurple}
                   />
-                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
-                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                  {suggBusy ? <ActivityIndicator size="small" color={palette.brightPurple} /> : null}
+                  <Pressable onPress={resetOriginToMyLocation}><Ionicons name="close-circle" size={18} color={c.textSecondary} /></Pressable>
                 </View>
                 {originSuggestions.length > 0 && (
-                  <View style={s.suggList}>
+                  <View style={[s.suggList, { backgroundColor: c.mapOverlay }]}>
                     {originSuggestions.map((place) => (
                       <Pressable key={place.place_id} style={s.suggRow} onPress={() => handleSelectOrigin(place)}>
-                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <Ionicons name="location-outline" size={14} color={palette.brightPurple} />
                         <View style={{ flex: 1 }}>
-                          <Text style={s.suggTitle} numberOfLines={1}>{place.name}</Text>
-                          <Text style={s.suggSub} numberOfLines={1}>{place.address}</Text>
+                          <Text style={[s.suggTitle, { color: c.text }]} numberOfLines={1}>{place.name}</Text>
+                          <Text style={[s.suggSub, { color: c.textSecondary }]} numberOfLines={1}>{place.address}</Text>
                         </View>
                       </Pressable>
                     ))}
@@ -424,37 +405,37 @@ export default function DestinationScreen() {
               </View>
             ) : (
               <Pressable style={s.routeInputLabelWrap} onPress={() => { setEditingDest(false); setEditingOrigin(true); setOriginQuery(''); }}>
-                <Text style={s.routeInputLabel} numberOfLines={1}>{originLabel}</Text>
-                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={TEXT_MUT} /></Pressable>
+                <Text style={[s.routeInputLabel, { color: c.text }]} numberOfLines={1}>{originLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); resetOriginToMyLocation(); }} hitSlop={8}><Ionicons name="close-circle-outline" size={18} color={c.textSecondary} /></Pressable>
               </Pressable>
             )}
           </View>
 
           <View style={s.routeInputRow}>
-            <View style={s.routeInputIcon}><Ionicons name="location" size={18} color={GREEN} /></View>
+            <View style={s.routeInputIcon}><Ionicons name="location" size={18} color={palette.brightPurple} /></View>
             {editingDest ? (
               <View style={s.inlineSearchWrap}>
-                <View style={s.inlineInputRow}>
+                <View style={[s.inlineInputRow, { backgroundColor: c.cardSolid }]}>
                   <TextInput
                     value={destQuery}
                     onChangeText={handleDestQueryChange}
                     placeholder="Search destination…"
-                    placeholderTextColor={TEXT_MUT}
+                    placeholderTextColor={c.textSecondary}
                     autoFocus
-                    style={s.inlineInputText}
-                    selectionColor={GREEN}
+                    style={[s.inlineInputText, { color: c.text }]}
+                    selectionColor={palette.brightPurple}
                   />
-                  {suggBusy ? <ActivityIndicator size="small" color={GREEN} /> : null}
-                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={TEXT_MUT} /></Pressable>
+                  {suggBusy ? <ActivityIndicator size="small" color={palette.brightPurple} /> : null}
+                  <Pressable onPress={() => { setEditingDest(false); setDestSuggestions([]); }}><Ionicons name="close-circle" size={18} color={c.textSecondary} /></Pressable>
                 </View>
                 {destSuggestions.length > 0 && (
-                  <View style={s.suggList}>
+                  <View style={[s.suggList, { backgroundColor: c.mapOverlay }]}>
                     {destSuggestions.map((place) => (
                       <Pressable key={place.place_id} style={s.suggRow} onPress={() => handleSelectDest(place)}>
-                        <Ionicons name="location-outline" size={14} color={GREEN} />
+                        <Ionicons name="location-outline" size={14} color={palette.brightPurple} />
                         <View style={{ flex: 1 }}>
-                          <Text style={s.suggTitle} numberOfLines={1}>{place.name}</Text>
-                          <Text style={s.suggSub} numberOfLines={1}>{place.address}</Text>
+                          <Text style={[s.suggTitle, { color: c.text }]} numberOfLines={1}>{place.name}</Text>
+                          <Text style={[s.suggSub, { color: c.textSecondary }]} numberOfLines={1}>{place.address}</Text>
                         </View>
                       </Pressable>
                     ))}
@@ -463,40 +444,36 @@ export default function DestinationScreen() {
               </View>
             ) : (
               <Pressable style={s.routeInputLabelWrap} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
-                <Text style={s.routeInputLabel} numberOfLines={1}>{destLabel}</Text>
-                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={TEXT_MUT} /></Pressable>
+                <Text style={[s.routeInputLabel, { color: c.text }]} numberOfLines={1}>{destLabel}</Text>
+                <Pressable onPress={(e) => { e.stopPropagation(); setEditingDest(true); setDestQuery(''); }} hitSlop={8}><Ionicons name="create-outline" size={18} color={c.textSecondary} /></Pressable>
               </Pressable>
             )}
           </View>
         </View>
         <Pressable style={s.swapBtnRight} onPress={handleSwapOriginDest}>
-          <Ionicons name="swap-vertical" size={20} color={TEXT_MUT} />
+          <Ionicons name="swap-vertical" size={20} color={c.textSecondary} />
         </Pressable>
       </View>
 
       {/* Back */}
-      <Pressable style={[s.backBtn, { top: insets.top + 10 }]} onPress={() => router.back()}>
-        <Ionicons name="arrow-back" size={20} color={TEXT_PRI} />
+      <Pressable style={[s.backBtn, { top: insets.top + 10, backgroundColor: c.mapOverlay }]} onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={20} color={c.text} />
       </Pressable>
 
-      {/* Map controls — fixed in top map area so they never cover the sheet */}
+      {/* Map controls */}
       <View style={[s.mapControlsColumn, { top: mapControlsTop }]}>
-        <View style={s.floatBtn}>
-          <Pressable style={s.floatBtnInner} onPress={handleCenter}>
-            <Ionicons name="navigate-outline" size={20} color={GREEN} />
-          </Pressable>
-        </View>
-        <View style={s.heatmapWrap}>
+        <Pressable style={[s.floatBtnInner, { backgroundColor: c.mapOverlay }]} onPress={handleCenter}>
+          <Ionicons name="navigate-outline" size={20} color={palette.brightPurple} />
+        </Pressable>
         <Pressable
-          style={[s.heatmapInner, heatmapEnabled && s.heatmapInnerActive]}
+          style={[s.floatBtnInner, { backgroundColor: c.mapOverlay }, heatmapEnabled && { borderWidth: 1.5, borderColor: palette.brightPurple + '60' }]}
           onPress={() => setHeatmapEnabled(e => !e)}
         >
           {crashLoading
-            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapEnabled ? '#FF6B6B' : GREEN} />
+            ? <ActivityIndicator size="small" color={palette.brightPurple} style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={16} color={heatmapEnabled ? '#FF6B6B' : palette.brightPurple} />
           }
         </Pressable>
-      </View>
       </View>
 
       <BottomSheet
@@ -505,66 +482,61 @@ export default function DestinationScreen() {
         snapPoints={snapPoints}
         onChange={handleSheetChange}
         animatedPosition={animatedPosition}
-        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
-        handleIndicatorStyle={s.handle}
+        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} bgColor={c.background} />}
+        handleIndicatorStyle={[s.handle, { backgroundColor: palette.brightPurple + '40' }]}
         enablePanDownToClose={false}
       >
         <BottomSheetScrollView
-          contentContainerStyle={[s.sheetContent, { paddingBottom: insets.bottom + 24 }]}
+          contentContainerStyle={[s.sheetContent, { paddingBottom: Math.max(insets.bottom, 12) + 100 }]}
           scrollEnabled={sheetIndex === 2}
         >
           {sheetIndex === 0 ? (
             <View style={s.miniRow}>
-              <Text style={s.miniTitle} numberOfLines={1}>{placeName}</Text>
-              <Pressable style={s.miniClose} onPress={() => router.back()}>
-                <Ionicons name="close" size={14} color={TEXT_PRI} />
+              <Text style={[s.miniTitle, { color: c.text }]} numberOfLines={1}>{placeName}</Text>
+              <Pressable style={[s.miniClose, { backgroundColor: c.cardSolid }]} onPress={() => router.back()}>
+                <Ionicons name="close" size={14} color={c.text} />
               </Pressable>
             </View>
           ) : (
             <>
-              {/* ── Header ── */}
               <View style={s.headerRow}>
-                <Text style={s.placeName}>{placeName}</Text>
-                <Pressable style={s.closeBtn} onPress={() => router.back()}>
-                  <Ionicons name="close" size={18} color={TEXT_PRI} />
+                <Text style={[s.placeName, { color: c.text }]}>{placeName}</Text>
+                <Pressable style={[s.closeBtn, { backgroundColor: c.cardSolid }]} onPress={() => router.back()}>
+                  <Ionicons name="close" size={18} color={c.text} />
                 </Pressable>
               </View>
 
-              {/* ── Subtitle: type • city ── */}
               <View style={s.subtitleRow}>
-                <Text style={s.placeType}>{placeType}</Text>
+                <Text style={[s.placeType, { color: c.textSecondary }]}>{placeType}</Text>
                 {placeAddr ? (
-                  <Text style={[s.placeType, { color: GREEN }]}>
+                  <Text style={[s.placeType, { color: palette.brightPurple }]}>
                     {'  •  '}{placeAddr.split(',').slice(-2, -1)[0]?.trim()}
                   </Text>
                 ) : null}
               </View>
 
-              {/* ── Rating row ── */}
               {details?.rating != null && (
                 <View style={s.ratingRow}>
-                  <Text style={s.ratingNum}>{details.rating.toFixed(1)}</Text>
-                  <StarRating rating={details.rating} total={details.user_ratings_total} />
+                  <Text style={[s.ratingNum, { color: c.text }]}>{details.rating.toFixed(1)}</Text>
+                  <StarRating rating={details.rating} total={details.user_ratings_total} secondaryColor={c.textSecondary} />
                 </View>
               )}
 
-              {/* ── Hours status ── */}
               {ohText ? (
                 <View style={s.hoursRow}>
                   {isOpenNow !== null && (
-                    <Text style={[s.openTag, { color: isOpenNow ? GREEN : '#FF4444' }]}>
+                    <Text style={[s.openTag, { color: isOpenNow ? palette.teal : palette.danger }]}>
                       {isOpenNow ? 'Open' : 'Closed'}
                     </Text>
                   )}
                   {firstHoursLine ? (
-                    <Text style={s.hoursText} numberOfLines={1}>
+                    <Text style={[s.hoursText, { color: c.textSecondary }]} numberOfLines={1}>
                       {isOpenNow !== null ? '  •  ' : ''}{firstHoursLine}
                     </Text>
                   ) : null}
                 </View>
               ) : null}
 
-              {/* ── View Routes — real gradient button ── */}
               <Pressable
                 style={s.routesBtn}
                 onPress={() => {
@@ -584,18 +556,17 @@ export default function DestinationScreen() {
                 disabled={!originCoords}
               >
                 <LinearGradient
-                  colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                  colors={[...Gradients.button]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={StyleSheet.absoluteFillObject}
                 />
                 <View style={s.routesBtnContent}>
-                  <Ionicons name="navigate" size={18} color="#000" />
+                  <Ionicons name="navigate" size={18} color="#FFFFFF" />
                   <Text style={s.routesBtnText}>View Routes</Text>
                 </View>
               </Pressable>
 
-              {/* ── Action buttons row ── */}
               <View style={s.actionRow}>
                 {[
                   {
@@ -610,17 +581,16 @@ export default function DestinationScreen() {
                   { icon: 'list-outline',       label: 'Services', onPress: () => {} },
                   { icon: 'ellipsis-horizontal', label: 'More',    onPress: () => {} },
                 ].map(a => (
-                  <Pressable key={a.label} style={s.actionBtn} onPress={a.onPress}>
-                    <Ionicons name={a.icon as any} size={22} color={TEXT_PRI} />
-                    <Text style={s.actionLabel}>{a.label}</Text>
+                  <Pressable key={a.label} style={[s.actionBtn, { backgroundColor: c.cardSolid }]} onPress={a.onPress}>
+                    <Ionicons name={a.icon as any} size={22} color={c.text} />
+                    <Text style={[s.actionLabel, { color: c.text }]}>{a.label}</Text>
                   </Pressable>
                 ))}
               </View>
 
-              {/* ── Photos ── */}
               {details?.photo_urls && details.photo_urls.length > 0 && (
                 <View style={{ marginTop: 16 }}>
-                  <Text style={s.sectionTitle}>Photos</Text>
+                  <Text style={[s.sectionTitle, { color: c.text }]}>Photos</Text>
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
@@ -642,26 +612,25 @@ export default function DestinationScreen() {
                 </View>
               )}
 
-              {/* ── About ── */}
               <View style={{ marginTop: 16, marginBottom: 8 }}>
-                <Text style={s.sectionTitle}>About</Text>
+                <Text style={[s.sectionTitle, { color: c.text }]}>About</Text>
                 {detailsLoading ? (
-                  <View style={[s.aboutCard, { alignItems: 'center', paddingVertical: 24 }]}>
-                    <ActivityIndicator color={GREEN} />
-                    <Text style={{ color: TEXT_MUT, fontSize: 13, marginTop: 10 }}>Loading details…</Text>
+                  <View style={{ alignItems: 'center', paddingVertical: 24, backgroundColor: c.cardSolid, borderRadius: 14 }}>
+                    <ActivityIndicator color={palette.brightPurple} />
+                    <Text style={{ color: c.textSecondary, fontSize: 13, marginTop: 10 }}>Loading details…</Text>
                   </View>
                 ) : (
-                  <View style={s.aboutCard}>
+                  <View style={{ overflow: 'hidden', backgroundColor: c.cardSolid, borderRadius: 14 }}>
                     {aboutRows.map((item, i) => (
                       <View key={i}>
                         <Pressable
                           style={s.aboutRow}
                           onPress={item.onPress ?? (() => {})}
                         >
-                          <Ionicons name={item.icon as any} size={18} color={item.onPress ? GREEN : TEXT_MUT} style={{ marginTop: 2 }} />
-                          <Text style={[s.aboutText, item.onPress && { color: GREEN }]}>{item.label}</Text>
+                          <Ionicons name={item.icon as any} size={18} color={item.onPress ? palette.brightPurple : c.textSecondary} style={{ marginTop: 2 }} />
+                          <Text style={[s.aboutText, { color: c.textSecondary }, item.onPress && { color: palette.brightPurple }]}>{item.label}</Text>
                         </Pressable>
-                        {i < aboutRows.length - 1 && <View style={s.aboutDiv} />}
+                        {i < aboutRows.length - 1 && <View style={[s.aboutDiv, { backgroundColor: c.divider }]} />}
                       </View>
                     ))}
                   </View>
@@ -676,77 +645,65 @@ export default function DestinationScreen() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
+  container: { flex: 1 },
   backBtn: {
     position: 'absolute', left: 14, zIndex: 10,
     width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(11,17,32,0.9)',
     justifyContent: 'center', alignItems: 'center',
   },
   mapControlsColumn: { position: 'absolute', right: 14, flexDirection: 'column', gap: 8 },
-  floatBtn: { width: 42, height: 42, borderRadius: 21 },
   floatBtnInner: {
-    flex: 1, borderRadius: 21, backgroundColor: NAVY_ITEM,
+    width: 42, height: 42, borderRadius: 21,
     justifyContent: 'center', alignItems: 'center',
   },
-  heatmapWrap: {},
-  heatmapInner: {
-    width: 42, height: 42, borderRadius: 21,
-    backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'transparent',
-  },
-  heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
+  handle: { width: 36, height: 4, borderRadius: 2 },
   sheetContent: { paddingHorizontal: 16, paddingTop: 8 },
   miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
-  miniTitle: { flex: 1, color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
+  miniTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
   miniClose: {
-    width: 26, height: 26, borderRadius: 13, backgroundColor: NAVY_ITEM,
+    width: 26, height: 26, borderRadius: 13,
     justifyContent: 'center', alignItems: 'center',
   },
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
-  placeName: { flex: 1, color: TEXT_PRI, fontSize: 24, fontWeight: '800', lineHeight: 30 },
+  placeName: { flex: 1, fontSize: 24, fontWeight: '800', lineHeight: 30 },
   closeBtn: {
-    width: 32, height: 32, borderRadius: 16, backgroundColor: NAVY_ITEM,
+    width: 32, height: 32, borderRadius: 16,
     justifyContent: 'center', alignItems: 'center', marginTop: 2,
   },
   subtitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  placeType: { color: TEXT_MUT, fontSize: 13 },
+  placeType: { fontSize: 13 },
   ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  ratingNum: { color: TEXT_PRI, fontSize: 14, fontWeight: '700' },
+  ratingNum: { fontSize: 14, fontWeight: '700' },
   hoursRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   openTag: { fontSize: 13, fontWeight: '700' },
-  hoursText: { flex: 1, color: TEXT_MUT, fontSize: 13 },
+  hoursText: { flex: 1, fontSize: 13 },
   topRouteCard: {
     position: 'absolute',
     left: 56,
     right: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: NAVY_CARD,
     borderRadius: 28,
+    borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 13,
     gap: 8,
     zIndex: 10,
   },
   topRouteRows: { flex: 1 },
-  routeInputCard: { backgroundColor: NAVY_CARD, borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: DIVIDER },
   routeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 },
   routeInputIcon: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-  originDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: 'rgba(74,144,226,0.4)' },
+  originDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: palette.royalBlue, borderWidth: 2, borderColor: 'rgba(59,130,246,0.4)' },
   routeInputLabelWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  routeInputLabel: { flex: 1, color: TEXT_PRI, fontSize: 14, fontWeight: '600' },
-  swapBtn: { alignSelf: 'center', padding: 8, marginVertical: 4 },
+  routeInputLabel: { flex: 1, fontSize: 14, fontWeight: '600' },
   swapBtnRight: { padding: 8, justifyContent: 'center' },
   inlineSearchWrap: { flex: 1, marginBottom: 4 },
-  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: NAVY_ITEM, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
-  inlineInputText: { flex: 1, color: TEXT_PRI, fontSize: 14 },
-  suggList: { backgroundColor: NAVY_ITEM, borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
+  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
+  inlineInputText: { flex: 1, fontSize: 14 },
+  suggList: { borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
   suggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
-  suggTitle: { color: TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 },
-  suggSub: { color: TEXT_MUT, fontSize: 11, marginTop: 1 },
-  // Gradient button — overflow:hidden clips the absolute fill columns to borderRadius
+  suggTitle: { fontSize: 13, fontWeight: '600', flex: 1 },
+  suggSub: { fontSize: 11, marginTop: 1 },
   routesBtn: {
     height: 52,
     borderRadius: 16,
@@ -760,19 +717,18 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  routesBtnText: { color: '#000', fontSize: 16, fontWeight: '700' },
+  routesBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   actionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
   actionBtn: {
-    flex: 1, backgroundColor: NAVY_ITEM, borderRadius: 14,
+    flex: 1, borderRadius: 14,
     paddingVertical: 14, alignItems: 'center', gap: 6,
   },
-  actionLabel: { color: TEXT_PRI, fontSize: 12, fontWeight: '500' },
-  sectionTitle: { color: TEXT_PRI, fontSize: 16, fontWeight: '700', marginBottom: 10 },
-  aboutCard: { backgroundColor: NAVY_CARD, borderRadius: 16, overflow: 'hidden' },
+  actionLabel: { fontSize: 12, fontWeight: '500' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: 10 },
   aboutRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     paddingHorizontal: 14, paddingVertical: 13,
   },
-  aboutText: { flex: 1, color: TEXT_MUT, fontSize: 13, lineHeight: 18 },
-  aboutDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 44 },
+  aboutText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  aboutDiv: { height: 1, marginLeft: 44 },
 });
