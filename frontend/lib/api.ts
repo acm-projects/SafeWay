@@ -173,6 +173,89 @@ export async function getRoute(params: {
   });
 }
 
+// ── Multiple alternative routes via Google Routes API directly ────────────────
+// The backend only returns routes[0]. This function calls the Routes API
+// directly from the frontend with computeAlternativeRoutes=true to get up to
+// 3 routes (main + up to 2 alternatives) for a given mode.
+
+export type AlternativeRoute = {
+  index: number;            // 0 = primary, 1+ = alternatives
+  coords: RoutePoint[];
+  distance: number;         // metres
+  durationSecs: number;
+  label: string;            // e.g. "Fastest", "Alternative 1"
+  routeLabels: string[];    // raw labels from Google: ["DEFAULT_ROUTE", "DEFAULT_ROUTE_ALTERNATE"]
+};
+
+function decodePolyline(encoded: string): RoutePoint[] {
+  const points: RoutePoint[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b: number, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return points;
+}
+
+export async function getMultipleRoutes(params: {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  travel_mode: 'DRIVE' | 'WALK' | 'BICYCLE';
+}): Promise<AlternativeRoute[]> {
+  if (!googleMapsKey) return [];
+
+  const body: Record<string, any> = {
+    origin: { location: { latLng: { latitude: params.origin.lat, longitude: params.origin.lng } } },
+    destination: { location: { latLng: { latitude: params.destination.lat, longitude: params.destination.lng } } },
+    travelMode: params.travel_mode,
+    computeAlternativeRoutes: true,
+  };
+  if (params.travel_mode === 'DRIVE') {
+    body.routingPreference = 'TRAFFIC_AWARE';
+  }
+
+  const fields = 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.routeLabels,routes.description';
+
+  try {
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': googleMapsKey,
+        'X-Goog-FieldMask': fields,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const routes: any[] = data.routes ?? [];
+
+    const ROUTE_NAMES = ['Fastest Route', 'Alternative Route', 'Scenic Route'];
+
+    return routes.map((r: any, i: number) => {
+      const polyline = r.polyline?.encodedPolyline ?? '';
+      const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
+      const labels: string[] = r.routeLabels ?? [];
+      const name = ROUTE_NAMES[i] ?? `Route ${i + 1}`;
+      return {
+        index: i,
+        coords: decodePolyline(polyline),
+        distance: r.distanceMeters ?? 0,
+        durationSecs,
+        label: name,
+        routeLabels: labels,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 function authHeaders(jwt: string) {
   return { Authorization: `Bearer ${jwt}` };
 }

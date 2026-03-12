@@ -27,6 +27,7 @@ import type { Bookmark, WeatherData } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 const NAVY       = '#0B1120';
@@ -527,7 +528,7 @@ export default function HomeScreen() {
                       <Pressable key={sc.key} style={s.shortcut}
                         onPress={() => { setPlaceModal(sc.modal); setPlaceQuery(''); setPlaceSugg([]); }}>
                         <View style={[s.shortcutCircle, sc.sub && { borderWidth: 2.5, borderColor: GREEN }]}>
-                          <Ionicons name={sc.icon as any} size={26} color="#4A5FC4" />
+                          <Ionicons name={sc.icon as any} size={26} color="#0B0EB6" />
                         </View>
                         <Text style={s.shortcutLabel}>{sc.label}</Text>
                         <Text style={s.shortcutSub} numberOfLines={1}>{sc.sub ?? 'Add'}</Text>
@@ -541,14 +542,14 @@ export default function HomeScreen() {
                           { text: 'Delete', style: 'destructive', onPress: () => void handleDeleteBookmark(bm.id) },
                         ])}>
                         <View style={s.shortcutCircle}>
-                          <Ionicons name="bookmark-outline" size={22} color="#4A5FC4" />
+                          <Ionicons name="bookmark-outline" size={22} color="#0B0EB6" />
                         </View>
                         <Text style={s.shortcutLabel} numberOfLines={1}>{bm.title}</Text>
                       </Pressable>
                     ))}
                     <Pressable style={s.shortcut} onPress={() => router.push('/search')}>
                       <View style={[s.shortcutCircle, { backgroundColor: '#D8DCF0' }]}>
-                        <Ionicons name="add" size={28} color="#4A5FC4" />
+                        <Ionicons name="add" size={28} color="#0B0EB6" />
                       </View>
                       <Text style={s.shortcutLabel}>Add</Text>
                     </Pressable>

@@ -31,8 +31,8 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
-import { getRoute, searchPlaces } from '@/lib/api';
-import type { PlaceSearchResult, RoutePoint } from '@/lib/api';
+import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
+import type { AlternativeRoute, PlaceSearchResult, RoutePoint } from '@/lib/api';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 
@@ -66,6 +66,11 @@ const DARK_MAP_STYLE = [
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
 interface ModeRouteData { coords: RoutePoint[]; distance: number; durationSecs: number; }
+// Per-mode collection: primary route + alternatives
+interface ModeRoutes {
+  primary: ModeRouteData;
+  alternatives: AlternativeRoute[]; // full set from Google (index 0 = primary, 1+ = alts)
+}
 
 // Heatmap filters — mirrors index.tsx
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
@@ -376,7 +381,8 @@ export default function DirectionsScreen() {
   const [suggBusy, setSuggBusy] = useState(false);
 
   const [travelMode, setTravelMode] = useState<TravelMode>('DRIVE');
-  const [routeByMode, setRouteByMode] = useState<Partial<Record<TravelMode, ModeRouteData>>>({});
+  const [routeByMode, setRouteByMode] = useState<Partial<Record<TravelMode, ModeRoutes>>>({});
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [routeBusy, setRouteBusy] = useState(false);
   const [zoomDelta, setZoomDelta] = useState(0.05);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -427,43 +433,61 @@ export default function DirectionsScreen() {
   async function fetchAllRoutes() {
     if (!originCoords || !destCoords) return;
     setRouteBusy(true);
+    setSelectedRouteIndex(0);
     const from = stopsSwapped ? destCoords : originCoords;
     const to   = stopsSwapped ? originCoords! : destCoords;
     try {
-      const [driveRes, walkRes, bikeRes] = await Promise.allSettled([
-        getRoute({ origin: from, destination: to, travel_mode: 'DRIVE' }),
-        getRoute({ origin: from, destination: to, travel_mode: 'WALK' }),
-        getRoute({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
+      const [driveAlts, walkAlts, bikeAlts] = await Promise.allSettled([
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE' }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK' }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
       ]);
-      const nd: Partial<Record<TravelMode, ModeRouteData>> = {};
-      const parse = (r: PromiseSettledResult<any>, mode: TravelMode) => {
-        if (r.status === 'fulfilled') {
-          nd[mode] = { coords: r.value.coordinates, distance: r.value.distance_meters, durationSecs: parseInt(r.value.duration.replace('s',''), 10) };
-        }
+
+      const toModeRoutes = (res: PromiseSettledResult<AlternativeRoute[]>): ModeRoutes | undefined => {
+        if (res.status !== 'fulfilled' || !res.value.length) return undefined;
+        const alts = res.value;
+        return {
+          primary: { coords: alts[0].coords, distance: alts[0].distance, durationSecs: alts[0].durationSecs },
+          alternatives: alts,
+        };
       };
-      parse(driveRes, 'DRIVE'); parse(walkRes, 'WALK'); parse(bikeRes, 'BICYCLE');
-      const ds = nd.DRIVE?.durationSecs ?? 0;
-      if (!nd.WALK && nd.DRIVE)    nd.WALK    = { ...nd.DRIVE, durationSecs: Math.round(ds * 3.8) };
-      if (!nd.BICYCLE && nd.DRIVE) nd.BICYCLE = { ...nd.DRIVE, durationSecs: Math.round(ds * 2.1) };
-      nd.BUS      = nd.DRIVE ? { ...nd.DRIVE, durationSecs: Math.round(ds * 1.4) } : undefined;
-      nd.RIDESHARE = nd.DRIVE ? { ...nd.DRIVE, durationSecs: Math.round(ds * 1.1) } : undefined;
+
+      const nd: Partial<Record<TravelMode, ModeRoutes>> = {};
+      const drive = toModeRoutes(driveAlts);
+      if (drive) nd.DRIVE = drive;
+      const walk  = toModeRoutes(walkAlts);
+      if (walk)  nd.WALK = walk;
+      const bike  = toModeRoutes(bikeAlts);
+      if (bike)  nd.BICYCLE = bike;
+
+      // BUS/RIDESHARE derive from DRIVE timing
+      if (nd.DRIVE) {
+        const ds = nd.DRIVE.primary.durationSecs;
+        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4) }, alternatives: [] };
+        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1) }, alternatives: [] };
+      }
       setRouteByMode(nd);
     } catch (e) {
       Alert.alert('Route error', e instanceof Error ? e.message : 'Could not fetch route.');
-    } finally { setRouteBusy(false); }
+    } finally {
+      setRouteBusy(false);
+    }
   }
 
   useEffect(() => {
-    const data = routeByMode[travelMode];
+    const modeData = routeByMode[travelMode];
     if (!mapRef.current) return;
-    const coords = data?.coords?.length ? data.coords
+    const selected = modeData?.alternatives[selectedRouteIndex];
+    const coords = selected?.coords?.length ? selected.coords
+      : modeData?.primary?.coords?.length ? modeData.primary.coords
       : (originCoords && destCoords ? [{ latitude: originCoords.lat, longitude: originCoords.lng }, { latitude: destCoords.lat, longitude: destCoords.lng }] : null);
     if (coords) mapRef.current.fitToCoordinates(coords, { edgePadding: { top: 80, right: 60, bottom: 300, left: 60 }, animated: true });
-  }, [travelMode, routeByMode]);
+  }, [travelMode, routeByMode, selectedRouteIndex]);
 
   function handleSwapStops() {
     setStopsSwapped(s => !s);
     setRouteByMode({});
+    setSelectedRouteIndex(0);
     setTimeout(() => { void fetchAllRoutes(); }, 50);
   }
 
@@ -512,8 +536,19 @@ export default function DirectionsScreen() {
   const locateAnimStyle = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 60  }));
   const hmAnimStyle     = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 10  }));
 
-  const activeData = routeByMode[travelMode];
+  const modeData  = routeByMode[travelMode];
+  const alternatives = modeData?.alternatives ?? [];
+  // The currently displayed route (selected alternative, or primary)
+  const selectedAlt = alternatives[selectedRouteIndex];
+  const activeData: ModeRouteData | null = selectedAlt
+    ? { coords: selectedAlt.coords, distance: selectedAlt.distance, durationSecs: selectedAlt.durationSecs }
+    : modeData?.primary ?? null;
   const activeSecs = activeData?.durationSecs ?? 0;
+
+  function handleSetTravelMode(mode: TravelMode) {
+    setTravelMode(mode);
+    setSelectedRouteIndex(0);
+  }
 
   const modeItems: { mode: TravelMode; icon: any }[] = [
     { mode: 'DRIVE',    icon: 'car'           },
@@ -532,10 +567,7 @@ export default function DirectionsScreen() {
   const bottomLabel = stopsSwapped ? originLabel : destLabel;
   const bottomSub   = 'Destination';
 
-  const routeCards = [
-    { matchPct: 93, title: 'Fastest Route', dist: fmtDist(activeData?.distance ?? 21000), time: fmtSecs(activeSecs), traffic: 'Low Traffic', highlight: true },
-    { matchPct: 87, title: 'Safest Route',  dist: fmtDist(activeData?.distance ? activeData.distance * 1.12 : 23500), time: fmtSecs(Math.round(activeSecs * 1.15)), traffic: 'Low Traffic', highlight: false },
-  ];
+  // Route cards are built dynamically from `alternatives` below in the JSX
 
   return (
     <View style={styles.container}>
@@ -548,7 +580,25 @@ export default function DirectionsScreen() {
           </Marker>
         )}
         {destCoords && <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor="#FF4444" />}
-        {activeData?.coords?.length ? <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} /> : null}
+        {/* All alternative routes — dimmed, tappable */}
+        {alternatives.map((alt, i) => {
+          if (!alt.coords?.length) return null;
+          const isSelected = i === selectedRouteIndex;
+          return (
+            <Polyline
+              key={`${travelMode}-alt-${i}`}
+              coordinates={alt.coords}
+              strokeColor={isSelected ? '#4A90E2' : 'rgba(74,144,226,0.28)'}
+              strokeWidth={isSelected ? 5 : 3}
+              tappable
+              onPress={() => setSelectedRouteIndex(i)}
+            />
+          );
+        })}
+        {/* Fallback single polyline when alternatives not loaded */}
+        {alternatives.length === 0 && activeData?.coords?.length ? (
+          <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
+        ) : null}
         {/* Real crash heatmap from Supabase */}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap
@@ -683,7 +733,7 @@ export default function DirectionsScreen() {
                 {modeItems.map(({ mode, icon }) => {
                   const active = travelMode === mode;
                   return (
-                    <Pressable key={mode} style={[styles.modeChip, active && styles.modeChipActive]} onPress={() => setTravelMode(mode)}>
+                    <Pressable key={mode} style={[styles.modeChip, active && styles.modeChipActive]} onPress={() => handleSetTravelMode(mode)}>
                       <Ionicons name={icon} size={22} color={active ? '#000' : TEXT_PRI} />
                     </Pressable>
                   );
@@ -755,51 +805,97 @@ export default function DirectionsScreen() {
                 </View>
               )}
 
-              {/* Route option cards */}
-              {!routeBusy && activeData && routeCards.map((card, i) => (
-                <View key={i} style={[styles.routeOptionCard, card.highlight && styles.routeOptionCardActive]}>
-                  {/* Match badge — LinearGradient when highlighted */}
-                  <View style={[styles.matchBadge, card.highlight && styles.matchBadgeActive]}>
-                    {card.highlight && (
-                      <LinearGradient
-                        colors={['#0A9E6E', '#1ABC93', '#12B882']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 0, y: 1 }}
-                        style={StyleSheet.absoluteFillObject}
-                      />
-                    )}
+              {/* Route option cards — one per alternative returned by Google */}
+              {!routeBusy && alternatives.length > 0 && alternatives.map((alt, i) => {
+                const isSelected = i === selectedRouteIndex;
+                const ROUTE_NAMES = ['Route 1', 'Route 2', 'Route 3'];
+                const routeName = ROUTE_NAMES[i] ?? `Route ${i + 1}`;
+                const safetyScore = 90; // placeholder until real crash-weighted score available
+
+                return (
+                  <Pressable
+                    key={`${travelMode}-card-${i}`}
+                    style={[styles.routeOptionCard, isSelected && styles.routeOptionCardActive]}
+                    onPress={() => setSelectedRouteIndex(i)}
+                  >
+                    {/* Safety score badge — teal gradient when selected, dark when not */}
+                    <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive]}>
+                      {isSelected && (
+                        <LinearGradient
+                          colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 0, y: 1 }}
+                          style={StyleSheet.absoluteFillObject}
+                        />
+                      )}
+                      <View style={styles.matchBadgeContent}>
+                        <Text style={[styles.matchWord, { color: isSelected ? '#fff' : TEXT_MUT }]}>SAFETY</Text>
+                        <Text style={[styles.matchPct, { color: isSelected ? '#fff' : TEXT_PRI }]}>{safetyScore}%</Text>
+                      </View>
+                    </View>
+
+                    {/* Route info */}
+                    <Pressable style={styles.routeOptionInfo} onPress={() => { setSelectedRouteIndex(i); setShowDetailsModal(true); }}>
+                      <Text style={styles.routeOptionTitle}>{routeName}</Text>
+                      <Text style={styles.routeOptionMeta}>{fmtSecs(alt.durationSecs)}  •  {fmtDist(alt.distance)}</Text>
+                      <Text style={[styles.routeOptionTraffic, { color: GREEN }]}>
+                        Arrive ~{arrivalFrom(alt.durationSecs)}
+                      </Text>
+                    </Pressable>
+
+                    {/* Start button — gradient when selected, dark when not */}
+                    <Pressable
+                      style={[styles.startBtnWrap, !isSelected && styles.startBtnWrapInactive]}
+                      onPress={() => {
+                        setSelectedRouteIndex(i);
+                        const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
+                        const from = stopsSwapped ? destCoords : originCoords;
+                        const to   = stopsSwapped ? originCoords : destCoords;
+                        Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                      }}
+                    >
+                      {isSelected && (
+                        <LinearGradient
+                          colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={StyleSheet.absoluteFillObject}
+                        />
+                      )}
+                      <Text style={[styles.startBtnText, !isSelected && { color: TEXT_MUT }]}>Start</Text>
+                    </Pressable>
+                  </Pressable>
+                );
+              })}
+
+              {/* Fallback: single card when no alternatives available (BUS/RIDESHARE) */}
+              {!routeBusy && alternatives.length === 0 && activeData && (
+                <View style={[styles.routeOptionCard, styles.routeOptionCardActive]}>
+                  <View style={[styles.matchBadge, styles.matchBadgeActive]}>
+                    <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFillObject} />
                     <View style={styles.matchBadgeContent}>
-                      <Text style={[styles.matchWord, { color: card.highlight ? '#fff' : TEXT_MUT }]}>MATCH</Text>
-                      <Text style={[styles.matchPct, { color: card.highlight ? '#fff' : TEXT_PRI }]}>{card.matchPct}%</Text>
+                      <Text style={[styles.matchWord, { color: '#fff' }]}>SAFETY</Text>
+                      <Text style={[styles.matchPct, { color: '#fff' }]}>90%</Text>
                     </View>
                   </View>
                   <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
-                    <Text style={styles.routeOptionTitle}>{card.title}</Text>
-                    <Text style={styles.routeOptionMeta}>{card.time}  •  {card.dist}</Text>
-                    <Text style={[styles.routeOptionTraffic, { color: card.traffic === 'Low Traffic' ? '#1ABC93' : '#FFA500' }]}>{card.traffic}</Text>
+                    <Text style={styles.routeOptionTitle}>Route 1</Text>
+                    <Text style={styles.routeOptionMeta}>{fmtSecs(activeSecs)}  •  {fmtDist(activeData.distance)}</Text>
+                    <Text style={[styles.routeOptionTraffic, { color: GREEN }]}>Arrive ~{arrivalFrom(activeSecs)}</Text>
                   </Pressable>
-                  {/* Start button — real LinearGradient */}
-                  <Pressable
-                    style={styles.startBtnWrap}
-                    onPress={() => {
-                      const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
-                      const from = stopsSwapped ? destCoords : originCoords;
-                      const to   = stopsSwapped ? originCoords : destCoords;
-                      Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
-                    }}
-                  >
-                    <LinearGradient
-                      colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={StyleSheet.absoluteFillObject}
-                    />
+                  <Pressable style={styles.startBtnWrap} onPress={() => {
+                    const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
+                    const from = stopsSwapped ? destCoords : originCoords;
+                    const to   = stopsSwapped ? originCoords : destCoords;
+                    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                  }}>
+                    <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
                     <Text style={styles.startBtnText}>Start</Text>
                   </Pressable>
                 </View>
-              ))}
+              )}
 
-              {!routeBusy && !activeData && (
+              {!routeBusy && !modeData && (
                 <Pressable style={styles.getDirectionsBtn} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
                   <Text style={styles.getDirectionsBtnText}>Get Directions</Text>
                 </Pressable>
@@ -884,28 +980,30 @@ const styles = StyleSheet.create({
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 },
   loadingText: { color: TEXT_MUT, fontSize: 14 },
 
-  // Route option cards — match image: badge | info (pressable) | start button
+  // Route option cards — safety badge | info | start button
   routeOptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
   routeOptionCardActive: { borderColor: GREEN },
-  matchBadge: { borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center', minWidth: 68, overflow: 'hidden', position: 'relative', backgroundColor: ITEM_BG },
+  matchBadge: { borderRadius: 14, paddingVertical: 12, paddingHorizontal: 10, alignItems: 'center', width: 76, overflow: 'hidden', position: 'relative' },
   matchBadgeActive: { backgroundColor: 'transparent' },
+  matchBadgeInactive: { backgroundColor: ITEM_BG },
   matchBadgeContent: { alignItems: 'center' },
-  matchWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  matchPct: { fontSize: 22, fontWeight: '800' },
+  matchWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, marginBottom: 2 },
+  matchPct: { fontSize: 24, fontWeight: '800' },
   routeOptionInfo: { flex: 1 },
   routeOptionTitle: { color: TEXT_PRI, fontSize: 15, fontWeight: '700', marginBottom: 3 },
   routeOptionMeta: { color: TEXT_MUT, fontSize: 13, marginBottom: 2 },
   routeOptionTraffic: { fontSize: 12, fontWeight: '600' },
-  // Gradient Start button
+  // Start button
   startBtnWrap: {
     borderRadius: 12,
     overflow: 'hidden',
     height: 40,
-    minWidth: 68,
+    minWidth: 72,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'transparent',
   },
-  startBtnContent: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
+  startBtnWrapInactive: { backgroundColor: ITEM_BG },
   startBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', zIndex: 1 },
   getDirectionsBtn: { backgroundColor: GREEN, borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
   getDirectionsBtnText: { color: '#000', fontSize: 16, fontWeight: '700' },
