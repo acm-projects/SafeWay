@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider } from '@/providers/auth-provider';
+import { palette } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+import { GlobalTabBar } from '@/components/global-tab-bar';
 
 // Inline the splash so there is zero module resolution ambiguity
-import { useEffect } from 'react';
-import { Image, StyleSheet, Text } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -69,7 +71,7 @@ function AppSplash({ onFinish }: { onFinish: () => void }) {
 const sp = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0B1120',
+    backgroundColor: '#F8F7FF',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 999,
@@ -77,31 +79,79 @@ const sp = StyleSheet.create({
   logoWrap: { width: 148, height: 148, justifyContent: 'center', alignItems: 'center' },
   logo:     { width: 148, height: 148 },
   textWrap: { alignItems: 'center', marginTop: 22, gap: 4 },
-  appName:  { color: '#FFFFFF', fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
-  tagline:  { color: '#1ABC93', fontSize: 14, fontWeight: '500', letterSpacing: 1.2, textTransform: 'uppercase' },
+  appName:  { color: palette.deepPurple, fontSize: 34, fontWeight: '800', letterSpacing: 0.5 },
+  tagline:  { color: palette.brightPurple, fontSize: 14, fontWeight: '500', letterSpacing: 1.2, textTransform: 'uppercase' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Custom themes matching our purple palette
+const SafeWayDark = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    background: palette.deepPurple,
+    card: palette.darkPurple,
+    primary: palette.brightPurple,
+    text: '#FFFFFF',
+    border: 'rgba(255,255,255,0.08)',
+  },
+};
+
+const SafeWayLight = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: '#F8F7FF',
+    card: '#FFFFFF',
+    primary: palette.brightPurple,
+    text: palette.deepPurple,
+    border: 'rgba(0,0,0,0.06)',
+  },
+};
+
 export const unstable_settings = { anchor: '(tabs)' };
+
+const SEEN_KEY = 'safeway_hasSeenLanding';
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [splashDone, setSplashDone] = useState(false);
+  const [checkedLanding, setCheckedLanding] = useState(false);
+
+  // After splash, check if user has seen landing
+  useEffect(() => {
+    if (!splashDone) return;
+    (async () => {
+      try {
+        const seen = await AsyncStorage.getItem(SEEN_KEY);
+        if (!seen) {
+          router.replace('/landing');
+        }
+      } catch {}
+      setCheckedLanding(true);
+    })();
+  }, [splashDone]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <ThemeProvider value={colorScheme === 'dark' ? SafeWayDark : SafeWayLight}>
+          <View style={{ flex: 1 }}>
           <Stack>
             <Stack.Screen name="(tabs)"      options={{ headerShown: false }} />
+            <Stack.Screen name="landing"     options={{ headerShown: false }} />
+            <Stack.Screen name="onboarding"  options={{ headerShown: false }} />
             <Stack.Screen name="search"      options={{ headerShown: false, animation: 'slide_from_bottom' }} />
             <Stack.Screen name="destination" options={{ headerShown: false }} />
             <Stack.Screen name="directions"  options={{ headerShown: false }} />
-            <Stack.Screen name="login"       options={{ headerShown: false, presentation: 'modal' }} />
+            <Stack.Screen name="login"       options={{ headerShown: false, presentation: 'modal', contentStyle: { flex: 1, backgroundColor: 'transparent' } }} />
           </Stack>
 
-          <StatusBar style="auto" />
+          <GlobalTabBar />
+          </View>
+
+          <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
 
           {!splashDone && (
             <AppSplash onFinish={() => setSplashDone(true)} />

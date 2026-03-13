@@ -23,7 +23,6 @@ def _crash_date_series(df: pd.DataFrame) -> pd.Series:
 
 
 def _in_window(ts: pd.Series, start: str, end: str) -> pd.Series:
-    # Use tz-aware boundaries when ts is tz-aware (e.g. from Supabase) to avoid InvalidComparison
     tz = getattr(ts.dtype, "tz", None)
     if tz is not None:
         ts = ts.dt.tz_convert("UTC")
@@ -39,7 +38,6 @@ def _is_weekend_row(row) -> bool:
     if "crash_day_of_week" in row.index and pd.notna(row.get("crash_day_of_week")):
         try:
             d = int(row["crash_day_of_week"])
-            # Chicago E-Crash often uses 1=Sun ... or 0=Sun; treat 6,7 or weekend names as weekend
             if d in (6, 7):
                 return True
             if d in (0, 1) and d == 0:
@@ -96,9 +94,18 @@ def aggregate_crash_features(crashes_assigned: pd.DataFrame, prefix: str = "past
         cause_speed = _type_prop(cause, lambda s: "SPEED" in s)
         cause_yield = _type_prop(cause, lambda s: "YIELD" in s or "FAILED TO" in s)
         speed = pd.to_numeric(sub.get("posted_speed_limit"), errors="coerce")
+
+        # Weather features
+        weather = sub["weather_condition"].map(_u) if "weather_condition" in sub.columns else pd.Series(dtype=str)
+        lighting = sub["lighting_condition"].map(_u) if "lighting_condition" in sub.columns else pd.Series(dtype=str)
+        surface = sub["roadway_surface_cond"].map(_u) if "roadway_surface_cond" in sub.columns else pd.Series(dtype=str)
+        prop_poor_weather = _type_prop(weather, lambda s: any(k in s for k in ("RAIN", "SNOW", "SLEET", "FOG", "WIND", "BLOWING")))
+        prop_poor_lighting = _type_prop(lighting, lambda s: any(k in s for k in ("DARK", "DUSK", "DAWN")))
+        prop_poor_surface = _type_prop(surface, lambda s: any(k in s for k in ("WET", "SNOW", "ICE", "SLUSH", "SAND")))
+
         rows.append({
             "node_id": str(node_id),
-            f"{prefix}n_crash_total": n,  # plan name past_n_crash_total
+            f"{prefix}n_crash_total": n,
             f"{prefix}n_crash_fsi": n_fsi,
             f"{prefix}n_crash_ped": n_ped,
             f"{prefix}n_crash_bike": n_bike,
@@ -113,6 +120,9 @@ def aggregate_crash_features(crashes_assigned: pd.DataFrame, prefix: str = "past
             f"{prefix}prop_turning": turn,
             f"{prefix}prop_cause_speed": cause_speed,
             f"{prefix}prop_cause_yield": cause_yield,
+            f"{prefix}prop_poor_weather": prop_poor_weather,
+            f"{prefix}prop_poor_lighting": prop_poor_lighting,
+            f"{prefix}prop_poor_surface": prop_poor_surface,
             "speed_limit_mean": float(speed.mean()) if speed.notna().any() else 0.0,
             "speed_limit_max": float(speed.max()) if speed.notna().any() else 0.0,
         })
@@ -198,7 +208,6 @@ def build_training_dataset(
     Merge past feature aggregates + future labels on intersection_id (node_id).
     intersections must have node_id, latitude, longitude.
     """
-    # Normalize crash dates
     crashes = crashes.copy()
     crashes["_ts"] = _crash_date_series(crashes)
     past_mask = _in_window(crashes["_ts"], past_start, past_end)
@@ -215,7 +224,6 @@ def build_training_dataset(
         past_crimes = crimes.iloc[0:0]
         future_crimes = crimes.iloc[0:0]
 
-    # Assign to nodes
     if not past_crashes.empty:
         past_crashes = assign_to_nearest_intersection(past_crashes, G)
     if not future_crashes.empty:
@@ -253,7 +261,6 @@ def build_training_dataset(
     if not fut_cr.empty:
         df = df.merge(fut_cr, on="node_id", how="left")
 
-    # Fill numeric gaps
     label_cols = ["future_n_crash_fsi", "future_n_crash_pb", "future_n_crime_violent"]
     for c in label_cols:
         if c not in df.columns:
@@ -261,7 +268,6 @@ def build_training_dataset(
         else:
             df[c] = df[c].fillna(0).astype(float)
 
-    # Composite raw then percentile 0-100
     raw = 10 * df["future_n_crash_fsi"] + 5 * df["future_n_crash_pb"] + 1 * df["future_n_crime_violent"]
     if raw.max() > 0:
         df["future_risk_score"] = (raw.rank(pct=True) * 100).values
@@ -282,7 +288,6 @@ def build_training_dataset(
         if c in df.columns:
             df[c] = df[c].fillna(0)
 
-    # spatial_group from lat/lon (guide grid)
     grid = 0.05
     df["spatial_group"] = (
         (df["lat"].astype(float) // grid).astype(int) * 1000
@@ -290,3 +295,4 @@ def build_training_dataset(
     )
 
     return df
+

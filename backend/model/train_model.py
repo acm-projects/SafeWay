@@ -47,6 +47,9 @@ FEATURE_COLS = [
     "past_prop_turning",
     "past_prop_cause_speed",
     "past_prop_cause_yield",
+    "past_prop_poor_weather",
+    "past_prop_poor_lighting",
+    "past_prop_poor_surface",
     "past_n_crime_total",
     "past_n_crime_violent",
     "past_n_crime_property",
@@ -188,7 +191,6 @@ def main():
         future_end=args.future_end,
     )
 
-    # Only rows with any past signal or any future label (optional: keep all for zeros)
     y = df["future_risk_score"].astype(float)
     X = df.copy()
     for c in FEATURE_COLS:
@@ -198,7 +200,7 @@ def main():
     groups = X["spatial_group"].values
 
     from sklearn.model_selection import GroupKFold
-    from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+    from sklearn.metrics import r2_score
     from xgboost import XGBRegressor
     from scipy.stats import spearmanr
 
@@ -305,3 +307,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    

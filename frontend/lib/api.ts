@@ -216,3 +216,117 @@ export type WeatherData = {
 export async function getWeather(lat: number, lng: number): Promise<WeatherData> {
   return request<WeatherData>(`/weather?lat=${lat}&lng=${lng}`);
 }
+
+// ── Recent Searches ─────────────────────────────────────────────────────────
+
+export type RecentSearch = {
+  id: string;
+  query: string;
+  place_id?: string;
+  place_name?: string;
+  place_address?: string;
+  lat?: number;
+  lng?: number;
+  searched_at: string;
+};
+
+export async function listRecentSearches(jwt: string): Promise<RecentSearch[]> {
+  return request<RecentSearch[]>('/recent-searches', { headers: authHeaders(jwt) });
+}
+
+export async function saveRecentSearch(
+  jwt: string,
+  data: { query: string; place_id?: string; place_name?: string; place_address?: string; lat?: number; lng?: number }
+): Promise<RecentSearch> {
+  return request<RecentSearch>('/recent-searches', {
+    method: 'POST',
+    headers: authHeaders(jwt),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteRecentSearch(jwt: string, id: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/recent-searches/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(jwt),
+  });
+}
+
+export async function clearRecentSearches(jwt: string): Promise<void> {
+  await request<{ cleared: boolean }>('/recent-searches', {
+    method: 'DELETE',
+    headers: authHeaders(jwt),
+  });
+}
+
+// ── Emergency Contacts ──────────────────────────────────────────────────────
+
+export type EmergencyContact = {
+  id: string;
+  name: string;
+  phone: string;
+  relationship?: string;
+  priority: number;
+  created_at: string;
+};
+
+export async function listEmergencyContacts(jwt: string): Promise<EmergencyContact[]> {
+  return request<EmergencyContact[]>('/emergency-contacts', { headers: authHeaders(jwt) });
+}
+
+export async function createEmergencyContact(
+  jwt: string,
+  data: { name: string; phone: string; relationship?: string; priority?: number }
+): Promise<EmergencyContact> {
+  return request<EmergencyContact>('/emergency-contacts', {
+    method: 'POST',
+    headers: authHeaders(jwt),
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteEmergencyContact(jwt: string, id: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/emergency-contacts/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(jwt),
+  });
+}
+
+// ── User Settings ───────────────────────────────────────────────────────────
+
+export type UserSettings = {
+  sos_direct_911: boolean;
+  sos_silent_share: boolean;
+};
+
+export async function getUserSettings(jwt: string): Promise<UserSettings> {
+  return request<UserSettings>('/user-settings', { headers: authHeaders(jwt) });
+}
+
+export async function updateUserSettings(jwt: string, data: UserSettings): Promise<UserSettings> {
+  return request<UserSettings>('/user-settings', {
+    method: 'PUT',
+    headers: authHeaders(jwt),
+    body: JSON.stringify(data),
+  });
+}
+
+// ── News ────────────────────────────────────────────────────────────────────
+
+export type NewsArticle = {
+  title: string;
+  description: string;
+  url: string;
+  image: string | null;
+  publishedAt: string;
+  source: string;
+};
+
+export async function getNews(category?: string, location?: string): Promise<NewsArticle[]> {
+  const params = new URLSearchParams();
+  if (category) params.set('category', category);
+  if (location) params.set('location', location);
+  const q = params.toString() ? `?${params.toString()}` : '';
+  const data = await request<{ articles: NewsArticle[] }>(`/news${q}`);
+  return data.articles ?? [];
+}
