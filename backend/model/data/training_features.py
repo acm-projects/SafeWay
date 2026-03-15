@@ -95,13 +95,21 @@ def aggregate_crash_features(crashes_assigned: pd.DataFrame, prefix: str = "past
         cause_yield = _type_prop(cause, lambda s: "YIELD" in s or "FAILED TO" in s)
         speed = pd.to_numeric(sub.get("posted_speed_limit"), errors="coerce")
 
-        # Weather features
+        # Officer-reported weather features
         weather = sub["weather_condition"].map(_u) if "weather_condition" in sub.columns else pd.Series(dtype=str)
         lighting = sub["lighting_condition"].map(_u) if "lighting_condition" in sub.columns else pd.Series(dtype=str)
         surface = sub["roadway_surface_cond"].map(_u) if "roadway_surface_cond" in sub.columns else pd.Series(dtype=str)
         prop_poor_weather = _type_prop(weather, lambda s: any(k in s for k in ("RAIN", "SNOW", "SLEET", "FOG", "WIND", "BLOWING")))
         prop_poor_lighting = _type_prop(lighting, lambda s: any(k in s for k in ("DARK", "DUSK", "DAWN")))
         prop_poor_surface = _type_prop(surface, lambda s: any(k in s for k in ("WET", "SNOW", "ICE", "SLUSH", "SAND")))
+
+        # Open-Meteo weather features (mean values at crash time)
+        omw_temp = pd.to_numeric(sub.get("omw_temperature_2m"), errors="coerce")
+        omw_precip = pd.to_numeric(sub.get("omw_precipitation"), errors="coerce")
+        omw_snow = pd.to_numeric(sub.get("omw_snowfall"), errors="coerce")
+        omw_wind = pd.to_numeric(sub.get("omw_wind_speed_10m"), errors="coerce")
+        omw_vis = pd.to_numeric(sub.get("omw_visibility"), errors="coerce")
+        omw_cloud = pd.to_numeric(sub.get("omw_cloud_cover"), errors="coerce")
 
         rows.append({
             "node_id": str(node_id),
@@ -123,6 +131,12 @@ def aggregate_crash_features(crashes_assigned: pd.DataFrame, prefix: str = "past
             f"{prefix}prop_poor_weather": prop_poor_weather,
             f"{prefix}prop_poor_lighting": prop_poor_lighting,
             f"{prefix}prop_poor_surface": prop_poor_surface,
+            f"{prefix}mean_temp": float(omw_temp.mean()) if omw_temp.notna().any() else 0.0,
+            f"{prefix}mean_precip": float(omw_precip.mean()) if omw_precip.notna().any() else 0.0,
+            f"{prefix}mean_snowfall": float(omw_snow.mean()) if omw_snow.notna().any() else 0.0,
+            f"{prefix}mean_wind_speed": float(omw_wind.mean()) if omw_wind.notna().any() else 0.0,
+            f"{prefix}mean_visibility": float(omw_vis.mean()) if omw_vis.notna().any() else 0.0,
+            f"{prefix}mean_cloud_cover": float(omw_cloud.mean()) if omw_cloud.notna().any() else 0.0,
             "speed_limit_mean": float(speed.mean()) if speed.notna().any() else 0.0,
             "speed_limit_max": float(speed.max()) if speed.notna().any() else 0.0,
         })

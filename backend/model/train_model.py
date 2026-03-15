@@ -50,6 +50,12 @@ FEATURE_COLS = [
     "past_prop_poor_weather",
     "past_prop_poor_lighting",
     "past_prop_poor_surface",
+    "past_mean_temp",
+    "past_mean_precip",
+    "past_mean_snowfall",
+    "past_mean_wind_speed",
+    "past_mean_visibility",
+    "past_mean_cloud_cover",
     "past_n_crime_total",
     "past_n_crime_violent",
     "past_n_crime_property",
@@ -175,6 +181,17 @@ def main():
             with open(cache_meta, "w") as f:
                 json.dump({"start": args.past_start, "end": args.future_end}, f, indent=2)
             print(f"  Cached to {cache_crashes.name} and {cache_crimes.name}.", flush=True)
+
+    # Load weather merged crashes if available
+    weather_cache = OUTPUT_DIR / "crashes_with_weather.csv"
+    if weather_cache.exists():
+        print("Loading weather-merged crashes from cache...", flush=True)
+        crashes = pd.read_csv(weather_cache)
+        crashes["crash_date"] = pd.to_datetime(crashes["crash_date"], errors="coerce", utc=True)
+        for col in ("has_ped", "has_bike", "is_fsi"):
+            if col in crashes.columns:
+                crashes[col] = crashes[col].fillna(False).astype(bool)
+        print(f"  Loaded {len(crashes)} weather-merged crashes.", flush=True)
 
     print("Loading OSM graph...")
     intersections, G = get_chicago_intersections()
