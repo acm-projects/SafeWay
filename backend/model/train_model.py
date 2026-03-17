@@ -182,11 +182,24 @@ def main():
                 json.dump({"start": args.past_start, "end": args.future_end}, f, indent=2)
             print(f"  Cached to {cache_crashes.name} and {cache_crimes.name}.", flush=True)
 
+<<<<<<< HEAD
     # Load weather merged crashes if available
     weather_cache = OUTPUT_DIR / "crashes_with_weather.csv"
     if weather_cache.exists():
         print("Loading weather-merged crashes from cache...", flush=True)
         crashes = pd.read_csv(weather_cache)
+=======
+        gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+        if not gcs_key or not os.path.isfile(gcs_key):
+            raise SystemExit(
+                "GCS_CREDENTIALS_PATH is not set or file not found. "
+                "Set it to your service account key, or use --from-supabase / --from-socrata."
+            )
+        fs = gcsfs.GCSFileSystem(token=gcs_key)
+        print("Loading crashes from GCS (gs://safeway-data/crashes.parquet)...", flush=True)
+        with fs.open("safeway-data/crashes.parquet", "rb") as f:
+            crashes = pd.read_parquet(f)
+>>>>>>> 3233a29 (added gcs bucket, pushed data, added nightly.yml, retrained model on weather, fixed json key securely)
         crashes["crash_date"] = pd.to_datetime(crashes["crash_date"], errors="coerce", utc=True)
         for col in ("has_ped", "has_bike", "is_fsi"):
             if col in crashes.columns:
@@ -306,18 +319,28 @@ def main():
 
     if not args.no_push:
         from backend.model.data.intersections import build_intersection_safety_scores
-        from backend.model.data.supabase_intersection_safety import push_intersection_safety_to_supabase
 
         pred_map = df.set_index("node_id")[["predicted_risk", "future_risk_score"]]
         scores = build_intersection_safety_scores(crashes, crimes, intersections, G)
         scores = scores.merge(pred_map.reset_index(), on="node_id", how="left")
         scores["predicted_risk"] = scores["predicted_risk"].fillna(float(y.median()))
         scores["future_risk_score"] = scores["future_risk_score"].fillna(0)
-        try:
-            push_intersection_safety_to_supabase(scores, batch_size=1000)
-            print("Pushed intersection_safety including predicted_risk (run migration 008 if failed).")
-        except Exception as e:
-            print(f"Supabase push skipped: {e}")
+
+        import os
+        from dotenv import load_dotenv
+        load_dotenv(_repo_root / "backend" / ".env")
+        import gcsfs
+        gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+        if not gcs_key or not os.path.isfile(gcs_key):
+            print("GCS_CREDENTIALS_PATH is not set or file not found; skipping intersection_scores.parquet write.", flush=True)
+        else:
+            try:
+                fs = gcsfs.GCSFileSystem(token=gcs_key)
+                with fs.open("safeway-data/intersection_scores.parquet", "wb") as f:
+                    scores.to_parquet(f, index=False)
+                print("intersection_scores.parquet -> GCS OK (gs://safeway-data/).")
+            except Exception as e:
+                print(f"GCS write skipped: {e}")
 
     print("Done.")
 
