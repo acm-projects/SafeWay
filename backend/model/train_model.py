@@ -61,6 +61,10 @@ FEATURE_COLS = [
     "past_n_crime_property",
     "past_prop_violent",
     "past_n_crime_night",
+    "past_n_camera_records",
+    "past_n_speed_camera",
+    "past_n_redlight_camera",
+    "past_total_violations",
     "speed_limit_mean",
     "speed_limit_max",
     "n_arms",
@@ -118,7 +122,6 @@ def main():
         from backend.model.data.crimes import get_crimes
 
         print("Fetching crashes from Socrata (full range)...", flush=True)
-        print("  (Next logs: Crashes -> Vehicles -> People pagination; then merge done.)", flush=True)
         crashes = get_enriched_crashes(
             start_date=args.past_start,
             end_date=args.future_end,
@@ -193,6 +196,15 @@ def main():
                 crashes[col] = crashes[col].fillna(False).astype(bool)
         print(f"  Loaded {len(crashes)} weather-merged crashes.", flush=True)
 
+    # Load camera violations if available
+    cameras = None
+    camera_cache = OUTPUT_DIR / "camera_violations.csv"
+    if camera_cache.exists():
+        print("Loading camera violations from cache...", flush=True)
+        cameras = pd.read_csv(camera_cache)
+        cameras["violation_date"] = pd.to_datetime(cameras["violation_date"], errors="coerce")
+        print(f"  Loaded {len(cameras)} camera violation records.", flush=True)
+
     print("Loading OSM graph...")
     intersections, G = get_chicago_intersections()
 
@@ -206,6 +218,7 @@ def main():
         past_end=args.past_end,
         future_start=args.future_start,
         future_end=args.future_end,
+        cameras=cameras,
     )
 
     y = df["future_risk_score"].astype(float)
@@ -324,5 +337,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
     

@@ -143,6 +143,28 @@ def aggregate_crash_features(crashes_assigned: pd.DataFrame, prefix: str = "past
     return pd.DataFrame(rows)
 
 
+def aggregate_camera_features(cameras_assigned: pd.DataFrame, prefix: str = "past_") -> pd.DataFrame:
+    """Group by nearest_node_id -> camera violation counts per intersection."""
+    if cameras_assigned.empty or "nearest_node_id" not in cameras_assigned.columns:
+        return pd.DataFrame()
+
+    g = cameras_assigned.groupby("nearest_node_id")
+    rows = []
+    for node_id, sub in g:
+        n_total = len(sub)
+        n_speed = int((sub["camera_type"] == "speed").sum()) if "camera_type" in sub.columns else 0
+        n_redlight = int((sub["camera_type"] == "red_light").sum()) if "camera_type" in sub.columns else 0
+        total_violations = float(pd.to_numeric(sub.get("violations"), errors="coerce").fillna(0).sum())
+        rows.append({
+            "node_id": str(node_id),
+            f"{prefix}n_camera_records": n_total,
+            f"{prefix}n_speed_camera": n_speed,
+            f"{prefix}n_redlight_camera": n_redlight,
+            f"{prefix}total_violations": total_violations,
+        })
+    return pd.DataFrame(rows)
+
+
 def aggregate_crime_features(crimes_assigned: pd.DataFrame, prefix: str = "past_") -> pd.DataFrame:
     if crimes_assigned.empty or "nearest_node_id" not in crimes_assigned.columns:
         return pd.DataFrame()
@@ -217,6 +239,7 @@ def build_training_dataset(
     past_end: str = "2025-01-31",
     future_start: str = "2025-02-01",
     future_end: str = "2026-01-31",
+    cameras: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Merge past feature aggregates + future labels on intersection_id (node_id).
@@ -247,6 +270,18 @@ def build_training_dataset(
     if not future_crimes.empty:
         future_crimes = assign_to_nearest_intersection(future_crimes, G)
 
+    # Assign cameras to nearest intersection
+    past_cameras = pd.DataFrame()
+    if cameras is not None and not cameras.empty:
+        cameras = cameras.copy()
+        if "violation_date" in cameras.columns:
+            cameras["_ts"] = pd.to_datetime(cameras["violation_date"], errors="coerce")
+            past_cameras = cameras[_in_window(cameras["_ts"], past_start, past_end)].drop(columns=["_ts"], errors="ignore")
+        else:
+            past_cameras = cameras
+        if not past_cameras.empty:
+            past_cameras = assign_to_nearest_intersection(past_cameras, G)
+
     df = intersections[["node_id", "latitude", "longitude"]].copy()
     df = df.rename(columns={"latitude": "lat", "longitude": "lon"})
 
@@ -267,6 +302,10 @@ def build_training_dataset(
     past_crime_feat = aggregate_crime_features(past_crimes, "past_")
     if not past_crime_feat.empty:
         df = df.merge(past_crime_feat, on="node_id", how="left")
+    if not past_cameras.empty:
+        past_camera_feat = aggregate_camera_features(past_cameras, "past_")
+        if not past_camera_feat.empty:
+            df = df.merge(past_camera_feat, on="node_id", how="left")
 
     fut_c = aggregate_future_crash_labels(future_crashes)
     if not fut_c.empty:
@@ -310,3 +349,6 @@ def build_training_dataset(
 
     return df
 
+
+
+    
