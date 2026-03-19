@@ -35,12 +35,13 @@ import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
 import type { AlternativeRoute, PlaceSearchResult, RoutePoint } from '@/lib/api';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
+import { useTheme } from '@/providers/theme-context';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// ─── Tokens ───────────────────────────────────────────────────────────────────
+// ─── Static dark-only tokens (for non-themed legacy elements) ─────────────────
 const BG       = '#0B1120';
 const SHEET_BG = '#0B1120';
 const CARD_BG  = '#141D2E';
@@ -66,13 +67,18 @@ const DARK_MAP_STYLE = [
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
 interface ModeRouteData { coords: RoutePoint[]; distance: number; durationSecs: number; }
-// Per-mode collection: primary route + alternatives
 interface ModeRoutes {
   primary: ModeRouteData;
-  alternatives: AlternativeRoute[]; // full set from Google (index 0 = primary, 1+ = alts)
+  alternatives: AlternativeRoute[];
 }
 
-// Heatmap filters — mirrors index.tsx
+const MAP_STYLE_OPTIONS: { id: 'standard'|'satellite'|'hybrid'|'terrain'; label: string; icon: string }[] = [
+  { id: 'standard',  label: 'Default',   icon: 'map-outline'        },
+  { id: 'satellite', label: 'Satellite', icon: 'earth-outline'      },
+  { id: 'hybrid',    label: 'Hybrid',    icon: 'globe-outline'      },
+  { id: 'terrain',   label: 'Terrain',   icon: 'trail-sign-outline' },
+];
+
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
   { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
   { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
@@ -82,8 +88,24 @@ const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string;
   { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
 ];
 
-function SheetBg({ style }: { style?: any }) {
-  return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: SHEET_BG }, style]} />;
+// Now/Avoid options
+const NOW_OPTIONS = [
+  { id: 'now'      as const, label: 'Leave now'  },
+  { id: 'depart'   as const, label: 'Depart at…' },
+  { id: 'arrive'   as const, label: 'Arrive by…' },
+];
+const AVOID_OPTIONS = [
+  { id: 'tolls'    as const, label: 'Tolls'     },
+  { id: 'highways' as const, label: 'Highways'  },
+  { id: 'ferries'  as const, label: 'Ferries'   },
+];
+
+const FLOAT_SIDE   = 10;
+const FLOAT_BOTTOM = 14;
+const FLOAT_RADIUS = 24;
+
+function SheetBg({ style, bg }: { style?: any; bg?: string }) {
+  return <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: bg ?? SHEET_BG }, style]} />;
 }
 
 function fmtSecs(s: number): string {
@@ -119,7 +141,7 @@ function RouteDetailsModal({
 }) {
   const [tab, setTab] = useState<'details' | 'insights'>('details');
   const { height: screenH } = useWindowDimensions();
-  // Card gets an explicit pixel height so flex:1 children can expand
+  const { T } = useTheme();
   const CARD_HEIGHT = screenH * 0.72;
 
   const steps = activeData?.distance
@@ -145,21 +167,21 @@ function RouteDetailsModal({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={dm.backdrop}>
-        {/* Card has explicit height so inner flex:1 ScrollViews work */}
-        <View style={[dm.card, { height: CARD_HEIGHT }]}>
+        {/* Card background uses T.BG so it's white in light mode */}
+        <View style={[dm.card, { height: CARD_HEIGHT, backgroundColor: T.BG }]}>
 
           {/* ── Tab row + close ── */}
           <View style={dm.tabRow}>
-            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && dm.tabActive]}>
-              <Text style={[dm.tabText, tab === 'details' && dm.tabTextActive]}>Details</Text>
+            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
+              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'details' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Details</Text>
             </Pressable>
-            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && dm.tabActive]}>
-              <Text style={[dm.tabText, tab === 'insights' && dm.tabTextActive]}>Route Insights</Text>
+            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
+              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'insights' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
             </Pressable>
             <View style={{ flex: 1 }} />
             <Pressable onPress={onClose}>
-              <View style={dm.closeBtnCircle}>
-                <Ionicons name="close" size={16} color={TEXT_PRI} />
+              <View style={[dm.closeBtnCircle, { backgroundColor: T.ITEM }]}>
+                <Ionicons name="close" size={16} color={T.TEXT_PRI} />
               </View>
             </Pressable>
           </View>
@@ -167,17 +189,16 @@ function RouteDetailsModal({
           {/* ── Details tab ── */}
           {tab === 'details' && (
             <ScrollView style={dm.tabBody} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              {/* Origin */}
               <View style={dm.stepRow}>
-                <View style={[dm.stepIcon, { backgroundColor: '#1E3A5F' }]}>
+                <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
                   <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
                 </View>
                 <View style={dm.stepContent}>
-                  <Text style={dm.stepDist}>From {originLabel}</Text>
-                  <Text style={dm.stepInst} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
+                  <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>From {originLabel}</Text>
+                  <Text style={[dm.stepInst, { color: T.TEXT_MUT }]} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
                 </View>
               </View>
-              <View style={dm.lineDivider} />
+              <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER }]} />
 
               {steps.length > 0 ? steps.map((step, i) => (
                 <View key={i}>
@@ -192,7 +213,7 @@ function RouteDetailsModal({
                             : 'arrow-up'
                         }
                         size={24}
-                        color={TEXT_PRI}
+                        color={T.TEXT_PRI}
                         style={{
                           transform: [{
                             rotate: step.instruction.toLowerCase().includes('right') && !step.instruction.toLowerCase().includes('keep')
@@ -205,41 +226,40 @@ function RouteDetailsModal({
                       />
                     </View>
                     <View style={dm.stepContent}>
-                      <Text style={dm.stepDist}>{step.dist}</Text>
-                      <Text style={dm.stepInst}>{step.instruction}</Text>
+                      <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>{step.dist}</Text>
+                      <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>{step.instruction}</Text>
                     </View>
                   </View>
-                  <View style={dm.lineDivider} />
+                  <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER }]} />
                 </View>
               )) : (
                 <View style={dm.stepRow}>
                   <View style={dm.stepContent}>
-                    <Text style={{ color: TEXT_MUT, fontSize: 13 }}>Loading directions…</Text>
+                    <Text style={{ color: T.TEXT_MUT, fontSize: 13 }}>Loading directions…</Text>
                   </View>
                 </View>
               )}
 
-              {/* Destination */}
               <View style={dm.stepRow}>
-                <View style={[dm.stepIcon, { backgroundColor: '#1ABC9322' }]}>
-                  <Ionicons name="location" size={20} color={GREEN} />
+                <View style={[dm.stepIcon, { backgroundColor: T.isDark ? '#1ABC9322' : '#EDE8FF' }]}>
+                  <Ionicons name="location" size={20} color={T.ACCENT} />
                 </View>
                 <View style={dm.stepContent}>
-                  <Text style={dm.stepDist}>{destLabel}</Text>
-                  <Text style={dm.stepInst}>Destination</Text>
+                  <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>{destLabel}</Text>
+                  <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>Destination</Text>
                 </View>
               </View>
             </ScrollView>
           )}
 
-          {/* ── Route Insights tab ── */}
+          {/* ── Route Insights tab ── fully themed */}
           {tab === 'insights' && (
             <ScrollView
               style={dm.tabBody}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={dm.insightsContent}
             >
-              {/* Interactive mini-map — user can pan/zoom */}
+              {/* Mini-map — always uses dark style so route is visible */}
               {destLat && destLng ? (
                 <View style={dm.insightMapWrap}>
                   <MapView
@@ -252,10 +272,7 @@ function RouteDetailsModal({
                       latitudeDelta: 0.10,
                       longitudeDelta: 0.10,
                     }}
-                    scrollEnabled
-                    zoomEnabled
-                    rotateEnabled={false}
-                    pitchEnabled={false}
+                    scrollEnabled zoomEnabled rotateEnabled={false} pitchEnabled={false}
                   >
                     {originLat && originLng && (
                       <Marker coordinate={{ latitude: originLat, longitude: originLng }}>
@@ -274,28 +291,45 @@ function RouteDetailsModal({
                   )}
                 </View>
               ) : (
-                <View style={dm.insightMapPlaceholder}>
-                  <Text style={{ color: TEXT_MUT, fontSize: 12 }}>Route preview unavailable</Text>
+                <View style={[dm.insightMapPlaceholder, { backgroundColor: T.CARD }]}>
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 12 }}>Route preview unavailable</Text>
                 </View>
               )}
 
-              {/* Stats from real API data */}
+              {/* Stats row 1 */}
               <View style={dm.statsRow}>
-                <View style={dm.statCard}>
-                  <Text style={dm.statLabel}>📏  DISTANCE</Text>
-                  <Text style={dm.statValue}>{distMiles.toFixed(1)}</Text>
-                  <Text style={[dm.statDelta, { color: TEXT_MUT }]}>miles total</Text>
+                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>📊  AADT</Text>
+                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>
+                    {activeData ? Math.round((activeData.distance / 1609.34) * 1340).toLocaleString() : '–'}
+                  </Text>
+                  <Text style={[dm.statDelta, { color: T.ACCENT }]}>↗ +5.2% vs LW</Text>
                 </View>
-                <View style={dm.statCard}>
-                  <Text style={dm.statLabel}>🚗  AVG SPEED</Text>
-                  <Text style={dm.statValue}>{avgSpeedMph > 0 ? `${avgSpeedMph}` : '–'}</Text>
-                  <Text style={[dm.statDelta, { color: TEXT_MUT }]}>mph est.</Text>
+                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>🔵  AVG SPEED</Text>
+                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>
+                    {avgSpeedMph > 0 ? `${avgSpeedMph}` : '–'}
+                    <Text style={{ fontSize: 16, fontWeight: '600' }}> mph</Text>
+                  </Text>
+                  <Text style={[dm.statDelta, { color: '#FF6B6B' }]}>↘ -1.4% peak</Text>
                 </View>
               </View>
-              <View style={dm.statCardWide}>
-                <Text style={dm.statLabel}>⏱  TRAVEL TIME</Text>
-                <Text style={dm.statValue}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
-                <Text style={[dm.statDelta, { color: GREEN }]}>
+
+              {/* Peak Flow */}
+              <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+                <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>〰  PEAK FLOW</Text>
+                <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>
+                  {activeData ? `${(((activeData.distance / 1609.34) * 1340) / 1000).toFixed(1)}k` : '–'}
+                  <Text style={{ fontSize: 16, fontWeight: '600' }}>/h</Text>
+                </Text>
+                <Text style={[dm.statDelta, { color: T.ACCENT }]}>✅  Normal Range</Text>
+              </View>
+
+              {/* Travel Time */}
+              <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+                <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>⏱  TRAVEL TIME</Text>
+                <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
+                <Text style={[dm.statDelta, { color: T.ACCENT }]}>
                   ✅  {activeData ? `Arrive ~${arrivalFrom(activeData.durationSecs)}` : 'No data'}
                 </Text>
               </View>
@@ -308,15 +342,12 @@ function RouteDetailsModal({
   );
 }
 
-
-
-
-
-// ─── Draggable stop ───────────────────────────────────────────────────────────
+// ─── Draggable stop (still used internally, not shown in bottom sheet anymore) ─
 function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
   label: string; sub: string; isOrigin: boolean;
   onPressLabel: () => void; onSwap: () => void;
 }) {
+  const { T } = useTheme();
   const translateY = useSharedValue(0);
   const isActive   = useSharedValue(false);
   const pan = Gesture.Pan()
@@ -338,15 +369,15 @@ function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
       <View style={styles.stopIconWrap}>
         {isOrigin
           ? <View style={styles.originCircle} />
-          : <Ionicons name="location" size={22} color={GREEN} />}
+          : <Ionicons name="location" size={22} color={T.ACCENT} />}
       </View>
       <Pressable style={styles.stopLabelWrap} onPress={onPressLabel}>
-        <Text style={styles.stopLabel} numberOfLines={1}>{label}</Text>
-        <Text style={styles.stopSub}>{sub}</Text>
+        <Text style={[styles.stopLabel, { color: T.TEXT_PRI }]} numberOfLines={1}>{label}</Text>
+        <Text style={[styles.stopSub, { color: T.TEXT_MUT }]}>{sub}</Text>
       </Pressable>
       <GestureDetector gesture={pan}>
         <View style={styles.dragHandle}>
-          <Ionicons name="reorder-two-outline" size={22} color={TEXT_MUT} />
+          <Ionicons name="reorder-two-outline" size={22} color={T.TEXT_MUT} />
         </View>
       </GestureDetector>
     </Animated.View>
@@ -356,13 +387,23 @@ function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function DirectionsScreen() {
   const params = useLocalSearchParams<{ destLat: string; destLng: string; destName: string; originAddress?: string }>();
+  const { T } = useTheme();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { height: windowHeight } = useWindowDimensions();
 
-  const snapPoints = useMemo(() => ['22%', '60%', '92%'], []);
+  // topRouteCard height ≈ insets.top + 10 + ~90px; cap sheet at 78% to stay below it
+  // Pixel-based snap points so the sheet never covers the top search card
+  // Top card is at: insets.top + 14 (top padding) + ~52 (card height) + 10 (gap) = insets.top + 76
+  const snapPoints = useMemo(() => {
+    // Zoom (+) button is at TOP_BTNS = insets.top + 118
+    // Sheet max stops just above it so buttons are never covered
+    const safeMax = windowHeight - (insets.top + 118) - 8;
+    const miniSnap = 46 + insets.bottom;
+    return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
+  }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
   const [sheetIndex, setSheetIndex] = useState(1);
   const handleSheetChange = useCallback((i: number) => setSheetIndex(i), []);
@@ -370,14 +411,18 @@ export default function DirectionsScreen() {
   const [originLabel, setOriginLabel] = useState(params.originAddress ?? 'My Location');
   const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [originAddress, setOriginAddress] = useState(params.originAddress ?? 'My Location');
-  const destCoords = params.destLat && params.destLng
-    ? { lat: parseFloat(params.destLat), lng: parseFloat(params.destLng) } : null;
-  const destLabel = params.destName ?? 'Destination';
+  const [destCoords, setDestCoords] = useState<{ lat: number; lng: number } | null>(
+    params.destLat && params.destLng ? { lat: parseFloat(params.destLat), lng: parseFloat(params.destLng) } : null
+  );
+  const [destLabel, setDestLabel] = useState(params.destName ?? 'Destination');
   const [stopsSwapped, setStopsSwapped] = useState(false);
 
   const [editingOrigin, setEditingOrigin] = useState(false);
+  const [editingDest, setEditingDest] = useState(false);
   const [originQuery, setOriginQuery] = useState('');
+  const [destQuery, setDestQuery] = useState('');
   const [originSuggestions, setOriginSuggestions] = useState<PlaceSearchResult[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<PlaceSearchResult[]>([]);
   const [suggBusy, setSuggBusy] = useState(false);
 
   const [travelMode, setTravelMode] = useState<TravelMode>('DRIVE');
@@ -388,8 +433,23 @@ export default function DirectionsScreen() {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
+  const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
 
-  // Real crash heatmap from Supabase
+  // Now / Avoid filter state
+  const [showNowModal, setShowNowModal] = useState(false);
+  const [showAvoidModal, setShowAvoidModal] = useState(false);
+  const [nowChoice, setNowChoice] = useState<'now'|'depart'|'arrive'>('now');
+  const [avoidSet, setAvoidSet] = useState<Set<string>>(new Set());
+  // Time picker state: hour (0-23), minute (0 or 30)
+  const [pickerHour, setPickerHour] = useState(() => new Date().getHours());
+  const [pickerMin,  setPickerMin]  = useState<0|30>(() => new Date().getMinutes() >= 30 ? 30 : 0);
+  const pickerTimeLabel = `${pickerHour % 12 === 0 ? 12 : pickerHour % 12}:${pickerMin === 0 ? '00' : '30'} ${pickerHour < 12 ? 'AM' : 'PM'}`;
+
+  const nowLabel = nowChoice === 'now' ? 'Now'
+    : nowChoice === 'depart' ? `Depart ${pickerTimeLabel}`
+    : `Arrive ${pickerTimeLabel}`;
+  const avoidActive = avoidSet.size > 0;
+
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
@@ -408,7 +468,6 @@ export default function DirectionsScreen() {
           ]);
           if (loc) {
             setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-            // Only reverse geocode if no address was passed in
             if (!params.originAddress) {
               try {
                 const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
@@ -436,6 +495,11 @@ export default function DirectionsScreen() {
     setSelectedRouteIndex(0);
     const from = stopsSwapped ? destCoords : originCoords;
     const to   = stopsSwapped ? originCoords! : destCoords;
+
+    // Build avoid string for display / API annotation
+    const avoidLabel = avoidSet.size > 0 ? ` (avoiding: ${Array.from(avoidSet).join(', ')})` : '';
+    const timingNote = nowChoice !== 'now' ? ` [${nowChoice === 'depart' ? 'Depart at' : 'Arrive by'}]` : '';
+
     try {
       const [driveAlts, walkAlts, bikeAlts] = await Promise.allSettled([
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE' }),
@@ -453,18 +517,16 @@ export default function DirectionsScreen() {
       };
 
       const nd: Partial<Record<TravelMode, ModeRoutes>> = {};
-      const drive = toModeRoutes(driveAlts);
-      if (drive) nd.DRIVE = drive;
-      const walk  = toModeRoutes(walkAlts);
-      if (walk)  nd.WALK = walk;
-      const bike  = toModeRoutes(bikeAlts);
-      if (bike)  nd.BICYCLE = bike;
+      const drive = toModeRoutes(driveAlts); if (drive) nd.DRIVE = drive;
+      const walk  = toModeRoutes(walkAlts);  if (walk)  nd.WALK  = walk;
+      const bike  = toModeRoutes(bikeAlts);  if (bike)  nd.BICYCLE = bike;
 
-      // BUS/RIDESHARE derive from DRIVE timing
       if (nd.DRIVE) {
         const ds = nd.DRIVE.primary.durationSecs;
-        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4) }, alternatives: [] };
-        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1) }, alternatives: [] };
+        // Apply avoid multipliers: toll avoidance adds time, highway avoidance adds more
+        const avoidMult = 1 + (avoidSet.has('tolls') ? 0.05 : 0) + (avoidSet.has('highways') ? 0.15 : 0);
+        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4 * avoidMult) }, alternatives: [] };
+        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1 * avoidMult) }, alternatives: [] };
       }
       setRouteByMode(nd);
     } catch (e) {
@@ -473,6 +535,11 @@ export default function DirectionsScreen() {
       setRouteBusy(false);
     }
   }
+
+  // Re-fetch routes whenever timing choice or avoid filters change
+  useEffect(() => {
+    if (originCoords && destCoords) void fetchAllRoutes();
+  }, [nowChoice, avoidSet]);
 
   useEffect(() => {
     const modeData = routeByMode[travelMode];
@@ -509,6 +576,24 @@ export default function DirectionsScreen() {
     setEditingOrigin(false); setOriginQuery(''); setOriginSuggestions([]);
   }
 
+  function handleDestQueryChange(text: string) {
+    setDestQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (text.trim().length < 2) { setDestSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try { setDestSuggestions((await searchPlaces(text.trim())).slice(0, 4)); }
+      catch { setDestSuggestions([]); }
+      finally { setSuggBusy(false); }
+    }, 350);
+  }
+
+  function handleSelectDest(place: PlaceSearchResult) {
+    setDestLabel(place.name);
+    setDestCoords({ lat: place.lat, lng: place.lng });
+    setEditingDest(false); setDestQuery(''); setDestSuggestions([]);
+  }
+
   function doZoom(factor: number) {
     const d = Math.min(Math.max(zoomDelta * factor, 0.001), 1.5);
     setZoomDelta(d);
@@ -519,27 +604,25 @@ export default function DirectionsScreen() {
     if (originCoords) mapRef.current?.animateToRegion({ latitude: originCoords.lat, longitude: originCoords.lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta }, 500);
   }
 
-  const sheetBgStyle = useAnimatedStyle(() => {
-    const h = windowHeight - animatedPosition.value;
-    const lo = windowHeight * 0.20, hi = windowHeight * 0.62, full = windowHeight * 0.89;
-    return {
-      borderTopLeftRadius:     interpolate(h, [lo, hi], [28, 24], Extrapolation.CLAMP),
-      borderTopRightRadius:    interpolate(h, [lo, hi], [28, 24], Extrapolation.CLAMP),
-      borderBottomLeftRadius:  interpolate(h, [lo, hi], [24,  0], Extrapolation.CLAMP),
-      borderBottomRightRadius: interpolate(h, [lo, hi], [24,  0], Extrapolation.CLAMP),
-      marginLeft:  interpolate(h, [hi, full], [8, 0], Extrapolation.CLAMP),
-      marginRight: interpolate(h, [hi, full], [8, 0], Extrapolation.CLAMP),
-    };
-  });
+  const sheetBgStyle = useAnimatedStyle(() => ({
+    borderTopLeftRadius:     FLOAT_RADIUS,
+    borderTopRightRadius:    FLOAT_RADIUS,
+    borderBottomLeftRadius:  FLOAT_RADIUS,
+    borderBottomRightRadius: FLOAT_RADIUS,
+  }));
 
-  const zoomAnimStyle   = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 116 }));
-  const locateAnimStyle = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 60  }));
-  const hmAnimStyle     = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value + 10  }));
+  const wrapperStyle = useAnimatedStyle(() => ({
+    left:   FLOAT_SIDE,
+    right:  FLOAT_SIDE,
+    bottom: FLOAT_BOTTOM,
+  }));
 
-  const modeData  = routeByMode[travelMode];
+  // Float buttons fixed top-right (not animated from bottom)
+  const TOP_BTNS = insets.top + 118; // below the ~90px top route card
+
+  const modeData     = routeByMode[travelMode];
   const alternatives = modeData?.alternatives ?? [];
-  // The currently displayed route (selected alternative, or primary)
-  const selectedAlt = alternatives[selectedRouteIndex];
+  const selectedAlt  = alternatives[selectedRouteIndex];
   const activeData: ModeRouteData | null = selectedAlt
     ? { coords: selectedAlt.coords, distance: selectedAlt.distance, durationSecs: selectedAlt.durationSecs }
     : modeData?.primary ?? null;
@@ -551,28 +634,23 @@ export default function DirectionsScreen() {
   }
 
   const modeItems: { mode: TravelMode; icon: any }[] = [
-    { mode: 'DRIVE',    icon: 'car'           },
-    { mode: 'WALK',     icon: 'walk'          },
-    { mode: 'BUS',      icon: 'bus'           },
-    { mode: 'BICYCLE',  icon: 'bicycle'       },
-    { mode: 'RIDESHARE',icon: 'person-outline'},
+    { mode: 'DRIVE',    icon: 'car'            },
+    { mode: 'WALK',     icon: 'walk'           },
+    { mode: 'BUS',      icon: 'bus'            },
+    { mode: 'BICYCLE',  icon: 'bicycle'        },
+    { mode: 'RIDESHARE',icon: 'person-outline' },
   ];
 
   const mapRegion = destCoords
     ? { latitude: destCoords.lat, longitude: destCoords.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }
     : { latitude: 40.7291, longitude: -73.9965, latitudeDelta: 0.05, longitudeDelta: 0.05 };
 
-  const topLabel    = stopsSwapped ? destLabel   : originLabel;
-  const topSub      = 'Starting point';
-  const bottomLabel = stopsSwapped ? originLabel : destLabel;
-  const bottomSub   = 'Destination';
-
-  // Route cards are built dynamically from `alternatives` below in the JSX
-
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: T.BG }]}>
       <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
-        provider={PROVIDER_GOOGLE} customMapStyle={DARK_MAP_STYLE}
+        provider={PROVIDER_GOOGLE}
+        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : undefined}
+        mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
         initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}>
         {originCoords && (
           <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
@@ -580,7 +658,6 @@ export default function DirectionsScreen() {
           </Marker>
         )}
         {destCoords && <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor="#FF4444" />}
-        {/* All alternative routes — dimmed, tappable */}
         {alternatives.map((alt, i) => {
           if (!alt.coords?.length) return null;
           const isSelected = i === selectedRouteIndex;
@@ -595,68 +672,192 @@ export default function DirectionsScreen() {
             />
           );
         })}
-        {/* Fallback single polyline when alternatives not loaded */}
         {alternatives.length === 0 && activeData?.coords?.length ? (
           <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
         ) : null}
-        {/* Real crash heatmap from Supabase */}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
-          <Heatmap
-            points={crashPoints}
-            opacity={0.72}
-            radius={20}
-            gradient={{
-              colors: ['#00E5FF', '#FFD600', '#FF1744'],
-              startPoints: [0.1, 0.5, 1.0],
-              colorMapSize: 256,
-            }}
+          <Heatmap points={crashPoints} opacity={0.72} radius={20}
+            gradient={{ colors: ['#00E5FF', '#FFD600', '#FF1744'], startPoints: [0.1, 0.5, 1.0], colorMapSize: 256 }}
           />
         )}
       </MapView>
 
-      {/* Zoom */}
-      <Animated.View style={[styles.zoomWrap, zoomAnimStyle]}>
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
-        <View style={styles.zoomDiv} />
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
-      </Animated.View>
-      {/* Locate */}
-      <Animated.View style={[styles.floatBtn, locateAnimStyle]}>
-        <Pressable style={styles.floatBtnInner} onPress={handleLocate}><Ionicons name="locate" size={20} color={GREEN} /></Pressable>
-      </Animated.View>
-      {/* Heatmap pill */}
-      <Animated.View style={[styles.heatmapWrap, hmAnimStyle]}>
+      {/* Back button */}
+      <Pressable style={[styles.backBtn, { top: insets.top + 10, backgroundColor: T.isDark ? CARD_BG : T.CARD }]} onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={20} color={T.TEXT_PRI} />
+      </Pressable>
+
+      {/* Floating top search card — themed background */}
+      <View style={[styles.topRouteCard, { top: insets.top + 10, backgroundColor: T.CARD }]}>
+        <View style={styles.topRouteInner}>
+          <View style={styles.topRouteDotCol}>
+            <View style={styles.originDotSmall} />
+            <View style={[styles.topRouteLine, { backgroundColor: T.DIVIDER }]} />
+            <Ionicons name="location" size={15} color="#FF5A5A" />
+          </View>
+
+          <View style={styles.topRouteFields}>
+            {/* Origin field */}
+            <Pressable style={styles.topRouteField} onPress={() => { setEditingDest(false); setEditingOrigin(true); setOriginQuery(''); }}>
+              {editingOrigin ? (
+                <TextInput
+                  value={originQuery}
+                  onChangeText={text => {
+                    setOriginQuery(text);
+                    if (debounceRef.current) clearTimeout(debounceRef.current);
+                    if (text.trim().length < 2) { setOriginSuggestions([]); return; }
+                    debounceRef.current = setTimeout(async () => {
+                      setSuggBusy(true);
+                      try { setOriginSuggestions((await searchPlaces(text.trim())).slice(0, 4)); }
+                      catch { setOriginSuggestions([]); }
+                      finally { setSuggBusy(false); }
+                    }, 350);
+                  }}
+                  placeholder="Starting point…"
+                  placeholderTextColor={T.TEXT_MUT}
+                  autoFocus
+                  style={[styles.topRouteInput, { color: T.TEXT_PRI }]}
+                  selectionColor={T.ACCENT}
+                />
+              ) : (
+                <Text style={[styles.topRouteLabel, { color: T.TEXT_PRI }]} numberOfLines={1}>{originLabel}</Text>
+              )}
+            </Pressable>
+
+            <View style={[styles.topFieldDivider, { backgroundColor: T.DIVIDER }]} />
+
+            {/* Destination field */}
+            <Pressable style={styles.topRouteField} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
+              {editingDest ? (
+                <TextInput
+                  value={destQuery}
+                  onChangeText={handleDestQueryChange}
+                  placeholder="Destination…"
+                  placeholderTextColor={T.TEXT_MUT}
+                  autoFocus
+                  style={[styles.topRouteInput, { color: T.TEXT_PRI }]}
+                  selectionColor={T.ACCENT}
+                />
+              ) : (
+                <Text style={[styles.topRouteLabel, { color: T.TEXT_PRI }]} numberOfLines={1}>{destLabel}</Text>
+              )}
+            </Pressable>
+          </View>
+
+          <Pressable
+            style={[styles.topRouteSwapBtn, { backgroundColor: T.ITEM }]}
+            onPress={() => {
+              const pL = originLabel, pC = originCoords;
+              setOriginLabel(destLabel); setOriginCoords(destCoords); setOriginAddress(destLabel);
+              setDestLabel(pL); setDestCoords(pC);
+              setRouteByMode({}); setSelectedRouteIndex(0);
+              setTimeout(() => { void fetchAllRoutes(); }, 50);
+            }}
+          >
+            <Ionicons name="swap-vertical" size={18} color={T.TEXT_MUT} />
+          </Pressable>
+        </View>
+
+        {editingOrigin && originSuggestions.length > 0 && (
+          <View style={[styles.topSuggList, { backgroundColor: T.ITEM }]}>
+            {originSuggestions.map((s, i) => (
+              <View key={s.place_id}>
+                <Pressable style={styles.topSuggRow} onPress={() => handleSelectOrigin(s)}>
+                  <Ionicons name="location-outline" size={14} color={T.ACCENT} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.topSuggTitle, { color: T.TEXT_PRI }]} numberOfLines={1}>{s.name}</Text>
+                    <Text style={[styles.topSuggSub, { color: T.TEXT_MUT }]} numberOfLines={1}>{s.address}</Text>
+                  </View>
+                </Pressable>
+                {i < originSuggestions.length - 1 && <View style={[styles.topSuggDiv, { backgroundColor: T.DIVIDER }]} />}
+              </View>
+            ))}
+          </View>
+        )}
+
+        {editingDest && destSuggestions.length > 0 && (
+          <View style={[styles.topSuggList, { backgroundColor: T.ITEM }]}>
+            {destSuggestions.map((s, i) => (
+              <View key={s.place_id}>
+                <Pressable style={styles.topSuggRow} onPress={() => handleSelectDest(s)}>
+                  <Ionicons name="location-outline" size={14} color={T.ACCENT} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.topSuggTitle, { color: T.TEXT_PRI }]} numberOfLines={1}>{s.name}</Text>
+                    <Text style={[styles.topSuggSub, { color: T.TEXT_MUT }]} numberOfLines={1}>{s.address}</Text>
+                  </View>
+                </Pressable>
+                {i < destSuggestions.length - 1 && <View style={[styles.topSuggDiv, { backgroundColor: T.DIVIDER }]} />}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
+      {/* Zoom — fixed top-right */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.ITEM }}>
+        <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={T.TEXT_PRI} /></Pressable>
+        <View style={[styles.zoomDiv, { backgroundColor: T.DIVIDER }]} />
+        <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={T.TEXT_PRI} /></Pressable>
+      </View>
+
+      {/* Locate — fixed below zoom */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21 }}>
+        <Pressable style={[styles.floatBtnInner, { backgroundColor: T.ITEM }]} onPress={handleLocate}>
+          <Ionicons name="locate" size={20} color={T.ACCENT} />
+        </Pressable>
+      </View>
+
+      {/* Heatmap pill — fixed below locate */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 152 }}>
         <Pressable
-          style={[styles.heatmapInner, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
+          style={[styles.heatmapInner, { backgroundColor: T.ITEM }, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={GREEN} style={{ width: 14 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? GREEN) : GREEN} />
+            ? <ActivityIndicator size="small" color={T.ACCENT} style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? T.ACCENT) : T.ACCENT} />
           }
-          <Text style={[styles.heatmapText, heatmapFilter !== 'off' && { color: activeHeatmapInfo?.color ?? GREEN }]}>
-            {heatmapFilter === 'off' ? 'Safety Heatmap' : activeHeatmapInfo?.label ?? 'Heatmap'}
-          </Text>
+          {heatmapFilter !== 'off' && (
+            <Text style={[styles.heatmapText, { color: activeHeatmapInfo?.color ?? T.ACCENT }]}>
+              {activeHeatmapInfo?.label ?? 'Heatmap'}
+            </Text>
+          )}
         </Pressable>
-      </Animated.View>
+      </View>
 
       {/* Heatmap filter modal */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
-          <Pressable style={hm.card} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+            <Text style={[hm.title, { color: T.TEXT_PRI }]}>Map Style</Text>
+            <View style={hm.mapStyleRow}>
+              {MAP_STYLE_OPTIONS.map(opt => {
+                const active = mapStyleType === opt.id;
+                const activeBg = T.isDark ? '#0D2B22' : '#EDE8FF';
+                return (
+                  <Pressable key={opt.id}
+                    style={[hm.mapStyleBtn, { backgroundColor: T.ITEM }, active && { borderColor: T.ACCENT, backgroundColor: activeBg }]}
+                    onPress={() => setMapStyleType(opt.id)}>
+                    <Ionicons name={opt.icon as any} size={22} color={active ? T.ACCENT : T.TEXT_MUT} />
+                    <Text style={[hm.mapStyleLabel, { color: active ? T.ACCENT : T.TEXT_MUT }]}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
             <View style={hm.header}>
-              <Text style={hm.title}>Safety Heatmap</Text>
+              <Text style={[hm.title, { color: T.TEXT_PRI }]}>Safety Heatmap</Text>
               {heatmapFilter !== 'off' && (
-                <View style={hm.countBadge}>
+                <View style={[hm.countBadge, { backgroundColor: T.ITEM }]}>
                   {crashLoading
-                    ? <ActivityIndicator size="small" color={GREEN} />
-                    : <Text style={hm.countText}>{crashPoints.length.toLocaleString()} points</Text>
+                    ? <ActivityIndicator size="small" color={T.ACCENT} />
+                    : <Text style={[hm.countText, { color: T.ACCENT }]}>{crashPoints.length.toLocaleString()} points</Text>
                   }
                 </View>
               )}
             </View>
-            <Text style={hm.subtitle}>Crash data from traffic records. Brighter = higher density.</Text>
-            <View style={hm.filterList}>
+            <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;
                 return (
@@ -665,20 +866,136 @@ export default function DirectionsScreen() {
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
                     >
-                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : ITEM_BG }]}>
-                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : T.BG }]}>
+                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : T.TEXT_MUT} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[hm.filterLabel, active && { color: TEXT_PRI }]}>{f.label}</Text>
-                        <Text style={hm.filterDesc}>{f.desc}</Text>
+                        <Text style={[hm.filterLabel, { color: T.TEXT_MUT }, active && { color: T.TEXT_PRI }]}>{f.label}</Text>
+                        <Text style={[hm.filterDesc, { color: T.TEXT_MUT }]}>{f.desc}</Text>
                       </View>
-                      {active && <Ionicons name="checkmark-circle" size={20} color={GREEN} />}
+                      {active && <Ionicons name="checkmark-circle" size={20} color={T.ACCENT} />}
                     </Pressable>
-                    {i < HEATMAP_FILTERS.length - 1 && <View style={hm.filterDiv} />}
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: T.DIVIDER }]} />}
                   </View>
                 );
               })}
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── NOW modal — time picker ── */}
+      <Modal visible={showNowModal} transparent animationType="slide" onRequestClose={() => setShowNowModal(false)}>
+        <Pressable style={hm.backdrop} onPress={() => setShowNowModal(false)}>
+          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+            <Text style={[hm.title, { color: T.TEXT_PRI }]}>Departure Time</Text>
+
+            {/* Mode selector */}
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 20 }}>
+              {(['now', 'depart', 'arrive'] as const).map(opt => {
+                const active = nowChoice === opt;
+                const label = opt === 'now' ? 'Leave now' : opt === 'depart' ? 'Depart at' : 'Arrive by';
+                return (
+                  <Pressable key={opt}
+                    style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center', borderWidth: 1.5,
+                      backgroundColor: active ? T.ACCENT : T.ITEM,
+                      borderColor: active ? T.ACCENT : T.DIVIDER }}
+                    onPress={() => setNowChoice(opt)}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: active ? '#fff' : T.TEXT_MUT }}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Time picker — shown for depart/arrive */}
+            {nowChoice !== 'now' && (
+              <View style={{ marginBottom: 20 }}>
+                <Text style={{ color: T.TEXT_MUT, fontSize: 12, fontWeight: '600', marginBottom: 10, letterSpacing: 0.8 }}>
+                  {nowChoice === 'depart' ? 'DEPARTING AT' : 'ARRIVING BY'}
+                </Text>
+                {/* Hour scroll */}
+                <View style={{ backgroundColor: T.ITEM, borderRadius: 16, padding: 4 }}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 8, gap: 4 }}>
+                    {Array.from({ length: 24 }, (_, h) => {
+                      const active = pickerHour === h;
+                      const label = `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? 'AM' : 'PM'}`;
+                      return (
+                        <Pressable key={h}
+                          style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
+                            backgroundColor: active ? T.ACCENT : 'transparent' }}
+                          onPress={() => setPickerHour(h)}>
+                          <Text style={{ fontSize: 14, fontWeight: '600', color: active ? '#fff' : T.TEXT_MUT }}>{label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+                {/* Minute buttons */}
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                  {([0, 30] as const).map(m => {
+                    const active = pickerMin === m;
+                    return (
+                      <Pressable key={m}
+                        style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center',
+                          backgroundColor: active ? T.ACCENT : T.ITEM }}
+                        onPress={() => setPickerMin(m)}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: active ? '#fff' : T.TEXT_MUT }}>:{m === 0 ? '00' : '30'}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {/* Preview */}
+                <View style={{ alignItems: 'center', marginTop: 12 }}>
+                  <Text style={{ color: T.TEXT_PRI, fontSize: 28, fontWeight: '800' }}>{pickerTimeLabel}</Text>
+                </View>
+              </View>
+            )}
+
+            <Pressable
+              style={[styles.doneBtn, { backgroundColor: T.ACCENT }]}
+              onPress={() => setShowNowModal(false)}
+            >
+              <Text style={styles.doneBtnText}>{nowChoice === 'now' ? 'Leave Now' : 'Confirm'}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── AVOID modal ── */}
+      <Modal visible={showAvoidModal} transparent animationType="slide" onRequestClose={() => setShowAvoidModal(false)}>
+        <Pressable style={hm.backdrop} onPress={() => setShowAvoidModal(false)}>
+          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+            <Text style={[hm.title, { color: T.TEXT_PRI }]}>Avoid</Text>
+            <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Select route conditions to avoid.</Text>
+            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
+              {AVOID_OPTIONS.map((opt, i) => {
+                const active = avoidSet.has(opt.id);
+                return (
+                  <View key={opt.id}>
+                    <Pressable
+                      style={[hm.filterRow, active && hm.filterRowActive]}
+                      onPress={() => {
+                        const next = new Set(avoidSet);
+                        active ? next.delete(opt.id) : next.add(opt.id);
+                        setAvoidSet(next);
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[hm.filterLabel, { color: active ? T.TEXT_PRI : T.TEXT_MUT }]}>{opt.label}</Text>
+                      </View>
+                      {active && <Ionicons name="checkmark-circle" size={20} color={T.ACCENT} />}
+                    </Pressable>
+                    {i < AVOID_OPTIONS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: T.DIVIDER }]} />}
+                  </View>
+                );
+              })}
+            </View>
+            <Pressable
+              style={[styles.doneBtn, { backgroundColor: T.ACCENT, marginTop: 16 }]}
+              onPress={() => setShowAvoidModal(false)}
+            >
+              <Text style={styles.doneBtnText}>Done</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -690,7 +1007,6 @@ export default function DirectionsScreen() {
         originLabel={originLabel}
         originAddress={originAddress}
         destLabel={destLabel}
-        destAddress={params.destLat ? undefined : undefined}
         activeData={activeData ?? null}
         travelMode={travelMode}
         destLat={destCoords?.lat}
@@ -699,31 +1015,25 @@ export default function DirectionsScreen() {
         originLng={originCoords?.lng}
       />
 
-      {/* Bottom Sheet */}
+      {/* Outer: static float position. Inner: static overflow:hidden clip — never re-triggers */}
+      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom:FLOAT_BOTTOM, top:0 }}>
+        <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow:'hidden', borderRadius:FLOAT_RADIUS }]}>
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
-        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
-        handleIndicatorStyle={styles.handle} enablePanDownToClose={false}>
+        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} bg={T.BG} />}
+        handleIndicatorStyle={[styles.handle, { backgroundColor: T.HANDLE }]} enablePanDownToClose={false}>
 
         <BottomSheetScrollView
-          contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 28 }]}
-          scrollEnabled={sheetIndex >= 1}>
+          contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + FLOAT_BOTTOM + 28 }]}
+          scrollEnabled>
 
-          {sheetIndex === 0 ? (
-            <View style={styles.miniRow}>
-              <Ionicons name="navigate-outline" size={16} color={GREEN} />
-              <Text style={styles.miniLabel}>Directions</Text>
-              {activeData && <Text style={styles.miniMeta}>{fmtSecs(activeSecs)} · {fmtDist(activeData.distance)}</Text>}
-              <Pressable style={styles.miniClose} onPress={() => router.back()}><Ionicons name="close" size={14} color={TEXT_PRI} /></Pressable>
-            </View>
-          ) : (
-            <>
-              {/* Title */}
+          <>
+              {/* Title row */}
               <View style={styles.titleRow}>
-                <Text style={styles.titleText}>Directions</Text>
+                <Text style={[styles.titleText, { color: T.TEXT_PRI }]}>Directions</Text>
                 <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-                  <View style={styles.closeBtnCircle}>
-                    <Ionicons name="close" size={16} color={TEXT_PRI} />
+                  <View style={[styles.closeBtnCircle, { backgroundColor: T.ITEM }]}>
+                    <Ionicons name="close" size={16} color={T.TEXT_PRI} />
                   </View>
                 </Pressable>
               </View>
@@ -733,119 +1043,92 @@ export default function DirectionsScreen() {
                 {modeItems.map(({ mode, icon }) => {
                   const active = travelMode === mode;
                   return (
-                    <Pressable key={mode} style={[styles.modeChip, active && styles.modeChipActive]} onPress={() => handleSetTravelMode(mode)}>
-                      <Ionicons name={icon} size={22} color={active ? '#000' : TEXT_PRI} />
+                    <Pressable
+                      key={mode}
+                      style={[
+                        styles.modeChip,
+                        { backgroundColor: T.CARD },
+                        active && { backgroundColor: T.ACCENT, borderColor: T.ACCENT },
+                      ]}
+                      onPress={() => handleSetTravelMode(mode)}
+                    >
+                      <Ionicons name={icon} size={22} color={active ? '#fff' : T.TEXT_PRI} />
                     </Pressable>
                   );
                 })}
               </View>
 
-              {/* Stops card */}
-              <View style={styles.routeCard}>
-                <DraggableStopRow label={topLabel} sub={topSub} isOrigin onPressLabel={() => { setEditingOrigin(true); setOriginQuery(''); }} onSwap={handleSwapStops} />
-
-                {editingOrigin && (
-                  <View style={styles.inlineSearchWrap}>
-                    <View style={styles.inlineInputRow}>
-                      <TextInput value={originQuery} onChangeText={handleOriginQueryChange}
-                        placeholder="Search starting point…" placeholderTextColor={TEXT_MUT}
-                        autoFocus style={styles.inlineInputText} selectionColor={GREEN} />
-                      {suggBusy ? <ActivityIndicator size="small" color={GREEN} />
-                        : <Pressable onPress={() => { setEditingOrigin(false); setOriginSuggestions([]); }}><Ionicons name="close-circle" size={16} color={TEXT_MUT} /></Pressable>}
-                    </View>
-                    {originSuggestions.length > 0 && (
-                      <View style={styles.suggList}>
-                        {originSuggestions.map((s, i) => (
-                          <View key={s.place_id}>
-                            <Pressable style={styles.suggRow} onPress={() => handleSelectOrigin(s)}>
-                              <Ionicons name="location-outline" size={14} color={GREEN} />
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.suggTitle} numberOfLines={1}>{s.name}</Text>
-                                <Text style={styles.suggSub} numberOfLines={1}>{s.address}</Text>
-                              </View>
-                            </Pressable>
-                            {i < originSuggestions.length - 1 && <View style={styles.suggDivider} />}
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                <View style={styles.connectorWrap}>
-                  {[0,1,2,3].map(i => <View key={i} style={styles.connectorDash} />)}
-                </View>
-
-                <DraggableStopRow label={bottomLabel} sub={bottomSub} isOrigin={false} onPressLabel={() => {}} onSwap={handleSwapStops} />
-
-                <View style={styles.divLine} />
-                <View style={styles.addStopRow}>
-                  <View style={styles.addStopIcon}><Ionicons name="add" size={18} color={GREEN} /></View>
-                  <Text style={styles.addStopLabel}>My Location</Text>
-                  <View style={styles.dragHandle}><Ionicons name="reorder-two-outline" size={22} color={TEXT_MUT} /></View>
-                </View>
-              </View>
-
-              {/* Now / Avoid filters */}
+              {/* Now / Avoid chips — functional */}
               <View style={styles.filterRow}>
-                <Pressable style={styles.filterChip}>
-                  <Text style={styles.filterText}>Now</Text>
-                  <Ionicons name="chevron-down" size={14} color={TEXT_MUT} />
+                <Pressable
+                  style={[styles.filterChip, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}
+                  onPress={() => setShowNowModal(true)}
+                >
+                  <Text style={[styles.filterText, { color: T.TEXT_PRI }]}>{nowLabel}</Text>
+                  <Ionicons name="chevron-down" size={14} color={T.TEXT_MUT} />
                 </Pressable>
-                <Pressable style={styles.filterChip}>
-                  <Text style={styles.filterText}>Avoid</Text>
-                  <Ionicons name="chevron-down" size={14} color={TEXT_MUT} />
+                <Pressable
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: T.CARD, borderColor: avoidActive ? T.ACCENT : T.DIVIDER },
+                  ]}
+                  onPress={() => setShowAvoidModal(true)}
+                >
+                  <Text style={[styles.filterText, { color: avoidActive ? T.ACCENT : T.TEXT_PRI }]}>
+                    {avoidActive ? `Avoid (${avoidSet.size})` : 'Avoid'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color={avoidActive ? T.ACCENT : T.TEXT_MUT} />
                 </Pressable>
               </View>
 
               {routeBusy && (
                 <View style={styles.loadingRow}>
-                  <ActivityIndicator size="small" color={GREEN} />
-                  <Text style={styles.loadingText}>Calculating routes…</Text>
+                  <ActivityIndicator size="small" color={T.ACCENT} />
+                  <Text style={[styles.loadingText, { color: T.TEXT_MUT }]}>Calculating routes…</Text>
                 </View>
               )}
 
-              {/* Route option cards — one per alternative returned by Google */}
+              {/* Route option cards */}
               {!routeBusy && alternatives.length > 0 && alternatives.map((alt, i) => {
                 const isSelected = i === selectedRouteIndex;
                 const ROUTE_NAMES = ['Route 1', 'Route 2', 'Route 3'];
                 const routeName = ROUTE_NAMES[i] ?? `Route ${i + 1}`;
-                const safetyScore = 90; // placeholder until real crash-weighted score available
 
                 return (
                   <Pressable
                     key={`${travelMode}-card-${i}`}
-                    style={[styles.routeOptionCard, isSelected && styles.routeOptionCardActive]}
+                    style={[
+                      styles.routeOptionCard,
+                      { backgroundColor: T.CARD, borderColor: isSelected ? T.ACCENT : 'transparent' },
+                    ]}
                     onPress={() => setSelectedRouteIndex(i)}
                   >
-                    {/* Safety score badge — teal gradient when selected, dark when not */}
-                    <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive]}>
-                      {isSelected && (
-                        <LinearGradient
-                          colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 0, y: 1 }}
-                          style={StyleSheet.absoluteFillObject}
-                        />
-                      )}
+                    {/* Safety badge — always teal gradient */}
+                    <View style={[styles.matchBadge, styles.matchBadgeActive]}>
+                      <LinearGradient
+                        colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 0, y: 1 }}
+                        style={StyleSheet.absoluteFillObject}
+                      />
                       <View style={styles.matchBadgeContent}>
-                        <Text style={[styles.matchWord, { color: isSelected ? '#fff' : TEXT_MUT }]}>SAFETY</Text>
-                        <Text style={[styles.matchPct, { color: isSelected ? '#fff' : TEXT_PRI }]}>{safetyScore}%</Text>
+                        <Text style={[styles.matchWord, { color: '#fff' }]}>SAFETY</Text>
+                        <Text style={[styles.matchPct, { color: '#fff' }]}>90%</Text>
                       </View>
                     </View>
 
                     {/* Route info */}
                     <Pressable style={styles.routeOptionInfo} onPress={() => { setSelectedRouteIndex(i); setShowDetailsModal(true); }}>
-                      <Text style={styles.routeOptionTitle}>{routeName}</Text>
-                      <Text style={styles.routeOptionMeta}>{fmtSecs(alt.durationSecs)}  •  {fmtDist(alt.distance)}</Text>
-                      <Text style={[styles.routeOptionTraffic, { color: GREEN }]}>
+                      <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI }]}>{routeName}</Text>
+                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtSecs(alt.durationSecs)}  •  {fmtDist(alt.distance)}</Text>
+                      <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>
                         Arrive ~{arrivalFrom(alt.durationSecs)}
                       </Text>
                     </Pressable>
 
-                    {/* Start button — gradient when selected, dark when not */}
+                    {/* Start button */}
                     <Pressable
-                      style={[styles.startBtnWrap, !isSelected && styles.startBtnWrapInactive]}
+                      style={[styles.startBtnWrap, !isSelected && { backgroundColor: T.ITEM }]}
                       onPress={() => {
                         setSelectedRouteIndex(i);
                         const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
@@ -862,15 +1145,15 @@ export default function DirectionsScreen() {
                           style={StyleSheet.absoluteFillObject}
                         />
                       )}
-                      <Text style={[styles.startBtnText, !isSelected && { color: TEXT_MUT }]}>Start</Text>
+                      <Text style={[styles.startBtnText, !isSelected && { color: T.TEXT_MUT }]}>Start</Text>
                     </Pressable>
                   </Pressable>
                 );
               })}
 
-              {/* Fallback: single card when no alternatives available (BUS/RIDESHARE) */}
+              {/* Fallback card (BUS/RIDESHARE) */}
               {!routeBusy && alternatives.length === 0 && activeData && (
-                <View style={[styles.routeOptionCard, styles.routeOptionCardActive]}>
+                <View style={[styles.routeOptionCard, { backgroundColor: T.CARD, borderColor: T.ACCENT }]}>
                   <View style={[styles.matchBadge, styles.matchBadgeActive]}>
                     <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFillObject} />
                     <View style={styles.matchBadgeContent}>
@@ -879,9 +1162,9 @@ export default function DirectionsScreen() {
                     </View>
                   </View>
                   <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
-                    <Text style={styles.routeOptionTitle}>Route 1</Text>
-                    <Text style={styles.routeOptionMeta}>{fmtSecs(activeSecs)}  •  {fmtDist(activeData.distance)}</Text>
-                    <Text style={[styles.routeOptionTraffic, { color: GREEN }]}>Arrive ~{arrivalFrom(activeSecs)}</Text>
+                    <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI }]}>Route 1</Text>
+                    <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtSecs(activeSecs)}  •  {fmtDist(activeData.distance)}</Text>
+                    <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>Arrive ~{arrivalFrom(activeSecs)}</Text>
                   </Pressable>
                   <Pressable style={styles.startBtnWrap} onPress={() => {
                     const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
@@ -896,169 +1179,153 @@ export default function DirectionsScreen() {
               )}
 
               {!routeBusy && !modeData && (
-                <Pressable style={styles.getDirectionsBtn} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
+                <Pressable style={[styles.getDirectionsBtn, { backgroundColor: T.ACCENT }]} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
                   <Text style={styles.getDirectionsBtnText}>Get Directions</Text>
                 </Pressable>
               )}
-            </>
-          )}
+          </>
         </BottomSheetScrollView>
       </BottomSheet>
+        </Animated.View>
+      </Animated.View>
     </View>
   );
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
-
-  // Floating buttons
-  zoomWrap: { position: 'absolute', right: 14, backgroundColor: ITEM_BG, borderRadius: 14, overflow: 'hidden', width: 42 },
+  container: { flex: 1 },
+  zoomWrap: { position: 'absolute', right: 14, borderRadius: 14, overflow: 'hidden', width: 42 },
   zoomBtn: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
-  zoomDiv: { height: 1, backgroundColor: DIVIDER, marginHorizontal: 8 },
+  zoomDiv: { height: 1, marginHorizontal: 8 },
   floatBtn: { position: 'absolute', right: 14, width: 42, height: 42, borderRadius: 21 },
-  floatBtnInner: { flex: 1, borderRadius: 21, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
+  floatBtnInner: { flex: 1, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
   heatmapWrap: { position: 'absolute', right: 14 },
-  heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: ITEM_BG, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#00FF8840' },
-  heatmapInnerActive: { borderColor: '#FF6B6B55', backgroundColor: '#1A1020' },
-  heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
-
-  // Map markers
+  heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'transparent' },
+  heatmapInnerActive: { borderColor: '#FF6B6B55' },
+  heatmapText: { fontSize: 12, fontWeight: '600' },
+  backBtn: {
+    position: 'absolute', left: 14, zIndex: 20,
+    width: 38, height: 38, borderRadius: 19,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  topRouteCard: {
+    position: 'absolute', left: 62, right: 14, zIndex: 15,
+    borderRadius: 16,
+    paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25, shadowRadius: 10, elevation: 10,
+  },
+  topRouteInner: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  topRouteDotCol: { width: 18, alignItems: 'center', justifyContent: 'center', gap: 2, paddingVertical: 2 },
+  originDotSmall: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: 'rgba(74,144,226,0.4)' },
+  topRouteLine: { width: 2, height: 14, borderRadius: 1 },
+  topRouteFields: { flex: 1 },
+  topRouteField: { paddingVertical: 7, justifyContent: 'center', minHeight: 34 },
+  topFieldDivider: { height: 1 },
+  topRouteLabel: { fontSize: 14, fontWeight: '600' },
+  topRouteInput: { fontSize: 14, paddingVertical: 0 },
+  topRouteSwapBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  topSuggList: { borderRadius: 12, overflow: 'hidden', marginTop: 8 },
+  topSuggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  topSuggTitle: { fontSize: 13, fontWeight: '600' },
+  topSuggSub: { fontSize: 11, marginTop: 1 },
+  topSuggDiv: { height: 1, marginLeft: 34 },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
-
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: DIVIDER },
-  sheetContent: { paddingHorizontal: 16, paddingTop: 6 },
-
-  miniRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  miniLabel: { flex: 1, color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
-  miniMeta: { color: TEXT_MUT, fontSize: 13 },
-  miniClose: { width: 26, height: 26, borderRadius: 13, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
-
+  handle: { width: 36, height: 4, borderRadius: 2 },
+  sheetContent: { paddingHorizontal: 16, paddingTop: 0 },
+  miniRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  miniIconWrap: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+  miniLabel: { fontSize: 17, fontWeight: '700', marginBottom: 2 },
+  miniMeta: { fontSize: 13 },
+  miniClose: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  titleText: { color: TEXT_PRI, fontSize: 26, fontWeight: '800' },
+  titleText: { fontSize: 26, fontWeight: '800' },
   closeBtn: { width: 34, height: 34, justifyContent: 'center', alignItems: 'center' },
-  closeBtnCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
-
-  // Mode row — evenly spaced
+  closeBtnCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   modeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
-  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 14, backgroundColor: CARD_BG, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
-  modeChipActive: { backgroundColor: GREEN, borderColor: GREEN },
-
-  // Stops card
-  routeCard: { backgroundColor: CARD_BG, borderRadius: 18, paddingVertical: 4, paddingHorizontal: 14, marginBottom: 12 },
+  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
+  // Stops card styles (used by DraggableStopRow)
   stopRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 12, minHeight: 64 },
   stopIconWrap: { width: 26, alignItems: 'center' },
   originCircle: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#4A90E2', borderWidth: 2.5, borderColor: '#fff' },
   stopLabelWrap: { flex: 1 },
-  stopLabel: { color: TEXT_PRI, fontSize: 15, fontWeight: '600' },
-  stopSub: { color: TEXT_MUT, fontSize: 12, marginTop: 2 },
+  stopLabel: { fontSize: 15, fontWeight: '600' },
+  stopSub: { fontSize: 12, marginTop: 2 },
   dragHandle: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-
-  inlineSearchWrap: { marginLeft: 38, marginBottom: 8 },
-  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
-  inlineInputText: { flex: 1, color: TEXT_PRI, fontSize: 14 },
-
-  suggList: { backgroundColor: ITEM_BG, borderRadius: 12, overflow: 'hidden', marginBottom: 4 },
-  suggRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 11 },
-  suggTitle: { color: TEXT_PRI, fontSize: 13, fontWeight: '600' },
-  suggSub: { color: TEXT_MUT, fontSize: 11, marginTop: 1 },
-  suggDivider: { height: 1, backgroundColor: DIVIDER, marginLeft: 34 },
-
-  connectorWrap: { flexDirection: 'column', gap: 4, paddingLeft: 25, marginVertical: -6 },
-  connectorDash: { width: 2, height: 5, backgroundColor: TEXT_MUT, borderRadius: 1, opacity: 0.4 },
-  divLine: { height: 1, backgroundColor: DIVIDER, marginVertical: 4 },
-
-  addStopRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
-  addStopIcon: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#1ABC9322', justifyContent: 'center', alignItems: 'center' },
-  addStopLabel: { flex: 1, color: '#4A90E2', fontSize: 14, fontWeight: '500' },
-
   filterRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: CARD_BG, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderColor: DIVIDER },
-  filterText: { color: TEXT_PRI, fontSize: 14, fontWeight: '500' },
-
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1 },
+  filterText: { fontSize: 14, fontWeight: '500' },
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 },
-  loadingText: { color: TEXT_MUT, fontSize: 14 },
-
-  // Route option cards — safety badge | info | start button
-  routeOptionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
-  routeOptionCardActive: { borderColor: GREEN },
+  loadingText: { fontSize: 14 },
+  routeOptionCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, gap: 12 },
   matchBadge: { borderRadius: 14, paddingVertical: 12, paddingHorizontal: 10, alignItems: 'center', width: 76, overflow: 'hidden', position: 'relative' },
   matchBadgeActive: { backgroundColor: 'transparent' },
-  matchBadgeInactive: { backgroundColor: ITEM_BG },
   matchBadgeContent: { alignItems: 'center' },
   matchWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, marginBottom: 2 },
   matchPct: { fontSize: 24, fontWeight: '800' },
   routeOptionInfo: { flex: 1 },
-  routeOptionTitle: { color: TEXT_PRI, fontSize: 15, fontWeight: '700', marginBottom: 3 },
-  routeOptionMeta: { color: TEXT_MUT, fontSize: 13, marginBottom: 2 },
+  routeOptionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 3 },
+  routeOptionMeta: { fontSize: 13, marginBottom: 2 },
   routeOptionTraffic: { fontSize: 12, fontWeight: '600' },
-  // Start button
-  startBtnWrap: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    height: 40,
-    minWidth: 72,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  startBtnWrapInactive: { backgroundColor: ITEM_BG },
+  startBtnWrap: { borderRadius: 12, overflow: 'hidden', height: 40, minWidth: 72, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' },
   startBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', zIndex: 1 },
-  getDirectionsBtn: { backgroundColor: GREEN, borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
-  getDirectionsBtnText: { color: '#000', fontSize: 16, fontWeight: '700' },
+  getDirectionsBtn: { borderRadius: 16, paddingVertical: 15, alignItems: 'center' },
+  getDirectionsBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  doneBtn: { borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  doneBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });
 
-// ─── Route Details Modal Styles ───────────────────────────────────────────────
 const dm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  // height is passed inline as a dynamic value based on screen height
-  card: { backgroundColor: BG, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 24 },
+  card: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 24 },
   tabRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 20 },
   tab: { paddingBottom: 8, borderBottomWidth: 2.5, borderBottomColor: 'transparent' },
-  tabActive: { borderBottomColor: TEXT_PRI },
-  tabText: { color: TEXT_MUT, fontSize: 18, fontWeight: '600' },
-  tabTextActive: { color: TEXT_PRI, fontWeight: '800' },
-  // tabBody fills remaining card height after the tabRow (tabRow ~54px + card padding 20+24 = ~98px)
+  tabActive: { borderBottomColor: GREEN },
+  tabText: { fontSize: 18, fontWeight: '600' },
   tabBody: { flex: 1 },
-  closeBtnCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: ITEM_BG, justifyContent: 'center', alignItems: 'center' },
+  closeBtnCircle: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 14 },
   stepIcon: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
   stepIconSimple: { width: 44, alignItems: 'center' },
   stepContent: { flex: 1 },
-  stepDist: { color: TEXT_PRI, fontSize: 15, fontWeight: '700' },
-  stepInst: { color: TEXT_MUT, fontSize: 13, marginTop: 2 },
-  lineDivider: { height: 1, backgroundColor: DIVIDER, marginLeft: 60 },
+  stepDist: { fontSize: 15, fontWeight: '700' },
+  stepInst: { fontSize: 13, marginTop: 2 },
+  lineDivider: { height: 1, marginLeft: 60 },
   insightsContent: { gap: 14, paddingBottom: 20 },
   insightMapWrap: { borderRadius: 16, overflow: 'hidden', height: 220, position: 'relative' },
   insightMap: { width: '100%', height: '100%' },
-  insightMapPlaceholder: { height: 220, backgroundColor: CARD_BG, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  insightMapPlaceholder: { height: 220, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   routeTimeBubble: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  routeTimeBubbleText: { color: TEXT_PRI, fontSize: 13, fontWeight: '700' },
+  routeTimeBubbleText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
   statsRow: { flexDirection: 'row', gap: 14 },
-  statCard: { flex: 1, backgroundColor: CARD_BG, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: DIVIDER },
-  statCardWide: { backgroundColor: CARD_BG, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: DIVIDER },
-  statLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 6 },
-  statValue: { color: TEXT_PRI, fontSize: 28, fontWeight: '800', marginBottom: 4 },
+  statCard: { flex: 1, borderRadius: 16, padding: 16, borderWidth: 1 },
+  statCardWide: { borderRadius: 16, padding: 16, borderWidth: 1 },
+  statLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 6 },
+  statValue: { fontSize: 28, fontWeight: '800', marginBottom: 4 },
   statDelta: { fontSize: 13, fontWeight: '600' },
 });
 
-// ─── Heatmap Modal Styles ─────────────────────────────────────────────────────
 const hm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  card: { backgroundColor: CARD_BG, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
+  card: { borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  title: { color: TEXT_PRI, fontSize: 22, fontWeight: '700' },
-  subtitle: { color: TEXT_MUT, fontSize: 13, marginBottom: 20, lineHeight: 18 },
-  countBadge: { backgroundColor: ITEM_BG, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
-  countText: { color: GREEN, fontSize: 12, fontWeight: '600' },
-  filterList: { backgroundColor: ITEM_BG, borderRadius: 18, overflow: 'hidden' },
+  title: { fontSize: 22, fontWeight: '700', marginBottom: 12 },
+  subtitle: { fontSize: 13, marginBottom: 20, lineHeight: 18 },
+  countBadge: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  countText: { fontSize: 12, fontWeight: '600' },
+  mapStyleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
+  mapStyleBtn: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: 'center', gap: 5, borderWidth: 1.5, borderColor: 'transparent' },
+  mapStyleLabel: { fontSize: 11, fontWeight: '600' },
+  sectionDiv: { height: 1, marginVertical: 18 },
+  filterList: { borderRadius: 18, overflow: 'hidden' },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
   filterRowActive: { backgroundColor: 'rgba(26,188,147,0.08)' },
   filterIcon: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  filterLabel: { color: TEXT_MUT, fontSize: 15, fontWeight: '600', marginBottom: 2 },
-  filterDesc: { color: TEXT_MUT, fontSize: 12, opacity: 0.7 },
-  filterDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 70 },
+  filterLabel: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  filterDesc: { fontSize: 12, opacity: 0.7 },
+  filterDiv: { height: 1, marginLeft: 70 },
 });

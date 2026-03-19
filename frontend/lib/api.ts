@@ -84,9 +84,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
-  const encoded = encodeURIComponent(query.trim());
-  const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encoded}`);
-  return payload.results ?? [];
+  const t = query.trim();
+  if (!t) return [];
+
+  // Call Google Places Text Search (New) API directly from the client so that
+  // search works on physical devices regardless of backend reachability.
+  if (googleMapsKey) {
+    try {
+      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleMapsKey,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri',
+        },
+        body: JSON.stringify({ textQuery: t, maxResultCount: 8 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const places: any[] = data.places ?? [];
+        return places.map((p: any) => ({
+          place_id: p.id ?? '',
+          name: p.displayName?.text ?? '',
+          address: p.formattedAddress ?? '',
+          lat: p.location?.latitude ?? 0,
+          lng: p.location?.longitude ?? 0,
+          google_maps_uri: p.googleMapsUri,
+        }));
+      }
+    } catch {
+      // fall through to backend fallback
+    }
+  }
+
+  // Fallback: try the backend
+  try {
+    const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encodeURIComponent(t)}`);
+    return payload.results ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // Returns true for real Google Place IDs (e.g. ChIJ...).

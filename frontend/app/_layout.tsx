@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider } from '@/providers/auth-provider';
+import { ThemeProvider as AppThemeProvider } from '@/providers/theme-context';
 
 // Inline the splash so there is zero module resolution ambiguity
 import { useEffect } from 'react';
@@ -92,21 +93,23 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            <Stack.Screen name="(tabs)"      options={{ headerShown: false }} />
-            <Stack.Screen name="search"      options={{ headerShown: false, animation: 'slide_from_bottom' }} />
-            <Stack.Screen name="destination" options={{ headerShown: false }} />
-            <Stack.Screen name="directions"  options={{ headerShown: false }} />
-            <Stack.Screen name="login"       options={{ headerShown: false, presentation: 'modal' }} />
-          </Stack>
+        <AppThemeProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack>
+              <Stack.Screen name="(tabs)"      options={{ headerShown: false }} />
+              <Stack.Screen name="search"      options={{ headerShown: false, animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="destination" options={{ headerShown: false }} />
+              <Stack.Screen name="directions"  options={{ headerShown: false }} />
+              <Stack.Screen name="login"       options={{ headerShown: false, presentation: 'modal' }} />
+            </Stack>
 
-          <StatusBar style="auto" />
+            <StatusBar style="auto" />
 
-          {!splashDone && (
-            <AppSplash onFinish={() => setSplashDone(true)} />
-          )}
-        </ThemeProvider>
+            {!splashDone && (
+              <AppSplash onFinish={() => setSplashDone(true)} />
+            )}
+          </ThemeProvider>
+        </AppThemeProvider>
       </AuthProvider>
     </GestureHandlerRootView>
   );
