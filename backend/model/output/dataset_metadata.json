@@ -1,8 +1,9 @@
 {
   "n_intersections": 29497,
-  "feature_window": "2020-01-01 to 2025-01-31",
-  "label_window": "2025-02-01 to 2026-01-31",
-  "target_variable": "future_risk_score",
-  "model_type": "XGBRegressor",
+  "feature_window": "2020-01-01 to 2024-02-29",
+  "label_window": "2024-03-01 to 2026-02-28",
+  "target_variable": "two-stage hurdle: P(crash>0) \u00d7 E[severity|crash>0]",
+  "stage1": "CatBoostClassifier (binary: has_future_crash)",
+  "stage2": "XGBRegressor (continuous: future_severity_score, non-zero subset)",
   "spatial_cv_folds": 5
 }

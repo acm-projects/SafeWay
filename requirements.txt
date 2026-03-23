@@ -72,3 +72,10 @@ scikit-learn>=1.0.0
 xgboost>=2.0.0
 scipy>=1.10.0
 joblib>=1.3.0
+# Cloud storage + spatial + tuning
+gcsfs>=2024.1.0
+shapely>=2.0.0
+networkx>=3.0
+optuna>=3.5.0
+catboost>=1.2.0
+shap>=0.44.0

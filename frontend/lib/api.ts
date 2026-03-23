@@ -52,6 +52,12 @@ export type RoutePoint = {
   longitude: number;
 };
 
+export type RiskFactor = {
+  label: string;
+  count: number;
+  pct: number;
+};
+
 export type RouteInfo = {
   distance_meters: number;
   duration: string;
@@ -59,6 +65,15 @@ export type RouteInfo = {
   coordinates: RoutePoint[];
   safety_score?: number;
   safety_label?: string;
+  // Phase E: distance-weighted scoring
+  risk_per_km?: number;
+  total_exposure?: number;
+  route_km?: number;
+  n_high_risk?: number;
+  // Phase F: SHAP explainability
+  top_risk_factors?: RiskFactor[];
+  // Phase G: time-of-day
+  time_band?: string;
 };
 
 export type RouteResponse = {
@@ -172,6 +187,7 @@ export async function getRoute(params: {
   origin: { lat: number; lng: number };
   destination: { lat: number; lng: number };
   travel_mode?: 'DRIVE' | 'WALK' | 'BICYCLE' | 'TWO_WHEELER';
+  departure_hour?: number;
 }): Promise<RouteResponse> {
   return request<RouteResponse>('/maps/route', {
     method: 'POST',

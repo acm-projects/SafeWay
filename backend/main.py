@@ -67,6 +67,7 @@ class RouteRequest(BaseModel):
     origin: LatLng
     destination: LatLng
     travel_mode: Literal["DRIVE", "WALK", "BICYCLE", "TWO_WHEELER"] = "WALK"
+    departure_hour: int | None = None  # Phase G: 0-23, defaults to current hour
 
 
 @lru_cache(maxsize=1)
@@ -344,10 +345,23 @@ def compute_route(payload: RouteRequest):
             coordinates = decode_polyline(polyline) if polyline else []
             safety_score = None
             safety_label = "unknown"
+            extra = {}
             try:
-                safety = score_coordinates(coordinates, sample_every=5)
+                safety = score_coordinates(
+                    coordinates,
+                    sample_every=5,
+                    departure_hour=payload.departure_hour,
+                )
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
+                extra = {
+                    "risk_per_km": safety.get("risk_per_km"),
+                    "total_exposure": safety.get("total_exposure"),
+                    "route_km": safety.get("route_km"),
+                    "n_high_risk": safety.get("n_high_risk", 0),
+                    "top_risk_factors": safety.get("top_risk_factors", []),
+                    "time_band": safety.get("time_band"),
+                }
             except Exception:
                 pass
             result_routes.append({
@@ -357,6 +371,7 @@ def compute_route(payload: RouteRequest):
                 "coordinates": coordinates,
                 "safety_score": safety_score,
                 "safety_label": safety_label,
+                **extra,
             })
     except Exception as e:
         print(f"[route] safety scoring skipped: {e}")

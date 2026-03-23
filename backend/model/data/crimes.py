@@ -1,6 +1,9 @@
 """
 Fetch Chicago Crimes from Socrata API.
-Violent + property types for training (past_n_crime_violent / past_n_crime_property).
+Three crime groups for smart re-integration:
+  Group 1 (traffic-direct): DUI, reckless driving, hit-and-run — full weight
+  Group 2 (disorder):       drugs, weapons, assault/battery — 0.3 weight
+  Group 3 (exclude):        theft, burglary, fraud, property — not fetched
 Run from repo root: python -m backend.model.data.crimes
 """
 import pandas as pd
@@ -21,6 +24,34 @@ CRIME_COLS = [
     "district",
 ]
 
+# --- Group 1: Directly traffic-related (full weight) ---
+# Causal link to driving safety: DUI, reckless driving, vehicular offenses
+TRAFFIC_DIRECT_TYPES = [
+    "LIQUOR LAW VIOLATION",
+    "OTHER NARCOTIC VIOLATION",
+]
+# These are matched via `description` column (sub-types within primary_type)
+TRAFFIC_DIRECT_DESCRIPTIONS = [
+    "DRIVING UNDER THE INFLUENCE",
+    "DUI",
+    "RECKLESS DRIVING",
+    "HIT AND RUN",
+    "VEHICULAR HIJACKING",
+    "AGGRAVATED VEHICULAR HIJACKING",
+    "VEHICULAR INVASION",
+]
+
+# --- Group 2: Environment/disorder signal (0.3 weight) ---
+# Indirect: drug activity → impaired drivers, weapons/assault → aggressive driving culture
+DISORDER_TYPES = [
+    "NARCOTICS",
+    "WEAPONS VIOLATION",
+    "ASSAULT",
+    "BATTERY",
+]
+
+# --- Group 3: EXCLUDED (no causal link to driving risk) ---
+# Kept here only for backward compatibility of is_violent / is_property flags
 VIOLENT_CRIME_TYPES = [
     "ASSAULT",
     "BATTERY",
@@ -41,8 +72,11 @@ PROPERTY_CRIME_TYPES = [
     "CRIMINAL DAMAGE TO PROPERTY",
 ]
 
-# Union for API fetch + filter
-RELEVANT_CRIME_TYPES = list(dict.fromkeys(VIOLENT_CRIME_TYPES + PROPERTY_CRIME_TYPES))
+# Fetch all types we need for any group (union)
+RELEVANT_CRIME_TYPES = list(dict.fromkeys(
+    VIOLENT_CRIME_TYPES + PROPERTY_CRIME_TYPES
+    + TRAFFIC_DIRECT_TYPES + DISORDER_TYPES
+))
 
 
 def get_crimes(
@@ -73,9 +107,24 @@ def get_crimes(
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["arrest"] = df["arrest"].astype(str).str.upper() == "TRUE"
     df["domestic"] = df["domestic"].astype(str).str.upper() == "TRUE"
+    # Legacy flags (backward compat)
     df["is_violent"] = df["primary_type"].isin(VIOLENT_CRIME_TYPES)
     df["is_property"] = df["primary_type"].isin(PROPERTY_CRIME_TYPES)
+
+    # Smart crime groups for Phase B
+    desc_upper = df["description"].fillna("").str.upper()
+    df["is_traffic_direct"] = (
+        df["primary_type"].isin(TRAFFIC_DIRECT_TYPES)
+        | desc_upper.str.contains("|".join(TRAFFIC_DIRECT_DESCRIPTIONS), regex=True, na=False)
+    )
+    df["is_disorder"] = (
+        df["primary_type"].isin(DISORDER_TYPES)
+        & ~df["is_traffic_direct"]  # don't double-count
+        & ~df["domestic"]           # exclude domestic incidents per plan
+    )
     df = df.reset_index(drop=True)
 
-    print(f"Fetched {len(df)} relevant crimes (violent + property).")
+    n_td = df["is_traffic_direct"].sum()
+    n_dis = df["is_disorder"].sum()
+    print(f"Fetched {len(df)} crimes: {n_td} traffic-direct, {n_dis} disorder, {len(df)-n_td-n_dis} excluded.")
     return df
