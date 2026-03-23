@@ -1,12 +1,11 @@
 """
-Merge Open-Meteo hourly weather data with Chicago crash records.
-Matches each crash to weather conditions at that exact date and hour.
-Run from repo root: python -m backend.model.data.merge_weather
+Spatial-temporal join: match each crash to the nearest weather grid point + date + hour.
+Uses scipy KD-tree for fast nearest-neighbor lookup across the 25-point Chicago grid.
 """
-import pandas as pd
-from pathlib import Path
+from __future__ import annotations
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+import numpy as np
+import pandas as pd
 
 WEATHER_COLS = [
     "temperature_2m",
@@ -21,72 +20,56 @@ WEATHER_COLS = [
 ]
 
 
-def load_weather() -> pd.DataFrame:
-    """Load and combine all weather CSV files into one DataFrame."""
-    print("Loading weather data...")
-    
-    historical = pd.read_csv(OUTPUT_DIR / "chicago_weather_historical.csv")
-    present = pd.read_csv(OUTPUT_DIR / "chicago_weather_present.csv")
-    current = pd.read_csv(OUTPUT_DIR / "chicago_weather_2026.csv")
-    
-    weather = pd.concat([historical, present, current], ignore_index=True)
-    weather["datetime"] = pd.to_datetime(weather["datetime"])
-    weather["date"] = weather["datetime"].dt.date.astype(str)
-    weather["hour"] = weather["datetime"].dt.hour
-    
-    # Drop duplicates just in case
-    weather = weather.drop_duplicates(subset=["date", "hour"])
-    
-    print(f"Loaded {len(weather)} hourly weather records.")
-    return weather
-
-
 def merge_crashes_with_weather(crashes: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge crash records with weather data by date and hour.
-    Each crash gets the weather conditions at the time it happened.
+    Merge crash records with weather data by nearest grid point + date + hour.
+    Each crash gets the weather conditions at its closest grid point at that time.
     """
-    print(f"Merging {len(crashes)} crashes with weather data...")
-    
-    # Prepare crash date and hour columns
+    from scipy.spatial import cKDTree
+
     crashes = crashes.copy()
+
+    # Parse crash timestamps
     crashes["crash_date"] = pd.to_datetime(crashes["crash_date"], errors="coerce", utc=True)
     crashes["_date"] = crashes["crash_date"].dt.tz_convert("America/Chicago").dt.date.astype(str)
     crashes["_hour"] = crashes["crash_date"].dt.tz_convert("America/Chicago").dt.hour
-    
+
+    # Ensure crash lat/lon are numeric
+    crash_lats = pd.to_numeric(crashes.get("latitude"), errors="coerce")
+    crash_lons = pd.to_numeric(crashes.get("longitude"), errors="coerce")
+    valid_mask = crash_lats.notna() & crash_lons.notna()
+
+    # Build KD-tree of unique weather grid points
+    grid_points = weather[["grid_lat", "grid_lon"]].drop_duplicates().reset_index(drop=True)
+    tree = cKDTree(grid_points[["grid_lat", "grid_lon"]].values)
+
+    # Find nearest grid point for each crash with valid coordinates
+    crashes["_grid_lat"] = np.nan
+    crashes["_grid_lon"] = np.nan
+    if valid_mask.any():
+        coords = np.column_stack([crash_lats[valid_mask].values, crash_lons[valid_mask].values])
+        _, indices = tree.query(coords)
+        crashes.loc[valid_mask, "_grid_lat"] = grid_points.iloc[indices]["grid_lat"].values
+        crashes.loc[valid_mask, "_grid_lon"] = grid_points.iloc[indices]["grid_lon"].values
+
     # Prepare weather merge keys
-    weather_merge = weather[["date", "hour"] + WEATHER_COLS].copy()
-    weather_merge = weather_merge.rename(columns={"date": "_date", "hour": "_hour"})
-    # Rename weather cols to avoid conflicts with crash weather columns
+    weather_merge = weather[["grid_lat", "grid_lon", "date", "hour"] + WEATHER_COLS].copy()
+    weather_merge = weather_merge.rename(columns={
+        "grid_lat": "_grid_lat",
+        "grid_lon": "_grid_lon",
+        "date": "_date",
+        "hour": "_hour",
+    })
+    # Prefix weather columns to avoid conflicts
     rename_map = {col: f"omw_{col}" for col in WEATHER_COLS}
     weather_merge = weather_merge.rename(columns=rename_map)
-    
-    # Merge
-    merged = crashes.merge(weather_merge, on=["_date", "_hour"], how="left")
-    merged = merged.drop(columns=["_date", "_hour"])
-    
+
+    # Spatial-temporal merge: nearest grid point + date + hour
+    merged = crashes.merge(weather_merge, on=["_grid_lat", "_grid_lon", "_date", "_hour"], how="left")
+    merged = merged.drop(columns=["_date", "_hour", "_grid_lat", "_grid_lon"])
+
     matched = merged["omw_temperature_2m"].notna().sum()
-    print(f"Matched {matched}/{len(crashes)} crashes to weather records ({matched/len(crashes)*100:.1f}%)")
-    
+    total = len(crashes)
+    print(f"  Weather match: {matched}/{total} crashes ({matched / total * 100:.1f}%)", flush=True)
+
     return merged
-
-
-if __name__ == "__main__":
-    # Load crashes from cache
-    crashes = pd.read_csv(OUTPUT_DIR / "crashes_cache.csv")
-    print(f"Loaded {len(crashes)} crashes from cache.")
-    
-    # Load weather
-    weather = load_weather()
-    
-    # Merge
-    merged = merge_crashes_with_weather(crashes, weather)
-    
-    # Save
-    output_path = OUTPUT_DIR / "crashes_with_weather.csv"
-    merged.to_csv(output_path, index=False)
-    print(f"Saved merged data to {output_path}")
-    print(f"Shape: {merged.shape}")
-    print(f"New weather columns: {[c for c in merged.columns if c.startswith('omw_')]}")
-
-    

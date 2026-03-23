@@ -1,0 +1,54 @@
+name: Nightly data refresh + model retrain
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # 8 AM UTC = 2 AM CST (Chicago time)
+  workflow_dispatch: # manual trigger from GitHub UI
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write GCS key
+        env:
+          GCS_KEY_JSON: ${{ secrets.GCS_KEY_JSON }}
+        run: echo "$GCS_KEY_JSON" > /tmp/gcs_key.json
+
+      # Step 1: Pull latest crashes, crimes, red light cameras,
+      #         speed cameras, and streetlight outages from Socrata → GCS.
+      #         Date range: 2020-01-01 to last complete month (auto-computed).
+      - name: Refresh Socrata data to GCS
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs_key.json
+          GCS_CREDENTIALS_PATH: /tmp/gcs_key.json
+          SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
+        run: python -u -m backend.model.refresh_gcs_from_socrata
+
+      # Step 2: Append new weather days to existing weather.parquet on GCS.
+      #         Incremental — only fetches days after the last date in the parquet.
+      #         Uses Open-Meteo free API (no key needed).
+      - name: Refresh weather data to GCS
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs_key.json
+          GCS_CREDENTIALS_PATH: /tmp/gcs_key.json
+        run: python -u -m backend.model.refresh_gcs_weather
+
+      # Step 3: Train XGBoost on ALL data with rolling date windows.
+      #         past window = 2020 to 2 years ago, label window = last 2 years.
+      #         Outputs: intersection_scores.parquet → GCS, model_info.json, feature_importance.png
+      - name: Train model
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs_key.json
+          GCS_CREDENTIALS_PATH: /tmp/gcs_key.json
+        run: python -u -m backend.model.train_model

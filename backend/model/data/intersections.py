@@ -203,8 +203,8 @@ def build_intersection_safety_scores(
     # Crime counts (not mixed into danger_score)
     if not crimes_assigned.empty and "nearest_node_id" in crimes_assigned.columns:
         crime_counts = (
-            crimes_assigned.groupby("nearest_node_id")["crime_id"]
-            .count()
+            crimes_assigned.groupby("nearest_node_id")
+            .size()
             .reset_index(name="total_crimes")
             .rename(columns={"nearest_node_id": "node_id"})
         )

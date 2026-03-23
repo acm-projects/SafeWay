@@ -41,7 +41,13 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
-interface RouteData { coords: RoutePoint[]; distance: number; durationSecs: number; safetyScore?: number; safetyLabel?: string; }
+interface RouteData {
+  coords: RoutePoint[]; distance: number; durationSecs: number;
+  safetyScore?: number; safetyLabel?: string;
+  riskPerKm?: number; totalExposure?: number; routeKm?: number;
+  nHighRisk?: number; topRiskFactors?: { label: string; count: number; pct: number }[];
+  timeBand?: string;
+}
 interface ModeRouteData { routes: RouteData[]; }
 
 // Heatmap filters — mirrors index.tsx
@@ -390,10 +396,12 @@ export default function DirectionsScreen() {
     const from = originCoords;
     const to = destCoords;
     try {
+      const now = new Date();
+      const depHour = now.getHours();
       const [driveRes, walkRes, bikeRes] = await Promise.allSettled([
-        getRoute({ origin: from, destination: to, travel_mode: 'DRIVE' }),
-        getRoute({ origin: from, destination: to, travel_mode: 'WALK' }),
-        getRoute({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
+        getRoute({ origin: from, destination: to, travel_mode: 'DRIVE', departure_hour: depHour }),
+        getRoute({ origin: from, destination: to, travel_mode: 'WALK', departure_hour: depHour }),
+        getRoute({ origin: from, destination: to, travel_mode: 'BICYCLE', departure_hour: depHour }),
       ]);
       const nd: Partial<Record<TravelMode, ModeRouteData>> = {};
       const toRouteData = (r: any): RouteData => ({
@@ -402,6 +410,12 @@ export default function DirectionsScreen() {
         durationSecs: parseInt(String(r.duration || '0').replace('s',''), 10),
         safetyScore: r.safety_score ?? undefined,
         safetyLabel: r.safety_label ?? undefined,
+        riskPerKm: r.risk_per_km ?? undefined,
+        totalExposure: r.total_exposure ?? undefined,
+        routeKm: r.route_km ?? undefined,
+        nHighRisk: r.n_high_risk ?? 0,
+        topRiskFactors: r.top_risk_factors ?? [],
+        timeBand: r.time_band ?? undefined,
       });
       const parse = (res: PromiseSettledResult<any>, mode: TravelMode) => {
         if (res.status === 'fulfilled' && res.value?.routes?.length) {
@@ -583,6 +597,12 @@ export default function DirectionsScreen() {
       time: fmtSecs(r.durationSecs),
       riskPct: r.safetyScore != null ? Math.round(r.safetyScore) : null,
       safetyLabel: r.safetyLabel,
+      riskPerKm: r.riskPerKm,
+      totalExposure: r.totalExposure,
+      routeKm: r.routeKm,
+      nHighRisk: r.nHighRisk ?? 0,
+      topRiskFactors: r.topRiskFactors ?? [],
+      timeBand: r.timeBand,
       isSelected: i === safeIdx,
     };
   });
@@ -885,7 +905,18 @@ export default function DirectionsScreen() {
                         color: card.safetyLabel === 'low' ? palette.teal : card.safetyLabel === 'medium' ? palette.warning : palette.danger,
                       }]}>
                         {card.safetyLabel === 'low' ? 'Low risk' : card.safetyLabel === 'medium' ? 'Moderate risk' : 'High risk'}
+                        {card.routeKm ? `  •  ${card.routeKm.toFixed(1)} km` : ''}
+                        {card.nHighRisk ? `  •  ${card.nHighRisk} hot spots` : ''}
                       </Text>
+                    )}
+                    {card.topRiskFactors && card.topRiskFactors.length > 0 && (
+                      <View style={styles.riskFactorsRow}>
+                        {card.topRiskFactors.slice(0, 3).map((f: any, fi: number) => (
+                          <View key={fi} style={[styles.riskFactorPill, { backgroundColor: (c.cardSolid || '#2a2a2a') + 'cc' }]}>
+                            <Text style={[styles.riskFactorText, { color: c.textSecondary }]}>{f.label}</Text>
+                          </View>
+                        ))}
+                      </View>
                     )}
                   </Pressable>
                   <Pressable
@@ -1079,6 +1110,10 @@ const dm = StyleSheet.create({
   safetyBadge: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, padding: 14, borderWidth: 1, marginBottom: 14 },
   safetyLabelText: { fontSize: 15, fontWeight: '700' },
   safetyScoreText: { fontSize: 12, marginTop: 2 },
+
+  riskFactorsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 },
+  riskFactorPill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  riskFactorText: { fontSize: 10, fontWeight: '600' },
 });
 
 // ─── Heatmap Modal Styles ─────────────────────────────────────────────────────

@@ -1,19 +1,27 @@
 """
-Fetch hourly historical and present weather data for Chicago from Open-Meteo.
-Saves to CSV files for later use in ML model training.
-Run from repo root: python -m backend.model.data.weather
+Fetch hourly weather data for a 5x5 spatial grid across Chicago from Open-Meteo.
+Pure functions — no file I/O. Used by refresh_gcs_weather.py to build weather.parquet.
+
+Grid covers Chicago bounding box: lat 41.66–42.00, lon -87.90 to -87.54 (25 points).
+Each crash is later matched to its nearest grid point for a spatial-temporal weather join.
 """
-import requests
+from __future__ import annotations
+
+import time
+
+import numpy as np
 import pandas as pd
-from pathlib import Path
+import requests
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+# Chicago 5x5 grid
+_LAT_TICKS = np.linspace(41.66, 42.00, 5)
+_LON_TICKS = np.linspace(-87.90, -87.54, 5)
+CHICAGO_GRID: list[tuple[float, float]] = [
+    (round(float(lat), 4), round(float(lon), 4))
+    for lat in _LAT_TICKS
+    for lon in _LON_TICKS
+]  # 25 grid points
 
-# Chicago coordinates
-CHICAGO_LAT = 41.8781
-CHICAGO_LON = -87.6298
-
-# Open-Meteo variables we want
 HOURLY_VARS = [
     "temperature_2m",
     "precipitation",
@@ -27,17 +35,24 @@ HOURLY_VARS = [
 ]
 
 
-def fetch_weather(start_date: str, end_date: str) -> pd.DataFrame:
-    """
-    Fetch hourly weather data from Open-Meteo for Chicago.
-    start_date and end_date format: YYYY-MM-DD
-    """
-    print(f"Fetching weather data from {start_date} to {end_date}...")
-    
-    url = "https://archive-api.open-meteo.com/v1/archive"
+def fetch_weather_for_point(
+    lat: float,
+    lon: float,
+    start_date: str,
+    end_date: str,
+    *,
+    use_forecast_api: bool = False,
+    max_retries: int = 5,
+) -> pd.DataFrame:
+    """Fetch hourly weather for a single point from Open-Meteo. Returns DataFrame."""
+    if use_forecast_api:
+        url = "https://api.open-meteo.com/v1/forecast"
+    else:
+        url = "https://archive-api.open-meteo.com/v1/archive"
+
     params = {
-        "latitude": CHICAGO_LAT,
-        "longitude": CHICAGO_LON,
+        "latitude": lat,
+        "longitude": lon,
         "start_date": start_date,
         "end_date": end_date,
         "hourly": ",".join(HOURLY_VARS),
@@ -45,72 +60,50 @@ def fetch_weather(start_date: str, end_date: str) -> pd.DataFrame:
         "wind_speed_unit": "mph",
         "precipitation_unit": "inch",
     }
-    
-    response = requests.get(url, params=params, timeout=60)
-    response.raise_for_status()
-    data = response.json()
-    
+
+    for attempt in range(max_retries):
+        resp = requests.get(url, params=params, timeout=120)
+        if resp.status_code == 429:
+            wait = min(2 ** (attempt + 1), 60)  # exponential backoff: 2, 4, 8, 16, 32s
+            print(f"    Rate limited, waiting {wait}s (attempt {attempt + 1}/{max_retries})...", flush=True)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        raise RuntimeError(f"Open-Meteo rate limit persisted after {max_retries} retries for ({lat}, {lon})")
+
+    data = resp.json()
     df = pd.DataFrame(data["hourly"])
     df = df.rename(columns={"time": "datetime"})
     df["datetime"] = pd.to_datetime(df["datetime"])
-    df["date"] = df["datetime"].dt.date
+    df["date"] = df["datetime"].dt.date.astype(str)
     df["hour"] = df["datetime"].dt.hour
-    
-    print(f"Fetched {len(df)} hourly records.")
+    df["grid_lat"] = lat
+    df["grid_lon"] = lon
+    df = df.drop(columns=["datetime"])
     return df
 
 
-def fetch_present_weather(start_date: str, end_date: str) -> pd.DataFrame:
-    """
-    Fetch recent/present weather data from Open-Meteo forecast archive.
-    """
-    print(f"Fetching present weather data from {start_date} to {end_date}...")
-    
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": CHICAGO_LAT,
-        "longitude": CHICAGO_LON,
-        "start_date": start_date,
-        "end_date": end_date,
-        "hourly": ",".join(HOURLY_VARS),
-        "timezone": "America/Chicago",
-        "wind_speed_unit": "mph",
-        "precipitation_unit": "inch",
-    }
-    
-    response = requests.get(url, params=params, timeout=60)
-    response.raise_for_status()
-    data = response.json()
-    
-    df = pd.DataFrame(data["hourly"])
-    df = df.rename(columns={"time": "datetime"})
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df["date"] = df["datetime"].dt.date
-    df["hour"] = df["datetime"].dt.hour
-    
-    print(f"Fetched {len(df)} hourly records.")
-    return df
+def fetch_grid_weather(
+    start_date: str,
+    end_date: str,
+    *,
+    use_forecast_api: bool = False,
+    delay_between_points: float = 2.0,
+) -> pd.DataFrame:
+    """Fetch hourly weather for all 25 Chicago grid points. Returns combined DataFrame."""
+    api_label = "forecast" if use_forecast_api else "archive"
+    print(f"Fetching grid weather ({api_label}) for {len(CHICAGO_GRID)} points: {start_date} to {end_date}...", flush=True)
 
+    frames = []
+    for i, (lat, lon) in enumerate(CHICAGO_GRID):
+        print(f"  Grid point {i + 1}/{len(CHICAGO_GRID)}: ({lat}, {lon})", flush=True)
+        df = fetch_weather_for_point(lat, lon, start_date, end_date, use_forecast_api=use_forecast_api)
+        frames.append(df)
+        if i < len(CHICAGO_GRID) - 1:
+            time.sleep(delay_between_points)
 
-if __name__ == "__main__":
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # Historical data: 2020-2024
-    df_historical = fetch_weather("2020-01-01", "2024-12-31")
-    historical_path = OUTPUT_DIR / "chicago_weather_historical.csv"
-    df_historical.to_csv(historical_path, index=False)
-    print(f"Saved historical weather to {historical_path}")
-    print(f"Shape: {df_historical.shape}")
-    print(df_historical.head())
-    
-    print()
-    
-    # Present data: 2025-2026
-    df_present = fetch_weather("2025-01-01", "2025-12-31")
-    present_path = OUTPUT_DIR / "chicago_weather_present.csv"
-    df_present.to_csv(present_path, index=False)
-    print(f"Saved present weather to {present_path}")
-    print(f"Shape: {df_present.shape}")
-    print(df_present.head())
-
-    
+    combined = pd.concat(frames, ignore_index=True)
+    print(f"  Total weather records: {len(combined)}", flush=True)
+    return combined
