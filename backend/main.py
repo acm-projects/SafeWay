@@ -740,3 +740,143 @@ def get_news(
         return {"articles": final_articles}
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")
+
+
+
+# ---------------------------------------------------------------------------
+# Safe Route — returns Google fastest route + OSM safer alternative
+# ---------------------------------------------------------------------------
+class SafeRouteRequest(BaseModel):
+    origin: LatLng
+    destination: LatLng
+    travel_mode: Literal["DRIVE", "WALK", "BICYCLE", "TWO_WHEELER"] = "DRIVE"
+    departure_hour: int | None = None
+    beta: float = 0.5  # safety weight: higher = prioritize safety more
+
+
+@app.post("/maps/safe-route")
+def compute_safe_route(payload: SafeRouteRequest):
+    """
+    Returns two routes:
+    1. Google fastest route (scored for safety)
+    2. Safer OSM alternative (uses danger scores to avoid risky intersections)
+    """
+    _check_and_increment_api_limit()
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    # Step 1: Get Google fastest route
+    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": google_key,
+        "X-Goog-FieldMask": (
+            "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline"
+        ),
+    }
+    body = {
+        "origin": {"location": {"latLng": {"latitude": payload.origin.lat, "longitude": payload.origin.lng}}},
+        "destination": {"location": {"latLng": {"latitude": payload.destination.lat, "longitude": payload.destination.lng}}},
+        "travelMode": payload.travel_mode,
+    }
+
+    response = requests.post(url, headers=headers, json=body, timeout=25)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=f"Routes API error: {response.text}")
+
+    raw_routes = response.json().get("routes", [])
+    if not raw_routes:
+        raise HTTPException(status_code=404, detail="No routes found")
+
+    # Score Google route
+    google_route = raw_routes[0]
+    polyline = (google_route.get("polyline") or {}).get("encodedPolyline", "")
+    google_coords = decode_polyline(polyline) if polyline else []
+    google_safety = {}
+    try:
+        from risk_cache import score_coordinates
+        google_safety = score_coordinates(google_coords, sample_every=5, departure_hour=payload.departure_hour)
+    except Exception as e:
+        print(f"[safe-route] Google scoring failed: {e}")
+
+    # Step 2: Find safer OSM alternative
+    safer_route = None
+    try:
+        import osmnx as ox
+        from risk_cache import get_graph, get_risk_map
+        from model.route_scoring import attach_risk_to_graph, find_safer_route
+
+        G = get_graph()
+        risk_map = get_risk_map()
+        attach_risk_to_graph(G, risk_map)
+
+        # Find nearest OSM nodes to origin and destination
+        origin_node = ox.distance.nearest_nodes(G, X=payload.origin.lng, Y=payload.origin.lat)
+        dest_node = ox.distance.nearest_nodes(G, X=payload.destination.lng, Y=payload.destination.lat)
+
+        result = find_safer_route(G, origin_node, dest_node, beta=payload.beta)
+
+        # Convert safe path nodes to coordinates
+        safe_coords = [
+            {"latitude": G.nodes[n]["y"], "longitude": G.nodes[n]["x"]}
+            for n in result["safe_path"]
+            if "y" in G.nodes[n] and "x" in G.nodes[n]
+        ]
+
+        # Score the safer route
+        safer_safety = {}
+        try:
+            safer_safety = score_coordinates(safe_coords, sample_every=5, departure_hour=payload.departure_hour)
+        except Exception:
+            pass
+
+        safer_route = {
+            "coordinates": safe_coords,
+            "polyline": None,
+            "distance_meters": None,
+            "duration": None,
+            "safety_score": safer_safety.get("score"),
+            "safety_label": safer_safety.get("label", "unknown"),
+            "risk_per_km": safer_safety.get("risk_per_km"),
+            "total_exposure": safer_safety.get("total_exposure"),
+            "route_km": safer_safety.get("route_km"),
+            "n_high_risk": safer_safety.get("n_high_risk", 0),
+            "top_risk_factors": safer_safety.get("top_risk_factors", []),
+            "time_band": safer_safety.get("time_band"),
+            "time_penalty_pct": round(result.get("time_penalty_pct", 0), 1),
+            "risk_reduction_pct": round(result.get("risk_reduction_pct", 0), 1),
+        }
+
+    except Exception as e:
+        print(f"[safe-route] OSM safer route failed: {e}")
+
+    return {
+        "google_fastest": {
+            "coordinates": google_coords,
+            "polyline": polyline,
+            "distance_meters": google_route.get("distanceMeters"),
+            "duration": google_route.get("duration"),
+            "safety_score": google_safety.get("score"),
+            "safety_label": google_safety.get("label", "unknown"),
+            "risk_per_km": google_safety.get("risk_per_km"),
+            "total_exposure": google_safety.get("total_exposure"),
+            "route_km": google_safety.get("route_km"),
+            "n_high_risk": google_safety.get("n_high_risk", 0),
+            "top_risk_factors": google_safety.get("top_risk_factors", []),
+            "time_band": google_safety.get("time_band"),
+        },
+        "safer_alternative": safer_route,
+        "comparison": {
+            "time_penalty_pct": safer_route.get("time_penalty_pct") if safer_route else None,
+            "risk_reduction_pct": safer_route.get("risk_reduction_pct") if safer_route else None,
+            "recommendation": (
+                f"{abs(safer_route['risk_reduction_pct'])}% less total risk exposure"
+                if safer_route and safer_route.get("risk_reduction_pct") is not None
+                else "Safer alternative unavailable"
+            ),
+        },
+    }
+
+
+
