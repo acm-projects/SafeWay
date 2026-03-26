@@ -187,11 +187,187 @@ def get_graph():
     return _graph
 
 
+# Mode-specific risk weights
+MODE_WEIGHTS = {
+    "DRIVE": {
+        "base_risk": 1.0,
+        "ped_multiplier": 1.0,
+        "bike_multiplier": 1.0,
+        "crime_multiplier": 0.5,
+        "lighting_multiplier": 1.0,
+        "speed_multiplier": 1.0,
+    },
+    "WALK": {
+        "base_risk": 1.0,
+        "ped_multiplier": 3.0,      # pedestrian crashes matter much more
+        "bike_multiplier": 0.5,
+        "crime_multiplier": 2.0,    # crime matters much more for walkers
+        "lighting_multiplier": 2.0, # lighting matters much more at night
+        "speed_multiplier": 1.5,    # high speed roads are dangerous for walkers
+    },
+    "BICYCLE": {
+        "base_risk": 1.0,
+        "ped_multiplier": 0.5,
+        "bike_multiplier": 3.0,     # bike crashes matter much more
+        "crime_multiplier": 1.0,
+        "lighting_multiplier": 1.5,
+        "speed_multiplier": 2.0,    # high speed roads are very dangerous for cyclists
+    },
+    "TWO_WHEELER": {
+        "base_risk": 1.0,
+        "ped_multiplier": 1.0,
+        "bike_multiplier": 2.0,
+        "crime_multiplier": 0.5,
+        "lighting_multiplier": 1.5,
+        "speed_multiplier": 1.5,
+    },
+}
+
+
+def get_node_risk_for_mode(node_id: str, risk_map: dict, travel_mode: str = "DRIVE") -> float:
+    """
+    Get risk score for a node adjusted for travel mode.
+    Uses base predicted_risk from model and applies mode-specific multipliers.
+    """
+    base_risk = risk_map.get(node_id, 0.0)
+    weights = MODE_WEIGHTS.get(travel_mode, MODE_WEIGHTS["DRIVE"])
+    # Apply base multiplier — for now use base risk directly
+    # Future: pull per-node ped/bike/crime proportions and weight them
+    adjusted = base_risk * weights["base_risk"]
+    return min(100.0, adjusted)
+
+
 def score_coordinates(
     coordinates: list[dict],
     sample_every: int = 5,
     departure_hour: int | None = None,
+    travel_mode: str = "DRIVE",
 ) -> dict:
+    """
+    Phase E: Distance-weighted route scoring.
+    Phase F: Aggregate SHAP risk factors across route.
+    Phase G: Apply time-of-day multipliers.
+    Mode-aware: applies different risk weights for WALK, BICYCLE, DRIVE.
+
+    Returns:
+      score: risk-per-km (0-100, percentile-normalized), comparable across routes
+      total_exposure: absolute cumulative risk x distance
+      route_km: total route distance
+      n_high_risk: count of nodes with risk > 66th percentile
+      top_risk_factors: aggregated SHAP factors across route (Phase F)
+      time_band: which time band was applied (Phase G)
+      travel_mode: mode used for scoring
+    """
+    import osmnx as ox
+    from datetime import datetime, timezone
+
+    risk_map = get_risk_map()
+    shap_map = get_shap_map()
+    tod_map = get_tod_map()
+    G = get_graph()
+
+    empty = {
+        "score": None, "label": "unknown", "risk_sum": 0, "n_scored": 0,
+        "total_exposure": 0, "route_km": 0, "n_high_risk": 0,
+        "risk_per_km": None, "top_risk_factors": [], "time_band": None,
+        "travel_mode": travel_mode,
+    }
+
+    if not coordinates or not risk_map:
+        return empty
+
+    sampled = coordinates[::sample_every] if sample_every > 1 else coordinates
+    if not sampled:
+        return empty
+
+    lats = [p["latitude"] for p in sampled]
+    lngs = [p["longitude"] for p in sampled]
+
+    try:
+        nearest = ox.distance.nearest_nodes(G, X=lngs, Y=lats)
+    except Exception:
+        return empty
+
+    # Determine time band
+    if departure_hour is None:
+        departure_hour = datetime.now(timezone.utc).hour
+    time_band = _hour_to_band(departure_hour)
+
+    # Mode weights
+    weights = MODE_WEIGHTS.get(travel_mode, MODE_WEIGHTS["DRIVE"])
+
+    # Apply time-of-day multiplier and mode weights to each node's risk
+    risks = []
+    for nid in nearest:
+        nid_str = str(nid)
+        base_risk = risk_map.get(nid_str, 0.0)
+        tod_mult = tod_map.get(nid_str, {}).get(time_band, 1.0)
+
+        # For walking/cycling, boost lighting multiplier at night
+        if travel_mode in ("WALK", "BICYCLE") and time_band == "night":
+            tod_mult *= weights["lighting_multiplier"]
+
+        # Apply mode base weight
+        adjusted_risk = base_risk * tod_mult * weights["base_risk"]
+        risks.append(min(100.0, adjusted_risk))
+
+    if not risks:
+        return empty
+
+    # Phase E: Distance-weighted scoring
+    total_risk_km = 0.0
+    total_km = 0.0
+    for i in range(len(sampled) - 1):
+        seg_km = _haversine_km(lats[i], lngs[i], lats[i + 1], lngs[i + 1])
+        seg_risk = (risks[i] + risks[i + 1]) / 2.0
+        total_risk_km += seg_risk * seg_km
+        total_km += seg_km
+
+    if total_km < 0.001:
+        total_km = 0.001
+        total_risk_km = risks[0] * total_km
+
+    risk_per_km = total_risk_km / total_km
+    score = round(min(100.0, risk_per_km), 2)
+    n_high_risk = sum(1 for r in risks if r > 66)
+
+    if score < 33:
+        label = "low"
+    elif score < 66:
+        label = "medium"
+    else:
+        label = "high"
+
+    # Phase F: Aggregate SHAP factors across route nodes
+    factor_counts: dict[str, dict] = {}
+    for nid in nearest:
+        factors = shap_map.get(str(nid), [])
+        for f in factors:
+            key = f["label"]
+            if key not in factor_counts:
+                factor_counts[key] = {"label": key, "feature": f["feature"], "count": 0, "total_shap": 0.0}
+            factor_counts[key]["count"] += 1
+            factor_counts[key]["total_shap"] += abs(f.get("shap", 0))
+
+    top_factors = sorted(factor_counts.values(), key=lambda x: x["count"], reverse=True)[:5]
+    top_risk_factors = [
+        {"label": f["label"], "count": f["count"], "pct": round(100 * f["count"] / len(nearest), 1)}
+        for f in top_factors
+    ]
+
+    return {
+        "score": score,
+        "label": label,
+        "risk_sum": round(sum(risks), 2),
+        "n_scored": len(risks),
+        "total_exposure": round(total_risk_km, 2),
+        "route_km": round(total_km, 2),
+        "risk_per_km": round(risk_per_km, 2),
+        "n_high_risk": n_high_risk,
+        "top_risk_factors": top_risk_factors,
+        "time_band": time_band,
+        "travel_mode": travel_mode,
+    }
     """
     Phase E: Distance-weighted route scoring.
     Phase F: Aggregate SHAP risk factors across route.
@@ -301,3 +477,6 @@ def score_coordinates(
         "top_risk_factors": top_risk_factors,
         "time_band": time_band,
     }
+
+
+

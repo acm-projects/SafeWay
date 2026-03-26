@@ -347,10 +347,12 @@ def compute_route(payload: RouteRequest):
             safety_label = "unknown"
             extra = {}
             try:
+                
                 safety = score_coordinates(
                     coordinates,
                     sample_every=5,
                     departure_hour=payload.departure_hour,
+                    travel_mode=payload.travel_mode,
                 )
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
@@ -796,7 +798,7 @@ def compute_safe_route(payload: SafeRouteRequest):
     google_safety = {}
     try:
         from risk_cache import score_coordinates
-        google_safety = score_coordinates(google_coords, sample_every=5, departure_hour=payload.departure_hour)
+        google_safety = score_coordinates(google_coords, sample_every=5, departure_hour=payload.departure_hour, travel_mode=payload.travel_mode)
     except Exception as e:
         print(f"[safe-route] Google scoring failed: {e}")
 
@@ -827,7 +829,7 @@ def compute_safe_route(payload: SafeRouteRequest):
         # Score the safer route
         safer_safety = {}
         try:
-            safer_safety = score_coordinates(safe_coords, sample_every=5, departure_hour=payload.departure_hour)
+            safer_safety = score_coordinates(safe_coords, sample_every=5, departure_hour=payload.departure_hour, travel_mode=payload.travel_mode)
         except Exception:
             pass
 
@@ -877,6 +879,7 @@ def compute_safe_route(payload: SafeRouteRequest):
             ),
         },
     }
+
 
 
 
