@@ -3,7 +3,10 @@ docs/
 catboost_info/
 cache/
 scripts/
-backend/model/output/
+backend/model/output/*
+!backend/model/output/intersection_scores.parquet
+!backend/model/output/shap_top3.pkl
+!backend/model/output/hourly_risk_factors.parquet
 backend/__pycache__/
 backend/.env
 **/__pycache__/

@@ -442,8 +442,8 @@ def compute_route(payload: RouteRequest):
                     "time_band": safety.get("time_band"),
                     "segment_risks": safety.get("segment_risks", []),
                 }
-            except Exception:
-                pass
+            except Exception as score_err:
+                print(f"[route] score_coordinates failed for route: {score_err}", flush=True)
             result_routes.append({
                 "distance_meters": route.get("distanceMeters"),
                 "duration": route.get("duration"),

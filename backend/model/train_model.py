@@ -682,6 +682,12 @@ def main():
     tod_df.to_parquet(OUTPUT_DIR / "hourly_risk_factors.parquet", index=False)
     print(f"  Saved hourly_risk_factors.parquet ({len(tod_df)} rows).", flush=True)
 
+    # Save intersection_scores.parquet locally (used as fallback on Cloud Run)
+    scores_local = df[["node_id", "predicted_risk"]].copy()
+    scores_local["predicted_risk"] = scores_local["predicted_risk"].fillna(0)
+    scores_local.to_parquet(OUTPUT_DIR / "intersection_scores.parquet", index=False)
+    print(f"  Saved intersection_scores.parquet locally ({len(scores_local)} rows).", flush=True)
+
     if args.export_csv:
         df.to_csv(OUTPUT_DIR / "chicago_intersection_training_dataset.csv", index=False)
         print(f"  Saved dataset CSV.", flush=True)

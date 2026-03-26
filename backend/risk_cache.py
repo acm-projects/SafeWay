@@ -92,7 +92,20 @@ def get_risk_map() -> dict[str, float]:
         _tod_map = None
         _prepared_graph = None
 
-    # Try GCS first (local key file or Cloud Run default credentials)
+    # Try local file first (bundled in Docker image from training output)
+    local_path = OUTPUT_DIR / "intersection_scores.parquet"
+    if local_path.exists():
+        try:
+            import pandas as pd
+            scores = pd.read_parquet(local_path)
+            _risk_map = dict(zip(scores["node_id"].astype(str), scores["predicted_risk"].fillna(0).astype(float)))
+            _cache_loaded_at = time.time()
+            print(f"[risk_cache] loaded {len(_risk_map)} nodes from local file", flush=True)
+            return _risk_map
+        except Exception as e:
+            print(f"[risk_cache] local parquet load failed ({e}), trying GCS", flush=True)
+
+    # Try GCS (local key file or Cloud Run default credentials)
     try:
         import pandas as pd
         fs = _get_gcs_fs()
