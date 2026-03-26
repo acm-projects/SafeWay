@@ -29,6 +29,7 @@ jobs:
           service: safeway-api
           region: us-central1
           source: .
+          flags: --clear-base-image
           env_vars: |
             PORT=8080
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
