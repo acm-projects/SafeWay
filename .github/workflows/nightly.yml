@@ -44,11 +44,29 @@ jobs:
           GCS_CREDENTIALS_PATH: /tmp/gcs_key.json
         run: python -u -m backend.model.refresh_gcs_weather
 
-      # Step 3: Train XGBoost on ALL data with rolling date windows.
+      # Step 3: Train two-stage hurdle model (CatBoost classifier + XGBoost regressor)
+      #         on ALL data with rolling date windows.
       #         past window = 2020 to 2 years ago, label window = last 2 years.
-      #         Outputs: intersection_scores.parquet → GCS, model_info.json, feature_importance.png
+      #         Outputs: intersection_scores.parquet, shap_top3.pkl,
+      #         hourly_risk_factors.parquet → GCS
       - name: Train model
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs_key.json
           GCS_CREDENTIALS_PATH: /tmp/gcs_key.json
         run: python -u -m backend.model.train_model
+
+      # Step 4: Tell the live Cloud Run server to reload its caches from GCS.
+      #         Uses ADMIN_SECRET for auth. Fails gracefully if server is cold.
+      - name: Refresh live API cache
+        env:
+          API_URL: ${{ secrets.CLOUD_RUN_URL }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+        run: |
+          if [ -n "$API_URL" ]; then
+            curl -sf -X POST "${API_URL}/admin/refresh-cache" \
+              -H "Authorization: Bearer ${ADMIN_SECRET}" \
+              --max-time 120 \
+              || echo "Cache refresh failed (server may be cold); skipping."
+          else
+            echo "CLOUD_RUN_URL not set; skipping cache refresh."
+          fi

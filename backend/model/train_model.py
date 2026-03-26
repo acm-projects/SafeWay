@@ -77,6 +77,8 @@ FEATURE_COLS = [
     # Streetlight outages
     "n_streetlight_outages",
     "has_light_outage",
+    # Camera location proximity (deterrence gradient)
+    "nearest_camera_dist_m",
     # Phase C: Exposure-normalized rates
     "crash_rate_per_exposure",
     "fsi_rate_per_exposure",
@@ -352,6 +354,27 @@ def main():
     else:
         print("  GCS key not available; training without camera/streetlight features.", flush=True)
 
+    # --- Load camera LOCATION data from GCS ---
+    red_light_camera_locations = pd.DataFrame()
+    speed_camera_locations = pd.DataFrame()
+    if _has_gcs:
+        for _name, _var_name in [
+            ("red_light_camera_locations", "red_light_camera_locations"),
+            ("speed_camera_locations", "speed_camera_locations"),
+        ]:
+            try:
+                with _fs.open(f"safeway-data/{_name}.parquet", "rb") as f:
+                    _loaded = pd.read_parquet(f)
+                print(f"  Loaded {len(_loaded)} {_name} records from GCS.", flush=True)
+                if _var_name == "red_light_camera_locations":
+                    red_light_camera_locations = _loaded
+                else:
+                    speed_camera_locations = _loaded
+            except FileNotFoundError:
+                print(f"  {_name}.parquet not found on GCS; skipping.", flush=True)
+            except Exception as e:
+                print(f"  {_name} load failed ({e}); skipping.", flush=True)
+
     print("Loading OSM graph...")
     intersections, G = get_chicago_intersections()
 
@@ -368,6 +391,8 @@ def main():
         red_light_violations=red_light_violations,
         speed_violations=speed_violations,
         streetlights_out=streetlights_out,
+        red_light_camera_locations=red_light_camera_locations,
+        speed_camera_locations=speed_camera_locations,
     )
 
     # --- Prepare features ---
@@ -623,6 +648,7 @@ def main():
         "arterial_x_no_signal": "Major road, no signal",
         "speed_limit_mean": "High speed limit",
         "n_arms": "Complex intersection",
+        "nearest_camera_dist_m": "Camera proximity",
     }
 
     shap_top3 = {}

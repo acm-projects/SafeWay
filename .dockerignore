@@ -1,0 +1,15 @@
+frontend/
+docs/
+catboost_info/
+cache/
+scripts/
+backend/model/output/
+backend/__pycache__/
+backend/.env
+**/__pycache__/
+**/*.pyc
+.git/
+.github/
+*.md
+.claude/
+node_modules/

@@ -293,6 +293,85 @@ def search_places(query: str = Query(min_length=2), limit: int = Query(default=5
     return {"results": places}
 
 
+@app.get("/maps/place/{place_id}")
+def get_place_details(place_id: str):
+    """Proxy Google Places API v1 details — keeps API key server-side."""
+    _check_and_increment_api_limit()
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    fields = (
+        "id,displayName,formattedAddress,location,"
+        "rating,userRatingCount,websiteUri,nationalPhoneNumber,"
+        "regularOpeningHours,currentOpeningHours,photos,types,"
+        "googleMapsUri,editorialSummary"
+    )
+    response = requests.get(
+        f"https://places.googleapis.com/v1/places/{place_id}",
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": google_key,
+            "X-Goog-FieldMask": fields,
+        },
+        params={"languageCode": "en"},
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Place details fetch failed")
+
+    p = response.json()
+    oh = p.get("currentOpeningHours") or p.get("regularOpeningHours") or {}
+    opening_hours = None
+    if oh.get("weekdayDescriptions"):
+        opening_hours = "\n".join(oh["weekdayDescriptions"])
+    elif oh.get("openNow") is not None:
+        opening_hours = "Open now" if oh["openNow"] else "Closed"
+
+    photo_refs = [ph.get("name") for ph in (p.get("photos") or [])[:6] if ph.get("name")]
+
+    return {
+        "place_id": p.get("id") or place_id,
+        "name": (p.get("displayName") or {}).get("text", ""),
+        "address": p.get("formattedAddress", ""),
+        "lat": (p.get("location") or {}).get("latitude", 0),
+        "lng": (p.get("location") or {}).get("longitude", 0),
+        "rating": p.get("rating"),
+        "user_ratings_total": p.get("userRatingCount"),
+        "website": p.get("websiteUri"),
+        "phone": p.get("nationalPhoneNumber"),
+        "opening_hours": opening_hours,
+        "photo_urls": photo_refs,
+        "types": p.get("types"),
+        "google_maps_uri": p.get("googleMapsUri"),
+        "editorial_summary": (p.get("editorialSummary") or {}).get("text"),
+    }
+
+
+@app.get("/maps/place-photo")
+def get_place_photo(ref: str = Query(..., description="Photo resource name from Places API")):
+    """Proxy Google Places photo — streams image bytes so API key stays server-side."""
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    photo_url = f"https://places.googleapis.com/v1/{ref}/media"
+    response = requests.get(
+        photo_url,
+        params={"maxHeightPx": 800, "maxWidthPx": 800, "key": google_key},
+        timeout=20,
+        stream=True,
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Photo fetch failed")
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        response.iter_content(chunk_size=8192),
+        media_type=response.headers.get("content-type", "image/jpeg"),
+    )
+
+
 @app.post("/maps/route")
 def compute_route(payload: RouteRequest):
     _check_and_increment_api_limit()
@@ -361,6 +440,7 @@ def compute_route(payload: RouteRequest):
                     "n_high_risk": safety.get("n_high_risk", 0),
                     "top_risk_factors": safety.get("top_risk_factors", []),
                     "time_band": safety.get("time_band"),
+                    "segment_risks": safety.get("segment_risks", []),
                 }
             except Exception:
                 pass
@@ -371,6 +451,7 @@ def compute_route(payload: RouteRequest):
                 "coordinates": coordinates,
                 "safety_score": safety_score,
                 "safety_label": safety_label,
+                "route_source": "google",
                 **extra,
             })
     except Exception as e:
@@ -385,7 +466,59 @@ def compute_route(payload: RouteRequest):
                 "coordinates": coordinates,
                 "safety_score": None,
                 "safety_label": "unknown",
+                "route_source": "google",
             })
+
+    # ── SafeWay A* safer route ──────────────────────────────────────────
+    try:
+        from risk_cache import get_prepared_graph, score_coordinates as sc
+        from model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
+        import osmnx as ox
+
+        G = get_prepared_graph()
+        orig_node = ox.distance.nearest_nodes(G, X=payload.origin.lng, Y=payload.origin.lat)
+        dest_node = ox.distance.nearest_nodes(G, X=payload.destination.lng, Y=payload.destination.lat)
+
+        if orig_node != dest_node:
+            astar = find_safer_route(G, orig_node, dest_node, beta=0.5)
+            safe_coords = path_to_coordinates(G, astar["safe_path"])
+
+            if len(safe_coords) >= 2:
+                safe_polyline = encode_polyline(safe_coords)
+                safe_safety = sc(safe_coords, sample_every=3, departure_hour=payload.departure_hour)
+
+                # Duration as Google-format string (e.g. "600s")
+                safe_duration = f"{astar['safe_time_secs']}s"
+
+                aadt = estimate_route_aadt(G, astar["safe_path"])
+                result_routes.append({
+                    "distance_meters": astar["safe_distance_m"],
+                    "duration": safe_duration,
+                    "polyline": safe_polyline,
+                    "coordinates": safe_coords,
+                    "safety_score": safe_safety.get("score"),
+                    "safety_label": safe_safety.get("label", "unknown"),
+                    "route_source": "safeway",
+                    "risk_per_km": safe_safety.get("risk_per_km"),
+                    "total_exposure": safe_safety.get("total_exposure"),
+                    "route_km": safe_safety.get("route_km"),
+                    "n_high_risk": safe_safety.get("n_high_risk", 0),
+                    "top_risk_factors": safe_safety.get("top_risk_factors", []),
+                    "time_band": safe_safety.get("time_band"),
+                    "segment_risks": safe_safety.get("segment_risks", []),
+                    "time_penalty_pct": astar["time_penalty_pct"],
+                    "risk_reduction_pct": astar["risk_reduction_pct"],
+                    "aadt_avg": aadt.get("aadt_avg"),
+                    "aadt_max": aadt.get("aadt_max"),
+                })
+    except Exception as e:
+        print(f"[route] SafeWay A* route skipped: {e}", flush=True)
+
+    # Sort: SafeWay route first, then by safety score ascending (safest first)
+    result_routes.sort(key=lambda r: (
+        0 if r.get("route_source") == "safeway" else 1,
+        r.get("safety_score") if r.get("safety_score") is not None else 999,
+    ))
 
     return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
@@ -740,3 +873,23 @@ def get_news(
         return {"articles": final_articles}
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Admin: cache management
+# ---------------------------------------------------------------------------
+@app.post("/admin/refresh-cache")
+def admin_refresh_cache(authorization: str = Header(None)):
+    """Force-reload risk/SHAP/time-of-day caches from GCS.
+
+    Called by nightly GitHub Actions after model retraining, or manually.
+    Protected by ADMIN_SECRET env var when set.
+    """
+    admin_secret = os.getenv("ADMIN_SECRET")
+    if admin_secret:
+        expected = f"Bearer {admin_secret}"
+        if not authorization or authorization != expected:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    from risk_cache import refresh_cache
+    result = refresh_cache()
+    return result

@@ -72,7 +72,7 @@ export default function OnboardingScreen() {
             await createEmergencyContact(jwt, {
               name: ct.name.trim(),
               phone: ct.phone.trim(),
-              relationship: ct.relationship.trim() || undefined,
+              relationship: ct.relationship.trim() || '',
             });
           }
         }

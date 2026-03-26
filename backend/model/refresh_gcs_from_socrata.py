@@ -280,6 +280,51 @@ def main() -> None:
     except Exception as e:
         print(f"  Streetlight fetch failed: {e}; skipping.", flush=True)
 
+    # --- Red Light Camera LOCATIONS (7mgr-iety) ---
+    # Static dataset: where cameras are physically installed (~150 locations).
+    # Different from violations — this is for deterrence proximity features.
+    print("Fetching red light camera locations...", flush=True)
+    try:
+        rlc_locs = fetch_all(
+            "7mgr-iety",
+            where="latitude IS NOT NULL",
+            select=["intersection", "latitude", "longitude", "first_approach", "second_approach"],
+            log_label="RedLightCameraLocations",
+        )
+        if not rlc_locs.empty:
+            for col in ("latitude", "longitude"):
+                rlc_locs[col] = pd.to_numeric(rlc_locs[col], errors="coerce")
+            rlc_locs = rlc_locs.dropna(subset=["latitude", "longitude"])
+            with fs.open("safeway-data/red_light_camera_locations.parquet", "wb") as f:
+                rlc_locs.to_parquet(f, index=False)
+            print(f"  red_light_camera_locations.parquet -> gs://safeway-data/ ({len(rlc_locs)} rows)", flush=True)
+        else:
+            print("  No red light camera location data returned; skipping.", flush=True)
+    except Exception as e:
+        print(f"  Red light camera locations fetch failed: {e}; skipping.", flush=True)
+
+    # --- Speed Camera LOCATIONS (4i42-qv3h) ---
+    # Static dataset: where speed cameras are physically installed (~150 locations).
+    print("Fetching speed camera locations...", flush=True)
+    try:
+        spd_locs = fetch_all(
+            "4i42-qv3h",
+            where="latitude IS NOT NULL",
+            select=["address", "latitude", "longitude"],
+            log_label="SpeedCameraLocations",
+        )
+        if not spd_locs.empty:
+            for col in ("latitude", "longitude"):
+                spd_locs[col] = pd.to_numeric(spd_locs[col], errors="coerce")
+            spd_locs = spd_locs.dropna(subset=["latitude", "longitude"])
+            with fs.open("safeway-data/speed_camera_locations.parquet", "wb") as f:
+                spd_locs.to_parquet(f, index=False)
+            print(f"  speed_camera_locations.parquet -> gs://safeway-data/ ({len(spd_locs)} rows)", flush=True)
+        else:
+            print("  No speed camera location data returned; skipping.", flush=True)
+    except Exception as e:
+        print(f"  Speed camera locations fetch failed: {e}; skipping.", flush=True)
+
     print("Done.", flush=True)
 
 

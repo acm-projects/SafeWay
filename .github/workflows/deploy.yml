@@ -1,0 +1,36 @@
+name: Deploy backend to Cloud Run
+
+on:
+  push:
+    branches: [main, feat/model-training]
+    paths:
+      - "backend/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: # manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_KEY_JSON }}
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: safeway-api
+          region: us-central1
+          source: .
+          env_vars: |
+            PORT=8080
+            SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+            SUPABASE_PUBLISHABLE_KEY=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+            GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
