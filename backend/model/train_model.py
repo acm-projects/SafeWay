@@ -378,6 +378,12 @@ def main():
     print("Loading OSM graph...")
     intersections, G = get_chicago_intersections()
 
+    # Cache graph as GraphML for Cloud Run (avoids downloading from OSM on cold start)
+    import osmnx as _ox
+    _graphml_path = OUTPUT_DIR / "chicago_drive.graphml"
+    _ox.save_graphml(G, _graphml_path)
+    print(f"  Saved chicago_drive.graphml ({_graphml_path.stat().st_size / 1024 / 1024:.1f} MB)", flush=True)
+
     print("Building training dataset (temporal split)...")
     df = build_training_dataset(
         crashes,

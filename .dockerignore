@@ -7,6 +7,7 @@ backend/model/output/*
 !backend/model/output/intersection_scores.parquet
 !backend/model/output/shap_top3.pkl
 !backend/model/output/hourly_risk_factors.parquet
+!backend/model/output/chicago_drive.graphml
 backend/__pycache__/
 backend/.env
 **/__pycache__/

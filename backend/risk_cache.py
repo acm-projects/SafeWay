@@ -240,6 +240,17 @@ def get_graph():
     global _graph
     if _graph is not None:
         return _graph
+
+    # Try local cached GraphML first (bundled in Docker image)
+    local_graphml = OUTPUT_DIR / "chicago_drive.graphml"
+    if local_graphml.exists():
+        import osmnx as ox
+        _graph = ox.load_graphml(local_graphml)
+        print(f"[risk_cache] loaded graph from local file ({_graph.number_of_nodes()} nodes)", flush=True)
+        return _graph
+
+    # Fallback: download from OSM (slow, for local dev without cached file)
+    print("[risk_cache] no local GraphML, downloading from OSM...", flush=True)
     import sys
     backend_dir = str(Path(__file__).resolve().parent)
     if backend_dir not in sys.path:
