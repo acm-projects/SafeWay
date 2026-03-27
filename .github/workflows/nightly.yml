@@ -22,7 +22,7 @@ jobs:
 
       - name: Write GCS key
         env:
-          GCS_KEY_JSON: ${{ secrets.GCS_KEY_JSON }}
+          GCS_KEY_JSON: ${{ secrets.GCS_KEY }}
         run: echo "$GCS_KEY_JSON" > /tmp/gcs_key.json
 
       # Step 1: Pull latest crashes, crimes, red light cameras,

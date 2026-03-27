@@ -1,5 +1,6 @@
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -16,7 +17,16 @@ from supabase import Client, create_client
 # Load .env from backend directory
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-app = FastAPI(title="SafeWay API")
+
+@asynccontextmanager
+async def lifespan(app):
+    """Load risk caches at startup so scores are ready before first request."""
+    from risk_cache import startup_load
+    startup_load()
+    yield
+
+
+app = FastAPI(title="SafeWay API", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
