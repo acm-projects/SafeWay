@@ -83,10 +83,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+// export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
+//   const encoded = encodeURIComponent(query.trim());
+//   const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encoded}`);
+//   return payload.results ?? [];
+// }
+
 export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
   const encoded = encodeURIComponent(query.trim());
-  const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encoded}`);
-  return payload.results ?? [];
+  const url = `${apiBaseUrl}/maps/search?query=${encoded}`;
+  console.log('🔍 searchPlaces URL:', url);
+  try {
+    const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encoded}`);
+    console.log('✅ results:', payload.results?.length);
+    return payload.results ?? [];
+  } catch (e) {
+    console.log('❌ searchPlaces error:', e);
+    return [];
+  }
 }
 
 // Returns true for real Google Place IDs (e.g. ChIJ...).

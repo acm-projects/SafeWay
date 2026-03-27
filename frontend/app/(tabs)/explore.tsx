@@ -65,6 +65,27 @@ export default function GuideScreen() {
   );
 }
 
+import MapView, { Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+
+const points = [
+  { latitude: 32.7767, longitude: -96.7970, weight: 10 }, // Dallas
+  { latitude: 32.7801, longitude: -96.8012, weight: 5 },
+  { latitude: 32.7750, longitude: -96.7900, weight: 8 },
+];
+
+<MapView provider={PROVIDER_GOOGLE} style={{ flex: 1 }}>
+  <Heatmap
+    points={points}
+    radius={40}
+    opacity={0.7}
+    gradient={{
+      colors: ['#00FF00', '#FF0000'],
+      startPoints: [0.1, 1.0],
+      colorMapSize: 256,
+    }}
+  />
+</MapView>
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,

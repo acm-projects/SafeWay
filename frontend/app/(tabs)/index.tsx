@@ -12,6 +12,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+
+import HeatmapLegend from '../HeatmapLegend';
 import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
@@ -28,6 +30,7 @@ import { useAuth } from '@/providers/auth-provider';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { LinearGradient } from 'expo-linear-gradient';
+import HexHeatmap from '@/app/HexHeatmap';
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 const NAVY       = '#0B1120';
@@ -54,7 +57,6 @@ const DARK_MAP_STYLE = [
   { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
 ];
 
-// Heatmap filter options — maps to HeatmapFilter type in useCrashHeatmap
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
   { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
   { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
@@ -71,7 +73,6 @@ function SheetBg({ style }: { style?: any }) {
   );
 }
 
-// ── Heatmap chooser modal ──────────────────────────────────────────────────────
 function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading }: {
   visible: boolean;
   activeFilter: HeatmapFilter | 'off';
@@ -125,7 +126,6 @@ function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, lo
   );
 }
 
-
 function ProfileModal({ visible, onClose, user, signOut }: {
   visible: boolean; onClose: () => void; user: any; signOut: () => void;
 }) {
@@ -175,8 +175,6 @@ function ProfileModal({ visible, onClose, user, signOut }: {
   );
 }
 
-
-// ── Place type → icon + color ─────────────────────────────────────────────────
 function placeIconFor(title: string): { icon: string; bg: string } {
   const t = title.toLowerCase();
   if (t.includes('university') || t.includes('college') || t.includes('school'))
@@ -217,36 +215,42 @@ export default function HomeScreen() {
   const snapPoints = useMemo(() => ['14%', '52%', '90%'], []);
   const animatedPosition = useSharedValue(windowHeight);
 
-  const [userLocation, setUserLocation]     = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocation, setUserLocation]       = useState<{ lat: number; lng: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
-  const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
-  const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
-  const [weather, setWeather]               = useState<WeatherData | null>(null);
-  const [sheetIndex, setSheetIndex]         = useState(1);
-  const [zoomLevel, setZoomLevel]           = useState(0.04);
-  const [placeModal, setPlaceModal]         = useState<'home'|'work'|'school'|null>(null);
-  const [placeQuery, setPlaceQuery]         = useState('');
-  const [placeSugg, setPlaceSugg]           = useState<any[]>([]);
-  const [placeBusy, setPlaceBusy]           = useState(false);
+  const [heatmapFilter, setHeatmapFilter]     = useState<HeatmapFilter | 'off'>('off');
+  const [bookmarks, setBookmarks]             = useState<Bookmark[]>([]);
+  const [weather, setWeather]                 = useState<WeatherData | null>(null);
+  const [sheetIndex, setSheetIndex]           = useState(1);
+  const [zoomLevel, setZoomLevel]             = useState(0.04);
+  const [placeModal, setPlaceModal]           = useState<'home'|'work'|'school'|null>(null);
+  const [placeQuery, setPlaceQuery]           = useState('');
+  const [placeSugg, setPlaceSugg]             = useState<any[]>([]);
+  const [placeBusy, setPlaceBusy]             = useState(false);
   const placeDebRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [homeLabel, setHomeLabel]           = useState<string | null>(null);
-  const [workLabel, setWorkLabel]           = useState<string | null>(null);
-  const [schoolLabel, setSchoolLabel]       = useState<string | null>(null);
+  const [homeLabel, setHomeLabel]             = useState<string | null>(null);
+  const [workLabel, setWorkLabel]             = useState<string | null>(null);
+  const [schoolLabel, setSchoolLabel]         = useState<string | null>(null);
 
-  // ── Crash heatmap data from Supabase ────────────────────────────────────────
+  // ── mapRegion as state so HexHeatmap stays in sync with pan/zoom ─────────────
+  const [mapRegion, setMapRegion] = useState({
+    latitude: 41.8827,
+    longitude: -87.6233,
+    latitudeDelta: 0.04,
+    longitudeDelta: 0.04,
+  });
+
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
     limit: 10_000,
   });
-  // Active filter label for the pill
+
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
   useEffect(() => {
     let cancelled = false;
-    // Hard fallback: always clear loading after 4s no matter what
     const hardTimeout = setTimeout(() => {
       if (!cancelled) setLocationLoading(false);
     }, 4000);
@@ -258,7 +262,9 @@ export default function HomeScreen() {
             Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low }),
             new Promise<null>(r => setTimeout(() => r(null), 3000)),
           ]);
-          if (loc && !cancelled) setUserLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          if (loc && !cancelled) {
+            setUserLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          }
         }
       } catch {}
       if (!cancelled) setLocationLoading(false);
@@ -272,9 +278,7 @@ export default function HomeScreen() {
       try {
         const w = await getWeather(userLocation.lat, userLocation.lng);
         setWeather(w);
-      } catch {
-        // Backend not reachable — skip weather silently
-      }
+      } catch {}
     })();
   }, [userLocation]);
 
@@ -288,7 +292,6 @@ export default function HomeScreen() {
       const bms = await listBookmarks(jwt);
       setBookmarks(bms);
     } catch {
-      // Backend not reachable — show empty state
       setBookmarks([]);
     }
   }
@@ -326,18 +329,25 @@ export default function HomeScreen() {
 
   function handleMyLocation() {
     if (userLocation && mapRef.current) {
-      mapRef.current.animateToRegion({ latitude: userLocation.lat, longitude: userLocation.lng, latitudeDelta: 0.03, longitudeDelta: 0.03 }, 500);
+      mapRef.current.animateToRegion({
+        latitude: userLocation.lat,
+        longitude: userLocation.lng,
+        latitudeDelta: 0.03,
+        longitudeDelta: 0.03,
+      }, 500);
     }
   }
+
   function handleZoomIn() {
-    const d = Math.max(zoomLevel * 0.5, 0.002); setZoomLevel(d);
-    const c = userLocation ?? { lat: 40.7291, lng: -73.9965 };
-    mapRef.current?.animateToRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: d, longitudeDelta: d }, 300);
+    const d = Math.max(zoomLevel * 0.75, 0.002);
+    setZoomLevel(d);
+    mapRef.current?.animateToRegion({ ...mapRegion, latitudeDelta: d, longitudeDelta: d }, 300);
   }
+
   function handleZoomOut() {
-    const d = Math.min(zoomLevel * 2, 1.5); setZoomLevel(d);
-    const c = userLocation ?? { lat: 40.7291, lng: -73.9965 };
-    mapRef.current?.animateToRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: d, longitudeDelta: d }, 300);
+    const d = Math.min(zoomLevel * 1.33, 10);
+    setZoomLevel(d);
+    mapRef.current?.animateToRegion({ ...mapRegion, latitudeDelta: d, longitudeDelta: d }, 300);
   }
 
   const handleSheetChange = useCallback((i: number) => setSheetIndex(i), []);
@@ -351,14 +361,17 @@ export default function HomeScreen() {
     return { borderTopLeftRadius: r, borderTopRightRadius: r, borderBottomLeftRadius: bR, borderBottomRightRadius: bR, marginLeft: mg, marginRight: mg };
   });
 
-  const TAB_H = 0;
+  const TAB_H = -70;
   const zoomAnim    = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 116 }));
   const locateAnim  = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 60  }));
   const heatmapAnim = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 10  }));
 
-  const mapRegion = userLocation
-    ? { latitude: userLocation.lat, longitude: userLocation.lng, latitudeDelta: 0.04, longitudeDelta: 0.04 }
-    : { latitude: 40.7291, longitude: -73.9965, latitudeDelta: 0.06, longitudeDelta: 0.06 };
+  const initialRegion = {
+    latitude: 41.8827,
+    longitude: -87.6233,
+    latitudeDelta: 0.06,
+    longitudeDelta: 0.06,
+  };
 
   const userInitials = user?.email ? user.email.slice(0, 2).toUpperCase() : null;
   const recents = bookmarks.slice(0, 5);
@@ -380,28 +393,30 @@ export default function HomeScreen() {
 
   return (
     <View style={s.container}>
-      <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
-        provider={PROVIDER_GOOGLE} initialRegion={mapRegion}
-        showsUserLocation showsMyLocationButton={false}
-        customMapStyle={DARK_MAP_STYLE}>
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFillObject}
+        provider={PROVIDER_GOOGLE}
+        initialRegion={initialRegion}
+        showsUserLocation
+        showsMyLocationButton={false}
+        customMapStyle={DARK_MAP_STYLE}
+        onRegionChangeComplete={setMapRegion}
+      >
         {bookmarks.map(bm => (
           <Marker key={bm.id} coordinate={{ latitude: bm.lat, longitude: bm.lng }}
             title={bm.title} description={bm.address} pinColor={GREEN} />
         ))}
-        {/* Real crash heatmap from Supabase enriched_crashes */}
-        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
-          <Heatmap
+        {heatmapFilter !== 'off' && (
+          <HexHeatmap
             points={crashPoints}
+            region={mapRegion}
             opacity={0.75}
-            radius={20}
-            gradient={{
-              colors: ['#00E5FF', '#FFD600', '#FF1744'],
-              startPoints: [0.1, 0.5, 1.0],
-              colorMapSize: 256,
-            }}
           />
         )}
       </MapView>
+
+        <HeatmapLegend visible={heatmapFilter !== 'off'} />
 
       {/* Zoom */}
       <Animated.View style={[s.zoomWrap, zoomAnim]}>
@@ -437,10 +452,8 @@ export default function HomeScreen() {
         </Pressable>
       </Animated.View>
 
-      {/* Profile modal */}
       <ProfileModal visible={showProfileModal} onClose={() => setShowProfileModal(false)} user={user} signOut={signOut} />
 
-      {/* Heatmap chooser */}
       <HeatmapModal
         visible={showHeatmapModal}
         activeFilter={heatmapFilter}
@@ -450,7 +463,6 @@ export default function HomeScreen() {
         loading={crashLoading}
       />
 
-      {/* Home/Work/School picker */}
       <Modal visible={placeModal !== null} transparent animationType="slide"
         onRequestClose={() => { setPlaceModal(null); setPlaceQuery(''); setPlaceSugg([]); }}>
         <Pressable style={hw.backdrop} onPress={() => { setPlaceModal(null); setPlaceQuery(''); setPlaceSugg([]); }}>
@@ -488,7 +500,6 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
-      {/* Bottom Sheet */}
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
         backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
@@ -498,7 +509,6 @@ export default function HomeScreen() {
           contentContainerStyle={[s.sheetContent, { paddingBottom: insets.bottom + 24 }]}
           scrollEnabled={sheetIndex === 2}>
 
-          {/* Search row */}
           <View style={s.searchRow}>
             <Pressable style={s.searchBar} onPress={() => router.push('/search')}>
               <Ionicons name="search" size={16} color={TEXT_MUT} />
@@ -515,7 +525,6 @@ export default function HomeScreen() {
 
           {sheetIndex >= 1 && (
             <>
-              {/* BOOKMARKED LOCATIONS */}
               <Text style={s.sectionLabel}>BOOKMARKED LOCATIONS</Text>
               <View style={s.bookmarkCard}>
                 <Text style={s.placesCount}>{bookmarks.length} Places</Text>
@@ -562,27 +571,26 @@ export default function HomeScreen() {
                 )}
               </View>
 
-              {/* RECENTS */}
               <Text style={[s.sectionLabel, { marginTop: 20 }]}>RECENTS</Text>
               <View style={s.recentCard}>
                 {recents.length > 0 ? recents.map((bm, i) => {
-                const { icon, bg } = placeIconFor(bm.title);
-                return (
-                  <View key={bm.id}>
-                    <Pressable style={s.recentRow}
-                      onPress={() => router.push({ pathname: '/destination', params: { placeId: bm.id, name: bm.title, address: bm.address ?? '', lat: String(bm.lat), lng: String(bm.lng) } })}>
-                      <View style={[s.recentIconWrap, { backgroundColor: bg }]}>
-                        <Ionicons name={icon as any} size={18} color="#fff" />
-                      </View>
-                      <View style={s.recentContent}>
-                        <Text style={s.recentTitle}>{bm.title}</Text>
-                        {bm.address ? <Text style={s.recentSub} numberOfLines={1}>{bm.address}</Text> : null}
-                      </View>
-                    </Pressable>
-                    {i < recents.length - 1 && <View style={s.rowDiv} />}
-                  </View>
-                );
-              }) : (
+                  const { icon, bg } = placeIconFor(bm.title);
+                  return (
+                    <View key={bm.id}>
+                      <Pressable style={s.recentRow}
+                        onPress={() => router.push({ pathname: '/destination', params: { placeId: bm.id, name: bm.title, address: bm.address ?? '', lat: String(bm.lat), lng: String(bm.lng) } })}>
+                        <View style={[s.recentIconWrap, { backgroundColor: bg }]}>
+                          <Ionicons name={icon as any} size={18} color="#fff" />
+                        </View>
+                        <View style={s.recentContent}>
+                          <Text style={s.recentTitle}>{bm.title}</Text>
+                          {bm.address ? <Text style={s.recentSub} numberOfLines={1}>{bm.address}</Text> : null}
+                        </View>
+                      </Pressable>
+                      {i < recents.length - 1 && <View style={s.rowDiv} />}
+                    </View>
+                  );
+                }) : (
                   <View style={s.recentRow}>
                     <Text style={s.emptyText}>No recent places yet</Text>
                   </View>
