@@ -491,7 +491,7 @@ export default function DestinationScreen() {
 
       {/* Locate / Center — fixed top-right below route card */}
       {/* Zoom — fixed top-right, matches directions layout */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: '#030427' }}>
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.ITEM }}>
         <Pressable style={s.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={T.TEXT_PRI} /></Pressable>
         <View style={[s.zoomDiv, { backgroundColor: T.DIVIDER }]} />
         <Pressable style={s.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={T.TEXT_PRI} /></Pressable>
@@ -499,7 +499,7 @@ export default function DestinationScreen() {
 
       {/* Locate — fixed below zoom */}
       <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21 }}>
-        <Pressable style={[s.floatBtnInner, { backgroundColor: '#030427' }]} onPress={handleCenter}>
+        <Pressable style={[s.floatBtnInner, { backgroundColor: T.ITEM }]} onPress={handleCenter}>
           <Ionicons name="locate" size={20} color={T.ACCENT} />
         </Pressable>
       </View>
@@ -507,7 +507,7 @@ export default function DestinationScreen() {
       {/* Heatmap pill — fixed below locate */}
       <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 152 }}>
         <Pressable
-          style={[s.heatmapInner, { backgroundColor: '#030427' }, heatmapFilter !== 'off' && s.heatmapInnerActive]}
+          style={[s.heatmapInner, { backgroundColor: T.ITEM }, heatmapFilter !== 'off' && s.heatmapInnerActive]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
@@ -612,21 +612,15 @@ export default function DestinationScreen() {
                     adjustsFontSizeToFit
                     minimumFontScale={0.6}
                   >{placeName}</Text>
-                  <View style={s.subtitleRow}>
+                  <View style={[s.subtitleRow, { marginTop: 6 }]}>
                     <Text style={[s.placeType, { color: T.TEXT_MUT }]}>{placeType}</Text>
                     {placeAddr ? (
-                      <Text style={[s.placeType, { color: T.ACCENT }]}>
+                      <Text style={[s.placeType, { color: '#4A90E2' }]}>
                         {'  •  '}{placeAddr.split(',').slice(-2, -1)[0]?.trim()}
                       </Text>
                     ) : null}
                   </View>
                 </View>
-                <Pressable
-                  style={{ backgroundColor: T.ACCENT, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}
-                  onPress={() => router.push({ pathname: '/directions', params: { destLat: String(lat), destLng: String(lng), destName: placeName, originAddress: originLabel || currentAddress, ...(originCoords ? { originLat: String(originCoords.lat), originLng: String(originCoords.lng) } : {}) } })}
-                >
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Go</Text>
-                </Pressable>
                 <Pressable style={[s.closeBtn, { backgroundColor: T.ITEM }]} onPress={() => router.back()}>
                   <Ionicons name="close" size={18} color={T.TEXT_PRI} />
                 </Pressable>
@@ -644,7 +638,7 @@ export default function DestinationScreen() {
               {ohText ? (
                 <View style={s.hoursRow}>
                   {isOpenNow !== null && (
-                    <Text style={[s.openTag, { color: isOpenNow ? T.ACCENT : '#FF4444' }]}>
+                    <Text style={[s.openTag, { color: isOpenNow ? '#22C55E' : '#FF4444' }]}>
                       {isOpenNow ? 'Open' : 'Closed'}
                     </Text>
                   )}
@@ -877,10 +871,10 @@ const s = StyleSheet.create({
   miniTitle: { flex: 1, fontSize: 20, fontWeight: '800', textAlign: 'center' },
   miniClose: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
-  placeName: { fontSize: 24, fontWeight: '800', lineHeight: 30 },
+  placeName: { fontSize: 28, fontWeight: '800', lineHeight: 30 },
   closeBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    justifyContent: 'center', alignItems: 'center', marginTop: 2,
+    width: 34, height: 34, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center', marginTop: -30,
   },
   subtitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   placeType: { fontSize: 13 },
@@ -908,10 +902,10 @@ const s = StyleSheet.create({
   aboutCard: { borderRadius: 16, overflow: 'hidden' },
   aboutRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 12,
-    paddingHorizontal: 14, paddingVertical: 13,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
   aboutText: { flex: 1, fontSize: 13, lineHeight: 18 },
-  aboutDiv: { height: 1, marginLeft: 44 },
+  aboutDiv: { height: 1, marginLeft: 44, marginBottom: 2 },
 });
 
 const hm = StyleSheet.create({

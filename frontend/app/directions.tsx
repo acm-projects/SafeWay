@@ -34,7 +34,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
-import type { AlternativeRoute, PlaceSearchResult, RoutePoint } from '@/lib/api';
+import type { AlternativeRoute, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
+import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
@@ -298,6 +299,174 @@ function InteractiveBarChart({
   );
 }
 
+// ─── Hourly Line Graph with projected data ────────────────────────────────────
+function HourlyLineGraph({
+  data, nowHour, lineColor, projectedColor, formatValue, unit,
+}: {
+  data: { h: number; label: string; val: number; isProjected: boolean }[];
+  nowHour: number;
+  lineColor: string;
+  projectedColor: string;
+  formatValue: (v: number) => string;
+  unit: string;
+}) {
+  const [containerWidth, setContainerWidth] = useState(280);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const CHART_H = 80;
+  const LABEL_H = 18;
+
+  const vals = data.map(d => d.val);
+  const maxVal = Math.max(...vals, 1);
+  const minVal = 0;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1))));
+        setHoveredIndex(idx);
+      },
+      onPanResponderMove: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1))));
+        setHoveredIndex(idx);
+      },
+      onPanResponderRelease: () => { setTimeout(() => setHoveredIndex(null), 2000); },
+      onPanResponderTerminate: () => { setTimeout(() => setHoveredIndex(null), 2000); },
+    })
+  ).current;
+
+  // Calculate point positions
+  const points = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * containerWidth;
+    const y = CHART_H - ((d.val - minVal) / (maxVal - minVal)) * (CHART_H - 10);
+    return { x, y, ...d };
+  });
+
+  // Build SVG-style path segments split at nowHour
+  const solidPoints = points.filter(p => !p.isProjected);
+  const projectedPoints = points.filter(p => p.isProjected || p.h === nowHour);
+
+  const toPolyline = (pts: typeof points) =>
+    pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  const activeIdx = hoveredIndex ?? nowHour;
+  const activePoint = points[activeIdx];
+
+  return (
+    <View
+      onLayout={e => setContainerWidth(e.nativeEvent.layout.width)}
+      style={{ height: CHART_H + LABEL_H + 8, position: 'relative' }}
+      {...panResponder.panHandlers}
+    >
+      {/* Tooltip */}
+      {hoveredIndex !== null && activePoint && (
+        <View style={{
+          position: 'absolute',
+          left: Math.min(Math.max(activePoint.x - 36, 0), containerWidth - 80),
+          top: Math.max(0, activePoint.y - 42),
+          backgroundColor: '#1A2040',
+          borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+          borderWidth: 1, borderColor: lineColor + '66',
+          zIndex: 10, minWidth: 76, alignItems: 'center',
+          shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.4, shadowRadius: 6, elevation: 8,
+        }}>
+          <Text style={{ color: lineColor, fontSize: 13, fontWeight: '800' }}>{formatValue(activePoint.val)}</Text>
+          <Text style={{ color: '#7A8FA6', fontSize: 9, marginTop: 1 }}>{activePoint.label} · {unit}</Text>
+        </View>
+      )}
+
+      {/* Chart area */}
+      <View style={{ height: CHART_H, overflow: 'hidden' }}>
+        {/* Grid lines */}
+        {[0.25, 0.5, 0.75].map(frac => (
+          <View key={frac} style={{
+            position: 'absolute', left: 0, right: 0,
+            top: frac * CHART_H, height: 1,
+            backgroundColor: '#FFFFFF0A',
+          }} />
+        ))}
+
+        {/* Solid line segments (past + now) */}
+        {solidPoints.length > 1 && solidPoints.slice(0, -1).map((p, i) => {
+          const next = solidPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          return (
+            <View key={i} style={{
+              position: 'absolute',
+              left: p.x, top: p.y - 1.5,
+              width: len, height: 3, borderRadius: 1.5,
+              backgroundColor: lineColor,
+              transform: [{ rotate: `${angle}deg` }],
+              transformOrigin: '0 50%',
+            }} />
+          );
+        })}
+
+        {/* Projected dashed segments */}
+        {projectedPoints.length > 1 && projectedPoints.slice(0, -1).map((p, i) => {
+          const next = projectedPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          // Simulate dashed by alternating opacity segments
+          return (
+            <View key={`proj-${i}`} style={{
+              position: 'absolute',
+              left: p.x, top: p.y - 1.5,
+              width: len, height: 3, borderRadius: 1.5,
+              backgroundColor: projectedColor,
+              transform: [{ rotate: `${angle}deg` }],
+              transformOrigin: '0 50%',
+              opacity: 0.7,
+            }} />
+          );
+        })}
+
+        {/* Current hour dot */}
+        {points[nowHour] && (
+          <View style={{
+            position: 'absolute',
+            left: points[nowHour].x - 5,
+            top: points[nowHour].y - 5,
+            width: 10, height: 10, borderRadius: 5,
+            backgroundColor: lineColor,
+            borderWidth: 2, borderColor: '#fff',
+          }} />
+        )}
+
+        {/* Hover dot */}
+        {hoveredIndex !== null && activePoint && (
+          <View style={{
+            position: 'absolute',
+            left: activePoint.x - 5, top: activePoint.y - 5,
+            width: 10, height: 10, borderRadius: 5,
+            backgroundColor: activePoint.isProjected ? projectedColor : lineColor,
+            borderWidth: 2, borderColor: '#fff',
+          }} />
+        )}
+      </View>
+
+      {/* X-axis labels — show every 4 hours */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 0 }}>
+        {data.filter((_, i) => i % 4 === 0).map(d => (
+          <Text key={d.h} style={{
+            color: d.h === nowHour ? lineColor : '#7A8FA6',
+            fontSize: 9, fontWeight: d.h === nowHour ? '700' : '500',
+          }}>{d.label}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // ─── Route Details Modal ──────────────────────────────────────────────────────
 function RouteDetailsModal({
   visible, onClose, originLabel, originAddress, destLabel, activeData, travelMode,
@@ -316,7 +485,6 @@ function RouteDetailsModal({
   originLat?: number;
   originLng?: number;
 }) {
-  const [tab, setTab] = useState<'details' | 'insights'>('details');
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const { height: screenH } = useWindowDimensions();
   const { T } = useTheme();
@@ -350,12 +518,7 @@ function RouteDetailsModal({
 
           {/* ── Header + close ── */}
           <View style={dm.tabRow}>
-            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
-              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'details' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Details</Text>
-            </Pressable>
-            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
-              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'insights' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
-            </Pressable>
+            <Text style={[dm.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Details</Text>
             <View style={{ flex: 1 }} />
             <Pressable onPress={onClose}>
               <View style={[dm.closeBtnCircle, { backgroundColor: T.ITEM }]}>
@@ -373,15 +536,8 @@ function RouteDetailsModal({
   <View style={{ backgroundColor: T.CARD, borderRadius: 16, overflow: 'hidden', marginBottom: 8 }}>
     <View style={[dm.stepRow, { paddingLeft: 8 }]}>
       <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
-        <Ionicons
-          name={modeIcon[travelMode]}
-          size={20}
-          color={T.ACCENT} // or T.TEXT_PRI depending on your theme
-        />
+        <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
       </View>
-                <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
-                  <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
-                </View>
                 <View style={dm.stepContent}>
                   <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>From {originLabel}</Text>
                   <Text style={[dm.stepInst, { color: T.TEXT_MUT }]} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
@@ -438,204 +594,8 @@ function RouteDetailsModal({
                   <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>Destination</Text>
                 </View>
               </View>
-              </View>
-            </ScrollView>
-
-          {/* ── Route Insights tab ── fully themed */}
-          {tab === 'insights' && (
-            <ScrollView
-              style={dm.tabBody}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={dm.insightsContent}
-            >
-              {/* ── Safety Score Hero ── */}
-              {activeData?.safetyScore != null && (
-                <View style={[dm.heroCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <View style={dm.heroRow}>
-                    <View style={dm.heroCircle}>
-                      <View style={[dm.heroCircleInner, {
-                        borderColor: activeData.safetyScore < 33 ? '#1ABC93' : activeData.safetyScore < 66 ? '#FFA500' : '#FF4444',
-                      }]}>
-                        <Text style={dm.heroScoreText}>{Math.max(0, 100 - Math.round(activeData.safetyScore))}%</Text>
-                        <Text style={dm.heroScoreLabel}>Safe</Text>
-                      </View>
-                    </View>
-                    <View style={dm.heroInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={[dm.heroTitle, { color: T.TEXT_PRI }]}>
-                          {activeData.safetyLabel === 'low' ? 'Low Risk' : activeData.safetyLabel === 'medium' ? 'Moderate Risk' : activeData.safetyLabel === 'high' ? 'High Risk' : 'Safety Score'}
-                        </Text>
-                        {activeData.routeSource === 'safeway' && (
-                          <View style={dm.safewayBadge}>
-                            <Text style={dm.safewayBadgeText}>SafeWay A*</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={[dm.heroSub, { color: T.TEXT_MUT }]}>
-                        {activeData.routeKm ? `${activeData.routeKm.toFixed(1)} km` : fmtDist(activeData.distance)}
-                        {activeData.nHighRisk ? `  •  ${activeData.nHighRisk} hot spots` : ''}
-                      </Text>
-                      {activeData.timeBand && (
-                        <Text style={[dm.heroSub, { color: T.TEXT_MUT }]}>
-                          Time band: {activeData.timeBand}
-                        </Text>
-                      )}
-                      {activeData.riskReductionPct != null && activeData.riskReductionPct > 0 && (
-                        <Text style={{ color: '#1ABC93', fontSize: 12, fontWeight: '700', marginTop: 4 }}>
-                          ↓ {activeData.riskReductionPct.toFixed(0)}% safer than fastest
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                </View>
-              )}
-
-              {/* ── Mini-map ── */}
-              {destLat && destLng ? (
-                <View style={dm.insightMapWrap}>
-                  <MapView
-                    style={dm.insightMap}
-                    provider={PROVIDER_GOOGLE}
-                    customMapStyle={DARK_MAP_STYLE}
-                    initialRegion={{
-                      latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
-                      longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
-                      latitudeDelta: 0.10,
-                      longitudeDelta: 0.10,
-                    }}
-                    scrollEnabled zoomEnabled rotateEnabled={false} pitchEnabled={false}
-                  >
-                    {originLat && originLng && (
-                      <Marker coordinate={{ latitude: originLat, longitude: originLng }}>
-                        <View style={dm.originDot}><View style={dm.originDotInner} /></View>
-                      </Marker>
-                    )}
-                    <Marker coordinate={{ latitude: destLat, longitude: destLng }} pinColor="#FF4444" />
-                    {activeData?.coords?.length ? (
-                      <Polyline coordinates={activeData.coords} strokeColor={activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'} strokeWidth={4} />
-                    ) : null}
-                  </MapView>
-                  {activeData && (
-                    <View style={dm.routeTimeBubble}>
-                      <Text style={dm.routeTimeBubbleText}>{fmtSecs(activeData.durationSecs)}</Text>
-                    </View>
-                  )}
-                </View>
-              ) : (
-                <View style={[dm.insightMapPlaceholder, { backgroundColor: T.CARD }]}>
-                  <Text style={{ color: T.TEXT_MUT, fontSize: 12 }}>Route preview unavailable</Text>
-                </View>
-              )}
-
-              {/* ── Stats Grid ── */}
-              <View style={dm.statsRow}>
-                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>📏  Distance</Text>
-                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>{fmtDist(activeData?.distance ?? 0)}</Text>
-                </View>
-                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>🔵  Avg Speed</Text>
-                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>
-                    {avgSpeedMph > 0 ? `${avgSpeedMph}` : '–'}
-                    <Text style={{ fontSize: 14, fontWeight: '600' }}> mph</Text>
-                  </Text>
-                </View>
-              </View>
-              <View style={dm.statsRow}>
-                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>⏱  Travel Time</Text>
-                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
-                  <Text style={[dm.statDelta, { color: T.ACCENT }]}>
-                    {activeData ? `Arrive ~${arrivalFrom(activeData.durationSecs)}` : ''}
-                  </Text>
-                </View>
-                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>⚠️  Hot Spots</Text>
-                  <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>{activeData?.nHighRisk ?? 0}</Text>
-                  <Text style={[dm.statDelta, { color: (activeData?.nHighRisk ?? 0) > 3 ? '#FF6B6B' : T.ACCENT }]}>
-                    {(activeData?.nHighRisk ?? 0) === 0 ? '✅ Clear route' : (activeData?.nHighRisk ?? 0) > 3 ? '⚠ Use caution' : 'Manageable'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* ── AADT Card ── */}
-              {(activeData?.aadtAvg != null || activeData?.aadtMax != null) && (
-                <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>🚗  AADT (Traffic Volume)</Text>
-                    <Pressable onPress={() => setInfoKey('aadt')} hitSlop={10}>
-                      <Ionicons name="information-circle-outline" size={18} color={T.TEXT_MUT} />
-                    </Pressable>
-                  </View>
-                  <View style={{ flexDirection: 'row', gap: 16, marginTop: 6 }}>
-                    <View>
-                      <Text style={[dm.statValue, { color: T.TEXT_PRI, fontSize: 22 }]}>
-                        {activeData.aadtAvg ? activeData.aadtAvg.toLocaleString() : '–'}
-                      </Text>
-                      <Text style={{ color: T.TEXT_MUT, fontSize: 11 }}>avg vehicles/day</Text>
-                    </View>
-                    <View>
-                      <Text style={[dm.statValue, { color: T.TEXT_PRI, fontSize: 22 }]}>
-                        {activeData.aadtMax ? activeData.aadtMax.toLocaleString() : '–'}
-                      </Text>
-                      <Text style={{ color: T.TEXT_MUT, fontSize: 11 }}>peak segment</Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-
-              {/* ── SHAP Risk Factors ── */}
-              {activeData?.topRiskFactors && activeData.topRiskFactors.length > 0 && (
-                <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>🔍  Risk Factors (SHAP)</Text>
-                    <Pressable onPress={() => setInfoKey('shap')} hitSlop={10}>
-                      <Ionicons name="information-circle-outline" size={18} color={T.TEXT_MUT} />
-                    </Pressable>
-                  </View>
-                  <View style={{ gap: 8, marginTop: 8 }}>
-                    {activeData.topRiskFactors.slice(0, 5).map((f: any, i: number) => {
-                      const label = f.label ?? f.factor ?? `Factor ${i + 1}`;
-                      const pct = f.pct ?? (f.weight ? Math.round(f.weight * 100) : 0);
-                      const barColor = pct > 50 ? '#FF4444' : pct > 25 ? '#FFA500' : '#1ABC93';
-                      return (
-                        <View key={i}>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
-                            <Text style={{ color: T.TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 }} numberOfLines={1}>{label}</Text>
-                            <Text style={{ color: T.TEXT_MUT, fontSize: 12 }}>{pct.toFixed(0)}%</Text>
-                          </View>
-                          <View style={{ height: 6, borderRadius: 3, backgroundColor: T.ITEM }}>
-                            <View style={{ height: 6, borderRadius: 3, backgroundColor: barColor, width: `${Math.min(pct, 100)}%` }} />
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
-              )}
-
-              {/* ── Route Source Badge ── */}
-              {activeData?.routeSource && (
-                <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: T.DIVIDER, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
-                  <Ionicons
-                    name={activeData.routeSource === 'safeway' ? 'shield-checkmark' : 'navigate'}
-                    size={20}
-                    color={activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'}
-                  />
-                  <View>
-                    <Text style={[dm.statLabel, { color: T.TEXT_PRI, fontWeight: '700' }]}>
-                      {activeData.routeSource === 'safeway' ? 'SafeWay A* Route' : 'Google Maps Route'}
-                    </Text>
-                    <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginTop: 2 }}>
-                      {activeData.routeSource === 'safeway'
-                        ? 'Optimized for safety using our ML model + A* pathfinding'
-                        : 'Standard route from Google Routes API, scored by SafeWay'}
-                    </Text>
-                  </View>
-                </View>
-              )}
-            </ScrollView>
-          )}
+          </View>
+        </ScrollView>
 
         </View>
       </View>
@@ -662,295 +622,7 @@ function RouteDetailsModal({
   );
 }
 
-// ─── Route Insights Modal ─────────────────────────────────────────────────────
-function RouteInsightsModal({
-  visible, onClose, activeData, destLat, destLng, originLat, originLng,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  activeData: ModeRouteData | null;
-  destLat?: number;
-  destLng?: number;
-  originLat?: number;
-  originLng?: number;
-}) {
-  const { height: screenH } = useWindowDimensions();
-  const { T } = useTheme();
-  const CARD_HEIGHT = screenH * 0.88;
 
-  const avgSpeedMph = activeData
-    ? Math.round((activeData.distance / 1609.34) / (activeData.durationSecs / 3600))
-    : 0;
-
-  const aadtValue = activeData ? Math.round((activeData.distance / 1609.34) * 1340) : 0;
-  const peakFlow  = activeData ? parseFloat((((activeData.distance / 1609.34) * 1340) / 1000).toFixed(1)) : 0;
-
-  // AADT bar chart data (weekly)
-  const aadtWeekData = [
-    { day: 'Mon', val: Math.round(aadtValue * 0.82) },
-    { day: 'Tue', val: Math.round(aadtValue * 0.91) },
-    { day: 'Wed', val: Math.round(aadtValue * 0.95) },
-    { day: 'Thu', val: Math.round(aadtValue * 0.88) },
-    { day: 'Fri', val: Math.round(aadtValue * 1.12) },
-    { day: 'Sat', val: Math.round(aadtValue * 1.05) },
-    { day: 'Sun', val: aadtValue },
-  ];
-  const aadtMax = Math.max(...aadtWeekData.map(d => d.val));
-
-  // Peak flow hourly data
-  const peakFlowHours = [
-    { h: '6a', val: peakFlow * 0.35 },
-    { h: '8a', val: peakFlow * 0.95 },
-    { h: '10a', val: peakFlow * 0.65 },
-    { h: '12p', val: peakFlow * 0.72 },
-    { h: '2p',  val: peakFlow * 0.68 },
-    { h: '4p',  val: peakFlow * 1.0  },
-    { h: '6p',  val: peakFlow * 0.88 },
-    { h: '8p',  val: peakFlow * 0.45 },
-  ];
-  const flowMax = Math.max(...peakFlowHours.map(d => d.val));
-
-  const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
-
-  const STAT_INFO: Record<string, string> = {
-    AADT: 'Annual Average Daily Traffic — the estimated number of vehicles passing a point on the route each day, averaged across the year.',
-    AVG_SPEED: 'The average speed across this route based on current distance and estimated travel time.',
-    PEAK_FLOW: 'The maximum number of vehicles per hour observed on this route during peak traffic periods.',
-    TRAVEL_TIME: 'Estimated total travel time from your origin to destination under current traffic conditions.',
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={dm.backdrop}>
-        <View style={[dm.card, { height: CARD_HEIGHT, backgroundColor: T.BG }]}>
-
-          {/* Header */}
-          <View style={dm.tabRow}>
-            <Text style={[dm.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
-            <View style={{ flex: 1 }} />
-            <Pressable onPress={onClose}>
-              <View style={[dm.closeBtnCircle, { backgroundColor: T.ITEM }]}>
-                <Ionicons name="close" size={16} color={T.TEXT_PRI} />
-              </View>
-            </Pressable>
-          </View>
-
-          <ScrollView style={dm.tabBody} showsVerticalScrollIndicator={false} contentContainerStyle={[dm.insightsContent, { paddingBottom: 30 }]}>
-
-            {/* Mini-map */}
-            {destLat && destLng ? (
-              <View style={dm.insightMapWrap}>
-                <MapView
-                  style={dm.insightMap}
-                  provider={PROVIDER_GOOGLE}
-                  customMapStyle={DARK_MAP_STYLE}
-                  initialRegion={{
-                    latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
-                    longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
-                    latitudeDelta: 0.10,
-                    longitudeDelta: 0.10,
-                  }}
-                  scrollEnabled zoomEnabled rotateEnabled={false} pitchEnabled={false}
-                >
-                  {originLat && originLng && (
-                    <Marker coordinate={{ latitude: originLat, longitude: originLng }}>
-                      <View style={dm.originDot}><View style={dm.originDotInner} /></View>
-                    </Marker>
-                  )}
-                  <Marker coordinate={{ latitude: destLat, longitude: destLng }} pinColor="#FF4444" />
-                  {activeData?.coords?.length ? (
-                    <Polyline coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={4} />
-                  ) : null}
-                </MapView>
-                {activeData && (
-                  <View style={dm.routeTimeBubble}>
-                    <Text style={dm.routeTimeBubbleText}>{fmtSecs(activeData.durationSecs)}</Text>
-                  </View>
-                )}
-              </View>
-            ) : (
-              <View style={[dm.insightMapPlaceholder, { backgroundColor: T.CARD }]}>
-                <Text style={{ color: T.TEXT_MUT, fontSize: 12 }}>Route preview unavailable</Text>
-              </View>
-            )}
-
-            {/* ── AVG SPEED — Improved Speedometer ── */}
-            <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: '#FFFFFF22', borderWidth: 1.5, padding: 20 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 }}>
-                <Text style={[dm.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>🔵  AVG SPEED</Text>
-                <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'AVG_SPEED' ? null : 'AVG_SPEED')} hitSlop={8}>
-                  <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
-                </Pressable>
-              </View>
-              {tooltipVisible === 'AVG_SPEED' && (
-                <View style={{ backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#FFFFFF18' }}>
-                  <Text style={{ color: '#C8D6E5', fontSize: 12, lineHeight: 17 }}>{STAT_INFO.AVG_SPEED}</Text>
-                </View>
-              )}
-              {/* Improved Speedometer */}
-              <View style={{ alignItems: 'center', marginBottom: 4 }}>
-                <View style={{ width: 200, height: 116, position: 'relative', alignItems: 'center' }}>
-                  {/* Arc segments — 36 total, spanning -210° to 30° (240° arc) */}
-                  {Array.from({ length: 36 }, (_, seg) => {
-                    const totalSegs = 36;
-                    const arcSpan = 240;
-                    const startAngle = -210;
-                    const angleStart = startAngle + (seg / totalSegs) * arcSpan;
-                    const speedAtSeg = (seg / totalSegs) * 120;
-                    const isActive = avgSpeedMph > 0 && speedAtSeg <= avgSpeedMph;
-                    const segColor = isActive
-                      ? (speedAtSeg < 40 ? '#22C55E' : speedAtSeg < 80 ? '#F5A623' : '#FF6B6B')
-                      : '#FFFFFF14';
-                    const rad = (angleStart * Math.PI) / 180;
-                    const cx = 100, cy = 100, r = 82;
-                    const x = cx + r * Math.cos(rad) - 4;
-                    const y = cy + r * Math.sin(rad) - 4;
-                    return (
-                      <View key={seg} style={{
-                        position: 'absolute', left: x, top: y,
-                        width: 8, height: 8, borderRadius: 4,
-                        backgroundColor: segColor,
-                        opacity: isActive ? 1 : 0.5,
-                      }} />
-                    );
-                  })}
-                  {/* Inner glow ring */}
-                  <View style={{
-                    position: 'absolute', left: 30, top: 10,
-                    width: 140, height: 140, borderRadius: 70,
-                    borderWidth: 1, borderColor: '#FFFFFF08',
-                  }} />
-                  {/* Center content */}
-                  <View style={{ position: 'absolute', bottom: 4, alignItems: 'center' }}>
-                    <Text style={{ color: '#fff', fontSize: 48, fontWeight: '900', lineHeight: 50, letterSpacing: -2 }}>
-                      {avgSpeedMph > 0 ? avgSpeedMph : '–'}
-                    </Text>
-                    <Text style={{ color: '#7A8FA6', fontSize: 13, fontWeight: '700', letterSpacing: 1 }}>MPH</Text>
-                  </View>
-                  {/* Speed zone labels */}
-                  <Text style={{ position: 'absolute', left: 4, bottom: 16, color: '#22C55E', fontSize: 9, fontWeight: '700' }}>0</Text>
-                  <Text style={{ position: 'absolute', left: '50%', bottom: 0, color: '#7A8FA6', fontSize: 9, fontWeight: '600', marginLeft: -6 }}>60</Text>
-                  <Text style={{ position: 'absolute', right: 4, bottom: 16, color: '#FF6B6B', fontSize: 9, fontWeight: '700' }}>120</Text>
-                </View>
-                {/* Speed category label */}
-                <View style={{
-                  marginTop: 8, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20,
-                  backgroundColor: avgSpeedMph < 40 ? '#22C55E22' : avgSpeedMph < 80 ? '#F5A62322' : '#FF6B6B22',
-                }}>
-                  <Text style={{
-                    fontSize: 12, fontWeight: '700',
-                    color: avgSpeedMph < 40 ? '#22C55E' : avgSpeedMph < 80 ? '#F5A623' : '#FF6B6B',
-                  }}>
-                    {avgSpeedMph < 40 ? '● City Speed' : avgSpeedMph < 80 ? '● Highway Speed' : '● Fast Route'}
-                  </Text>
-                </View>
-              </View>
-              <Text style={[dm.statDelta, { color: '#FF6B6B', textAlign: 'center', marginTop: 8 }]}>↘ -1.4% vs peak hour</Text>
-            </View>
-
-            {/* ── AADT — Interactive Bar Chart ── */}
-            <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: '#FFFFFF22', borderWidth: 1.5, padding: 20 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                    <Text style={[dm.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>📊  AADT</Text>
-                    <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'AADT' ? null : 'AADT')} hitSlop={8}>
-                      <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
-                    </Pressable>
-                  </View>
-                  {tooltipVisible === 'AADT' && (
-                    <View style={{ backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FFFFFF18', maxWidth: 220 }}>
-                      <Text style={{ color: '#C8D6E5', fontSize: 12, lineHeight: 17 }}>{STAT_INFO.AADT}</Text>
-                    </View>
-                  )}
-                  <Text style={[dm.statValue, { color: '#fff', fontSize: 22 }]}>{aadtValue > 0 ? aadtValue.toLocaleString() : '–'}</Text>
-                </View>
-                <Text style={[dm.statDelta, { color: '#22C55E' }]}>↗ +5.2% vs LW</Text>
-              </View>
-              <InteractiveBarChart
-                data={aadtWeekData}
-                maxVal={aadtMax}
-                activeColor="#4A90E2"
-                inactiveColor="#4A90E244"
-                highlightIndex={6}
-                unit="vehicles/day"
-                chartHeight={70}
-              />
-              <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 6 }}>Daily average annual daily traffic — this week</Text>
-            </View>
-
-            {/* ── PEAK FLOW — Interactive Hourly Chart ── */}
-            <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: '#FFFFFF22', borderWidth: 1.5, padding: 20 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                    <Text style={[dm.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>〰  PEAK FLOW</Text>
-                    <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'PEAK_FLOW' ? null : 'PEAK_FLOW')} hitSlop={8}>
-                      <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
-                    </Pressable>
-                  </View>
-                  {tooltipVisible === 'PEAK_FLOW' && (
-                    <View style={{ backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FFFFFF18', maxWidth: 220 }}>
-                      <Text style={{ color: '#C8D6E5', fontSize: 12, lineHeight: 17 }}>{STAT_INFO.PEAK_FLOW}</Text>
-                    </View>
-                  )}
-                  <Text style={[dm.statValue, { color: '#fff', fontSize: 22 }]}>
-                    {peakFlow > 0 ? `${peakFlow}k` : '–'}<Text style={{ fontSize: 13 }}>/h</Text>
-                  </Text>
-                </View>
-                <View style={{ backgroundColor: '#22C55E22', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={{ color: '#22C55E', fontSize: 11, fontWeight: '700' }}>&#10003; Normal</Text>
-                </View>
-              </View>
-              <InteractiveBarChart
-                data={peakFlowHours.map(d => ({ day: d.h, val: parseFloat(d.val.toFixed(2)) }))}
-                maxVal={flowMax}
-                activeColor="#22C55E"
-                inactiveColor="#22C55E33"
-                highlightIndex={5}
-                unit="k veh/h"
-                chartHeight={70}
-                formatValue={(v) => `${v.toFixed(1)}k`}
-              />
-              <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 6 }}>Vehicles/hour — today&#39;s traffic flow by time</Text>
-            </View>
-
-            {/* ── TRAVEL TIME ── */}
-            <View style={[dm.statCardWide, { backgroundColor: T.CARD, borderColor: '#FFFFFF22', borderWidth: 1.5, padding: 20 }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <Text style={[dm.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>&#9201;  TRAVEL TIME</Text>
-                <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'TRAVEL_TIME' ? null : 'TRAVEL_TIME')} hitSlop={8}>
-                  <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
-                </Pressable>
-              </View>
-              {tooltipVisible === 'TRAVEL_TIME' && (
-                <View style={{ backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FFFFFF18' }}>
-                  <Text style={{ color: '#C8D6E5', fontSize: 12, lineHeight: 17 }}>{STAT_INFO.TRAVEL_TIME}</Text>
-                </View>
-              )}
-              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-                <Text style={[dm.statValue, { color: '#fff' }]}>{activeData ? fmtSecs(activeData.durationSecs) : '–'}</Text>
-              </View>
-              {/* Progress bar showing time of day progress */}
-              <View style={{ marginTop: 12 }}>
-                <View style={{ height: 6, backgroundColor: '#FFFFFF18', borderRadius: 3, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', width: '65%', backgroundColor: '#4A90E2', borderRadius: 3 }} />
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
-                  <Text style={{ color: '#7A8FA6', fontSize: 10 }}>Depart now</Text>
-                  <Text style={{ color: '#4A90E2', fontSize: 10, fontWeight: '600' }}>
-                    Arrive ~{activeData ? arrivalFrom(activeData.durationSecs) : '–'}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
 
 // ─── Draggable stop (still used internally, not shown in bottom sheet anymore) ─
 function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
@@ -1140,11 +812,11 @@ export default function DirectionsScreen() {
   // Pixel-based snap points so the sheet never covers the top search card
   // Top card is at: insets.top + 14 (top padding) + ~52 (card height) + 10 (gap) = insets.top + 76
   const snapPoints = useMemo(() => {
-    // Zoom (+) button is at TOP_BTNS = insets.top + 118
-    // Sheet max stops just above it so buttons are never covered
-    const safeMax = windowHeight - (insets.top + 118) - 8;
+    // Top route card ends at approx: insets.top + 10 (top) + 110 (card height) + 12 (gap)
+    const cardBottom = insets.top + 132;
+    const safeMax = windowHeight - cardBottom - 8;
     const miniSnap = 46 + insets.bottom;
-    return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
+    return [miniSnap, Math.round(windowHeight * 0.50), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
   const [sheetIndex, setSheetIndex] = useState(1);
@@ -1184,8 +856,9 @@ export default function DirectionsScreen() {
   const [showNowModal, setShowNowModal] = useState(false);
   const [showAvoidModal, setShowAvoidModal] = useState(false);
   const [nowChoice, setNowChoice] = useState<'now'|'depart'|'arrive'>('now');
-  const [avoidSet, setAvoidSet] = useState<Set<string>>(new Set());
-  // Time picker state: hour (0-23), minute (0 or 30)
+  const [avoidList, setAvoidList] = useState<string[]>([]);
+  const avoidSet = new Set(avoidList);
+  const avoidActive = avoidList.length > 0;
   const [pickerHour, setPickerHour] = useState(() => new Date().getHours());
   const [pickerMin,  setPickerMin]  = useState<0|30>(() => new Date().getMinutes() >= 30 ? 30 : 0);
   const pickerTimeLabel = `${pickerHour % 12 === 0 ? 12 : pickerHour % 12}:${pickerMin === 0 ? '00' : '30'} ${pickerHour < 12 ? 'AM' : 'PM'}`;
@@ -1193,7 +866,6 @@ export default function DirectionsScreen() {
   const nowLabel = nowChoice === 'now' ? 'Now'
     : nowChoice === 'depart' ? `Depart ${pickerTimeLabel}`
     : `Arrive ${pickerTimeLabel}`;
-  const avoidActive = avoidSet.size > 0;
 
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
@@ -1232,10 +904,6 @@ export default function DirectionsScreen() {
     })();
   }, []);
 
-  useEffect(() => {
-    if (originCoords && destCoords) void fetchAllRoutes();
-  }, [originCoords, destCoords]);
-
   async function fetchAllRoutes() {
     if (!originCoords || !destCoords) return;
     setRouteBusy(true);
@@ -1244,19 +912,55 @@ export default function DirectionsScreen() {
     const to   = stopsSwapped ? originCoords! : destCoords;
 
     const nd: Partial<Record<TravelMode, ModeRoutes>> = {};
+    // Backend scores risk by hour of day (integer). Half-hours use the chosen hour.
     const departureHour = nowChoice === 'now' ? new Date().getHours() : pickerHour;
 
+    const currentAvoidSet = new Set(avoidList);
+    const hasAvoid = avoidList.length > 0;
+
+    const timing: RouteTimingInput =
+      nowChoice === 'now'
+        ? { kind: 'now' }
+        : nowChoice === 'depart'
+          ? { kind: 'depart', hour: pickerHour, minute: pickerMin }
+          : { kind: 'arrive', hour: pickerHour, minute: pickerMin };
+
     try {
-      // Fetch all modes in parallel: backend for DRIVE (safety + SafeWay), Google direct for others
+      // Backend /maps/route does not apply avoid modifiers to Google; when user sets Avoid we must use Routes API from the client.
       const [backendRes, driveGoogleRes, walkAlts, bikeAlts] = await Promise.allSettled([
-        getBackendRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', departure_hour: departureHour }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE' }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK' }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
+        getBackendRoutes({
+          origin: from,
+          destination: to,
+          travel_mode: 'DRIVE',
+          departure_hour: departureHour,
+        }),
+        getMultipleRoutes({
+          origin: from,
+          destination: to,
+          travel_mode: 'DRIVE',
+          avoid: currentAvoidSet,
+          timing,
+        }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK', timing }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', timing }),
       ]);
 
-      // Try backend DRIVE routes first (includes SafeWay A* + safety scoring)
-      if (backendRes.status === 'fulfilled' && backendRes.value.routes.length > 0) {
+      const googleDriveOk =
+        driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0;
+
+      // DRIVE: prefer client Routes API when Avoid is on (tolls / highways / ferries).
+      if (hasAvoid && googleDriveOk) {
+        const alts = driveGoogleRes.value;
+        const primary = alts[0];
+        nd.DRIVE = {
+          primary: {
+            coords: primary.coords,
+            distance: primary.distance,
+            durationSecs: primary.durationSecs,
+          },
+          alternatives: alts,
+        };
+      } else if (backendRes.status === 'fulfilled' && backendRes.value.routes.length > 0) {
         const safetyRoutes = backendRes.value.routes;
         const alts = safetyRoutes.map((r: SafetyRoute, i: number) => {
           const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
@@ -1296,8 +1000,8 @@ export default function DirectionsScreen() {
         };
       }
 
-      // Fallback: if backend failed, use Google direct for DRIVE
-      if (!nd.DRIVE && driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0) {
+      // Fallback: if backend failed or returned nothing, use Google direct for DRIVE
+      if (!nd.DRIVE && googleDriveOk) {
         const alts = driveGoogleRes.value;
         nd.DRIVE = {
           primary: { coords: alts[0].coords, distance: alts[0].distance, durationSecs: alts[0].durationSecs },
@@ -1319,9 +1023,8 @@ export default function DirectionsScreen() {
 
       if (nd.DRIVE) {
         const ds = nd.DRIVE.primary.durationSecs;
-        const avoidMult = 1 + (avoidSet.has('tolls') ? 0.05 : 0) + (avoidSet.has('highways') ? 0.15 : 0);
-        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4 * avoidMult) }, alternatives: [] };
-        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1 * avoidMult) }, alternatives: [] };
+        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4) }, alternatives: [] };
+        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1) }, alternatives: [] };
       }
       setRouteByMode(nd);
     } catch (e) {
@@ -1331,10 +1034,9 @@ export default function DirectionsScreen() {
     }
   }
 
-  // Re-fetch routes whenever timing choice or avoid filters change
   useEffect(() => {
     if (originCoords && destCoords) void fetchAllRoutes();
-  }, [nowChoice, avoidSet]);
+  }, [originCoords, destCoords, nowChoice, pickerHour, pickerMin, avoidList, stopsSwapped]);
 
   useEffect(() => {
     const modeData = routeByMode[travelMode];
@@ -1350,7 +1052,6 @@ export default function DirectionsScreen() {
     setStopsSwapped(s => !s);
     setRouteByMode({});
     setSelectedRouteIndex(0);
-    setTimeout(() => { void fetchAllRoutes(); }, 50);
   }
 
   function handleOriginQueryChange(text: string) {
@@ -1708,48 +1409,19 @@ export default function DirectionsScreen() {
               })}
             </View>
 
-            {/* Time picker — shown for depart/arrive */}
+            {/* Time slider — shown for depart/arrive */}
             {nowChoice !== 'now' && (
-              <View style={{ marginBottom: 20 }}>
-                <Text style={{ color: T.TEXT_MUT, fontSize: 12, fontWeight: '600', marginBottom: 10, letterSpacing: 0.8 }}>
-                  {nowChoice === 'depart' ? 'DEPARTING AT' : 'ARRIVING BY'}
-                </Text>
-                {/* Hour scroll */}
-                <View style={{ backgroundColor: T.ITEM, borderRadius: 16, padding: 4 }}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 8, gap: 4 }}>
-                    {Array.from({ length: 24 }, (_, h) => {
-                      const active = pickerHour === h;
-                      const label = `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? 'AM' : 'PM'}`;
-                      return (
-                        <Pressable key={h}
-                          style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
-                            backgroundColor: active ? T.ACCENT : 'transparent' }}
-                          onPress={() => setPickerHour(h)}>
-                          <Text style={{ fontSize: 14, fontWeight: '600', color: active ? '#fff' : T.TEXT_MUT }}>{label}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-                {/* Minute buttons */}
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                  {([0, 30] as const).map(m => {
-                    const active = pickerMin === m;
-                    return (
-                      <Pressable key={m}
-                        style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center',
-                          backgroundColor: active ? T.ACCENT : T.ITEM }}
-                        onPress={() => setPickerMin(m)}>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: active ? '#fff' : T.TEXT_MUT }}>:{m === 0 ? '00' : '30'}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                {/* Preview */}
-                <View style={{ alignItems: 'center', marginTop: 12 }}>
-                  <Text style={{ color: T.TEXT_PRI, fontSize: 28, fontWeight: '800' }}>{pickerTimeLabel}</Text>
-                </View>
-              </View>
+              <TimeSliderPicker
+                hour={pickerHour}
+                min={pickerMin}
+                onChangeHour={setPickerHour}
+                onChangeMin={setPickerMin}
+                label={nowChoice === 'depart' ? 'DEPARTING AT' : 'ARRIVING BY'}
+                accentColor={T.ACCENT}
+                textPri={T.TEXT_PRI}
+                textMut={T.TEXT_MUT}
+                itemBg={T.ITEM}
+              />
             )}
 
             <Pressable
@@ -1776,9 +1448,10 @@ export default function DirectionsScreen() {
                     <Pressable
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => {
-                        const next = new Set(avoidSet);
-                        active ? next.delete(opt.id) : next.add(opt.id);
-                        setAvoidSet(next);
+                        const next = avoidSet.has(opt.id)
+                          ? avoidList.filter(x => x !== opt.id)
+                          : [...avoidList, opt.id];
+                        setAvoidList(next);
                       }}
                     >
                       <View style={{ flex: 1 }}>
@@ -1793,10 +1466,7 @@ export default function DirectionsScreen() {
             </View>
             <Pressable
               style={[styles.doneBtn, { backgroundColor: T.ACCENT, marginTop: 16 }]}
-              onPress={() => {
-                setShowAvoidModal(false);
-                // fetchAllRoutes is triggered by the avoidSet useEffect
-              }}
+              onPress={() => setShowAvoidModal(false)}
             >
               <Text style={styles.doneBtnText}>Done</Text>
             </Pressable>
@@ -1819,8 +1489,8 @@ export default function DirectionsScreen() {
         originLng={originCoords?.lng}
       />
 
-      {/* Route insights modal */}
-      <RouteInsightsModal
+      {/* Route insights — extracted to RouteInsightsPage.tsx */}
+      <RouteInsightsPage
         visible={showInsightsModal}
         onClose={() => setShowInsightsModal(false)}
         activeData={activeData ?? null}
@@ -1890,7 +1560,7 @@ export default function DirectionsScreen() {
                   onPress={() => setShowAvoidModal(true)}
                 >
                   <Text style={[styles.filterText, { color: avoidActive ? T.ACCENT : T.TEXT_PRI }]}>
-                    {avoidActive ? `Avoid (${avoidSet.size})` : 'Avoid'}
+                    {avoidActive ? `Avoid (${avoidList.length})` : 'Avoid'}
                   </Text>
                   <Ionicons name="chevron-down" size={14} color={avoidActive ? T.ACCENT : T.TEXT_MUT} />
                 </Pressable>
@@ -1908,10 +1578,11 @@ export default function DirectionsScreen() {
                 const isSelected = i === selectedRouteIndex;
                 const isSafeWay = alt.routeSource === 'safeway';
                 const score = alt.safetyScore;
-                const safetyPct = score != null ? Math.max(0, 100 - Math.round(score)) : null;
+                // Backend score is 0–100 risk; safety % = 100 - score
+                const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
                 const safetyColor = score == null ? '#7A8FA6'
                   : score < 33 ? '#1ABC93' : score < 66 ? '#FFA500' : '#FF4444';
-                const routeName = alt.label ?? (isSafeWay ? '🛡️ SafeWay Route' : `Route ${i + 1}`);
+                // routeName kept for potential future use but not rendered — main label is fmtSecs(durationSecs)
 
                 return (
                   <Pressable
@@ -1926,7 +1597,7 @@ export default function DirectionsScreen() {
                   {/* Top row: Safety badge + route info */}
                   <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12, width: '100%' }}>
 
-                    {/* Safety badge — uses real safetyPct/isSafeWay from other branch */}
+                  {/* Safety badge — green tint when safe, color-coded by score */}
                     <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive]}>
                       {isSelected && isSafeWay ? (
                         <LinearGradient
@@ -1939,26 +1610,36 @@ export default function DirectionsScreen() {
                         <View style={[StyleSheet.absoluteFillObject, { backgroundColor: safetyColor, opacity: 0.15, borderRadius: 12 }]} />
                       ) : null}
                       <View style={styles.matchBadgeContent}>
-                        <Text style={[styles.matchWord, { color: '#fff', fontSize: 13 }]}>
+                        <Text style={[styles.matchWord, { color: safetyPct != null ? '#fff' : '#7A8FA6', fontSize: 11 }]}>
                           {isSafeWay ? 'SAFEWAY' : 'SAFETY'}
                         </Text>
-                        <Text style={[styles.matchPct, { color: isSelected ? '#fff' : safetyColor }]}>
-                          {safetyPct != null ? `${safetyPct}%` : '–'}
-                        </Text>
+                        {safetyPct != null ? (
+                          <Text style={[styles.matchPct, { color: isSelected ? '#fff' : safetyColor, fontSize: 26 }]}>
+                            {safetyPct}%
+                          </Text>
+                        ) : (
+                          <>
+                            <Text style={{ color: '#7A8FA6', fontSize: 15, fontWeight: '800' }}>N/A</Text>
+                            <Text style={{ color: '#7A8FA6', fontSize: 7, textAlign: 'center', marginTop: 2, lineHeight: 9 }}>
+                              {'no\ncoverage'}
+                            </Text>
+                          </>
+                        )}
                       </View>
                     </View>
 
                     {/* Route info — your layout, other branch's data */}
                     <Pressable style={styles.routeOptionInfo} onPress={() => { setSelectedRouteIndex(i); setShowDetailsModal(true); }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI, fontSize: 18 }]}>{routeName}</Text>
+                        {/* Main label = travel time */}
+                        <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI, fontSize: 22, fontWeight: '800' }]}>{fmtSecs(alt.durationSecs)}</Text>
                         {isSafeWay && (
                           <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>A*</Text>
+                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>SafeWay</Text>
                           </View>
                         )}
                       </View>
-                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtSecs(alt.durationSecs)}  •  {fmtDist(alt.distance)}</Text>
+                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtDist(alt.distance)}</Text>
                       <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>
                         Arrive ~{arrivalFrom(alt.durationSecs)}
                         {alt.nHighRisk ? `  •  ${alt.nHighRisk} hot spots` : ''}
