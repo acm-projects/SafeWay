@@ -404,7 +404,7 @@ export default function HomeScreen() {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           }
         } catch {
-          const loc = userLocation ?? { lat: 40.7291, lng: -73.9965 };
+          const loc = userLocation ?? { lat: 41.8781, lng: -87.6298 };
           setStreetViewLat(loc.lat);
           setStreetViewLng(loc.lng);
           setShowStreetView(true);
@@ -462,8 +462,8 @@ export default function HomeScreen() {
     // Run weather fetch once locationLoading is done — use real coords if available,
     // otherwise fall back to default map coords (New York) so weather always shows.
     if (locationLoading) return;
-    const lat = userLocation?.lat ?? 40.7291;
-    const lng = userLocation?.lng ?? -73.9965;
+    const lat = userLocation?.lat ?? 41.8781;
+    const lng = userLocation?.lng ?? -87.6298;
     (async () => {
       // Try backend first
       try {
@@ -625,12 +625,12 @@ export default function HomeScreen() {
   }
   function handleZoomIn() {
     const d = Math.max(zoomLevel * 0.5, 0.002); setZoomLevel(d);
-    const c = userLocation ?? { lat: 40.7291, lng: -73.9965 };
+    const c = userLocation ?? { lat: 41.8781, lng: -87.6298 };
     mapRef.current?.animateToRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: d, longitudeDelta: d }, 300);
   }
   function handleZoomOut() {
     const d = Math.min(zoomLevel * 2, 1.5); setZoomLevel(d);
-    const c = userLocation ?? { lat: 40.7291, lng: -73.9965 };
+    const c = userLocation ?? { lat: 41.8781, lng: -87.6298 };
     mapRef.current?.animateToRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: d, longitudeDelta: d }, 300);
   }
 
@@ -660,9 +660,10 @@ export default function HomeScreen() {
 
   const mapRegion = userLocation
     ? { latitude: userLocation.lat, longitude: userLocation.lng, latitudeDelta: 0.04, longitudeDelta: 0.04 }
-    : { latitude: 40.7291, longitude: -73.9965, latitudeDelta: 0.06, longitudeDelta: 0.06 };
+    : { latitude: 41.8781, longitude: -87.6298, latitudeDelta: 0.06, longitudeDelta: 0.06 };
 
   const [currentRegion, setCurrentRegion] = useState(mapRegion);
+
 
   const userInitials = user?.email ? user.email.slice(0, 2).toUpperCase() : null;
   const weatherIcon = (() => {

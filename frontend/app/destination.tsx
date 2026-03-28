@@ -145,6 +145,7 @@ export default function DestinationScreen() {
   const [editingOrigin, setEditingOrigin] = useState(false);
   const [editingDest, setEditingDest] = useState(false);
   const [originLabel, setOriginLabel] = useState(currentAddress);
+  const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number } | null>(null);
   const searchDebRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const originDebRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -164,6 +165,7 @@ export default function DestinationScreen() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          setOriginCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
           const [geo] = await Location.reverseGeocodeAsync({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
@@ -451,6 +453,7 @@ export default function DestinationScreen() {
               <View key={sg.place_id}>
                 <Pressable style={s.topSuggRow} onPress={() => {
                   setOriginLabel(sg.name); setOriginQuery(sg.name);
+                  setOriginCoords({ lat: sg.lat, lng: sg.lng });
                   setOriginSuggestions([]); setEditingOrigin(false);
                 }}>
                   <Ionicons name="location-outline" size={14} color={T.ACCENT} />
@@ -618,7 +621,13 @@ export default function DestinationScreen() {
                     ) : null}
                   </View>
                 </View>
-                <Pressable style={[s.closeBtn, { backgroundColor: T.ITEM, marginLeft: 8 }]} onPress={() => router.back()}>
+                <Pressable
+                  style={{ backgroundColor: T.ACCENT, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}
+                  onPress={() => router.push({ pathname: '/directions', params: { destLat: String(lat), destLng: String(lng), destName: placeName, originAddress: originLabel || currentAddress, ...(originCoords ? { originLat: String(originCoords.lat), originLng: String(originCoords.lng) } : {}) } })}
+                >
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Go</Text>
+                </Pressable>
+                <Pressable style={[s.closeBtn, { backgroundColor: T.ITEM }]} onPress={() => router.back()}>
                   <Ionicons name="close" size={18} color={T.TEXT_PRI} />
                 </Pressable>
               </View>
@@ -657,7 +666,8 @@ export default function DestinationScreen() {
                       destLat: String(lat),
                       destLng: String(lng),
                       destName: placeName,
-                      originAddress: currentAddress,
+                      originAddress: originLabel || currentAddress,
+                      ...(originCoords ? { originLat: String(originCoords.lat), originLng: String(originCoords.lng) } : {}),
                     },
                   })
                 }

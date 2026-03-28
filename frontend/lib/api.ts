@@ -210,6 +210,75 @@ export async function getRoute(params: {
   });
 }
 
+// ── Rich route from backend with safety scoring, SHAP factors, AADT ──────────
+export type SafetyRoute = {
+  distance_meters: number;
+  duration: string;            // e.g. "600s"
+  polyline: string;
+  coordinates: RoutePoint[];
+  safety_score: number | null;
+  safety_label: string;        // "safe" | "moderate" | "high_risk" | "unknown"
+  route_source: 'google' | 'safeway';
+  risk_per_km?: number;
+  total_exposure?: number;
+  route_km?: number;
+  n_high_risk?: number;
+  top_risk_factors?: { factor: string; weight: number }[];
+  time_band?: string;
+  segment_risks?: number[];
+  time_penalty_pct?: number;
+  risk_reduction_pct?: number;
+  aadt_avg?: number;
+  aadt_max?: number;
+};
+
+export type SafetyRoutesResponse = {
+  routes: SafetyRoute[];
+  travel_mode: string;
+};
+
+export async function getBackendRoutes(params: {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  travel_mode?: 'DRIVE' | 'WALK' | 'BICYCLE';
+  departure_hour?: number;
+}): Promise<SafetyRoutesResponse> {
+  const res = await request<any>('/maps/route', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+
+  return {
+    travel_mode: res.travel_mode ?? res.travelMode ?? 'DRIVE',
+    routes: (res.routes ?? []).map((r: any) => ({
+      distance_meters: r.distance_meters ?? r.distance ?? 0,
+      duration: typeof r.duration === 'string'
+        ? r.duration
+        : r.durationSecs != null
+          ? `${r.durationSecs}s`
+          : r.duration?.value != null
+            ? `${r.duration.value}s`
+            : '0s',
+      polyline: r.polyline ?? '',
+      coordinates: r.coordinates ?? (r.polyline ? decodePolyline(r.polyline) : []),
+      safety_score: r.safety_score ?? null,
+      safety_label: r.safety_label ?? 'unknown',
+      route_source: r.route_source ?? r.routeSource ?? 'google',
+      risk_per_km: r.risk_per_km,
+      total_exposure: r.total_exposure,
+      route_km: r.route_km,
+      n_high_risk: r.n_high_risk ?? r.nHighRisk ?? 0,
+      top_risk_factors: r.top_risk_factors ?? r.topRiskFactors,
+      time_band: r.time_band ?? r.timeBand,
+      segment_risks: r.segment_risks ?? r.segmentRisks,
+      time_penalty_pct: r.time_penalty_pct ?? r.timePenaltyPct,
+      risk_reduction_pct: r.risk_reduction_pct ?? r.riskReductionPct,
+      aadt_avg: r.aadt_avg ?? r.aadtAvg,
+      aadt_max: r.aadt_max ?? r.aadtMax,
+    })),
+  };
+}
+
 // ── Multiple alternative routes via Google Routes API directly ────────────────
 // The backend only returns routes[0]. This function calls the Routes API
 // directly from the frontend with computeAlternativeRoutes=true to get up to
@@ -329,4 +398,26 @@ export type WeatherData = {
 
 export async function getWeather(lat: number, lng: number): Promise<WeatherData> {
   return request<WeatherData>(`/weather?lat=${lat}&lng=${lng}`);
+}
+
+export async function createEmergencyContact(
+  jwt: string,
+  payload: { name: string; phone: string; relationship: string },
+): Promise<any> {
+  return request('/emergency-contacts', {
+    method: 'POST',
+    headers: authHeaders(jwt),
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateUserSettings(
+  jwt: string,
+  payload: Record<string, any>,
+): Promise<any> {
+  return request('/user/settings', {
+    method: 'PUT',
+    headers: authHeaders(jwt),
+    body: JSON.stringify(payload),
+  });
 }

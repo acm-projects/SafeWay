@@ -58,3 +58,24 @@ websockets==15.0.1
 yarl==1.22.0
 zstandard==0.25.0
 psycopg2-binary==2.9.10
+# Model pipeline (Part A: merge + HTML map + analysis)
+sodapy>=2.2.0
+pandas>=2.0.0
+folium>=0.15.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+# Part B: OSMnx intersection graph + nearest-node assignment
+osmnx>=1.9.0
+# Part B.5 / envs that import sklearn
+scikit-learn>=1.0.0
+# Route-ready model training (XGBoost + spatial CV + A* routing)
+xgboost>=2.0.0
+scipy>=1.10.0
+joblib>=1.3.0
+# Cloud storage + spatial + tuning
+gcsfs>=2024.1.0
+shapely>=2.0.0
+networkx>=3.0
+optuna>=3.5.0
+catboost>=1.2.0
+shap>=0.44.0

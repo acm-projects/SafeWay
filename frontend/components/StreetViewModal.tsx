@@ -23,10 +23,13 @@ import {
   Text,
   View,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useTheme } from '@/providers/theme-context';
+
+// react-native-webview is optional — gracefully degrade if not installed
+let WebView: any = null;
+try { WebView = require('react-native-webview').WebView; } catch {}
 
 const GOOGLE_KEY: string =
   (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined) ||
@@ -44,7 +47,7 @@ interface Props {
 
 export default function StreetViewModal({ visible, lat, lng, placeName, onClose, onNoCoverage }: Props) {
   const { T } = useTheme();
-  const webviewRef = useRef<WebView>(null);
+  const webviewRef = useRef<any>(null);
 
   // When lat/lng change (user dropped pegman somewhere new), tell the webview
   useEffect(() => {
@@ -179,6 +182,14 @@ export default function StreetViewModal({ visible, lat, lng, placeName, onClose,
         </View>
 
         {/* Street View WebView */}
+        {!WebView ? (
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+            <Ionicons name="alert-circle-outline" size={48} color={T.TEXT_MUT} />
+            <Text style={{ color: T.TEXT_MUT, marginTop: 12, fontSize: 14 }}>
+              Street View requires react-native-webview
+            </Text>
+          </View>
+        ) : (
         <WebView
           ref={webviewRef}
           style={styles.webview}
@@ -190,7 +201,7 @@ export default function StreetViewModal({ visible, lat, lng, placeName, onClose,
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
           mixedContentMode="always"
-          onMessage={(e) => {
+          onMessage={(e: any) => {
             if (e.nativeEvent.data === 'NO_COVERAGE') {
               onClose();
               onNoCoverage?.();
@@ -198,6 +209,7 @@ export default function StreetViewModal({ visible, lat, lng, placeName, onClose,
           }}
           onError={() => {}}
         />
+        )}
       </View>
     </Modal>
   );
