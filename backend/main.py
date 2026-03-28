@@ -5,8 +5,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+
 import psycopg2
 import requests
+import math 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -880,6 +882,112 @@ def compute_safe_route(payload: SafeRouteRequest):
         },
     }
 
+
+# ---------------------------------------------------------------------------
+# Live Traffic Incidents (TomTom API)
+# ---------------------------------------------------------------------------
+
+# TomTom incident category mapping
+INCIDENT_CATEGORIES = {
+    0: "Unknown",
+    1: "Accident",
+    2: "Fog",
+    3: "Dangerous Conditions",
+    4: "Rain",
+    5: "Ice",
+    6: "Jam",
+    7: "Lane Closed",
+    8: "Road Closed",
+    9: "Road Works",
+    10: "Wind",
+    11: "Flooding",
+    14: "Broken Down Vehicle",
+}
+
+_traffic_cache: dict = {}
+TRAFFIC_CACHE_TTL = 120  # 2 minutes
+
+
+@app.get("/traffic/incidents")
+def get_traffic_incidents(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    radius_km: float = Query(default=5.0, ge=0.5, le=50.0),
+):
+    """
+    Get live traffic incidents near a location using TomTom API.
+    Results are cached for 2 minutes to avoid excessive API calls.
+    """
+    cache_key = f"{round(lat, 2)}:{round(lng, 2)}:{radius_km}"
+    if cache_key in _traffic_cache:
+        cached_at, data = _traffic_cache[cache_key]
+        if time.time() - cached_at < TRAFFIC_CACHE_TTL:
+            return data
+
+    tomtom_key = os.getenv("TOMTOM_API_KEY")
+    if not tomtom_key:
+        raise HTTPException(status_code=500, detail="Missing TOMTOM_API_KEY in backend .env")
+
+    # Calculate bounding box from center + radius
+    lat_delta = radius_km / 111.0
+    lng_delta = radius_km / (111.0 * abs(math.cos(math.radians(lat))))
+    bbox = f"{lng - lng_delta},{lat - lat_delta},{lng + lng_delta},{lat + lat_delta}"
+
+    url = f"https://api.tomtom.com/traffic/services/5/incidentDetails"
+    params = {
+        "key": tomtom_key,
+        "bbox": bbox,
+        "language": "en-GB",
+        "timeValidityFilter": "present",
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=f"TomTom API error: {response.text}")
+
+        raw_incidents = response.json().get("incidents", [])
+
+        incidents = []
+        for incident in raw_incidents:
+            props = incident.get("properties", {})
+            geometry = incident.get("geometry", {})
+            coords = geometry.get("coordinates", [])
+            category = props.get("iconCategory", 0)
+
+            # Get center point of incident
+            if coords:
+                if geometry.get("type") == "Point":
+                    inc_lng, inc_lat = coords[0], coords[1]
+                else:
+                    # For LineString take midpoint
+                    mid = len(coords) // 2
+                    inc_lng, inc_lat = coords[mid][0], coords[mid][1]
+            else:
+                continue
+
+            incidents.append({
+                "id": props.get("id", ""),
+                "category": category,
+                "type": INCIDENT_CATEGORIES.get(category, "Unknown"),
+                "latitude": inc_lat,
+                "longitude": inc_lng,
+                "description": props.get("events", [{}])[0].get("description", "") if props.get("events") else "",
+                "delay_seconds": props.get("delay", 0),
+                "road": props.get("roadNumbers", []),
+            })
+
+        result = {
+            "incidents": incidents,
+            "total": len(incidents),
+            "bbox": bbox,
+            "cached": False,
+        }
+        _traffic_cache[cache_key] = (time.time(), {**result, "cached": False})
+        return result
+
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Traffic fetch failed: {e}")
 
 
 
