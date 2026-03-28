@@ -363,6 +363,38 @@ def api_usage():
         "remaining": max(0, DAILY_API_LIMIT - _api_call_count),
     }
 
+@app.get("/crashes/hex")
+def get_crash_hexes(resolution: int = Query(default=8, ge=5, le=12)):
+    """Fetch crash coordinates, bin into H3 hexagons, return hex data."""
+    import h3
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+    """
+    SELECT latitude, longitude
+    FROM public.enriched_crashes
+    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+    """
+)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    # Count crashes per H3 hex
+    hex_counts: dict[str, int] = {}
+    for lat, lng in rows:
+        hex_id = h3.latlng_to_cell(lat, lng, resolution)
+        hex_counts[hex_id] = hex_counts.get(hex_id, 0) + 1
+
+    # Build response with hex boundaries and counts
+    result = []
+    for hex_id, count in hex_counts.items():
+        boundary = h3.cell_to_boundary(hex_id)
+        corners = [{"latitude": lat, "longitude": lng} for lat, lng in boundary]
+        result.append({"hexId": hex_id, "count": count, "corners": corners})
+
+    return {"hexes": result, "total": len(result)}
 
 @app.get("/weather")
 def get_weather(lat: float = Query(...), lng: float = Query(...)):

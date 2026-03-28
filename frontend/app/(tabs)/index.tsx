@@ -12,7 +12,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-
+ 
 import HeatmapLegend from '../HeatmapLegend';
 import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router } from 'expo-router';
@@ -23,7 +23,7 @@ import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import Animated, {
   useAnimatedStyle, useSharedValue, interpolate, Extrapolation,
 } from 'react-native-reanimated';
-
+ 
 import { listBookmarks, deleteBookmark, getWeather, createBookmark, searchPlaces } from '@/lib/api';
 import type { Bookmark, WeatherData } from '@/lib/api';
 import { useAuth } from '@/providers/auth-provider';
@@ -31,7 +31,7 @@ import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { LinearGradient } from 'expo-linear-gradient';
 import HexHeatmap from '@/app/HexHeatmap';
-
+ 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 const NAVY       = '#0B1120';
 const NAVY_CARD  = '#141D2E';
@@ -42,7 +42,7 @@ const TEXT_PRI   = '#FFFFFF';
 const TEXT_MUT   = '#7A8FA6';
 const DIVIDER    = '#1E2D45';
 // ──────────────────────────────────────────────────────────────────────────────
-
+ 
 const DARK_MAP_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
@@ -56,7 +56,7 @@ const DARK_MAP_STYLE = [
   { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
   { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
 ];
-
+ 
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
   { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
   { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
@@ -65,14 +65,14 @@ const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string;
   { id: 'bike',  label: 'Bicycle',         icon: 'bicycle-outline',   color: '#1ABC93', desc: 'Crashes involving cyclists' },
   { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
 ];
-
+ 
 function SheetBg({ style }: { style?: any }) {
   return (
     <Animated.View pointerEvents="none"
       style={[StyleSheet.absoluteFillObject, { backgroundColor: NAVY }, style]} />
   );
 }
-
+ 
 function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading }: {
   visible: boolean;
   activeFilter: HeatmapFilter | 'off';
@@ -125,7 +125,7 @@ function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, lo
     </Modal>
   );
 }
-
+ 
 function ProfileModal({ visible, onClose, user, signOut }: {
   visible: boolean; onClose: () => void; user: any; signOut: () => void;
 }) {
@@ -174,7 +174,7 @@ function ProfileModal({ visible, onClose, user, signOut }: {
     </Modal>
   );
 }
-
+ 
 function placeIconFor(title: string): { icon: string; bg: string } {
   const t = title.toLowerCase();
   if (t.includes('university') || t.includes('college') || t.includes('school'))
@@ -203,7 +203,7 @@ function placeIconFor(title: string): { icon: string; bg: string } {
     return { icon: 'barbell-outline', bg: '#E08030' };
   return { icon: 'location-outline', bg: '#4A5FC4' };
 }
-
+ 
 export default function HomeScreen() {
   const { session, user, isLoading, signOut } = useAuth();
   const insets = useSafeAreaInsets();
@@ -211,10 +211,10 @@ export default function HomeScreen() {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const jwt = session?.access_token ?? '';
   const { height: windowHeight } = useWindowDimensions();
-
+ 
   const snapPoints = useMemo(() => ['14%', '52%', '90%'], []);
   const animatedPosition = useSharedValue(windowHeight);
-
+ 
   const [userLocation, setUserLocation]       = useState<{ lat: number; lng: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -232,23 +232,22 @@ export default function HomeScreen() {
   const [homeLabel, setHomeLabel]             = useState<string | null>(null);
   const [workLabel, setWorkLabel]             = useState<string | null>(null);
   const [schoolLabel, setSchoolLabel]         = useState<string | null>(null);
-
-  // ── mapRegion as state so HexHeatmap stays in sync with pan/zoom ─────────────
+ 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.8827,
     longitude: -87.6233,
     latitudeDelta: 0.04,
     longitudeDelta: 0.04,
   });
-
+ 
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
-    limit: 10_000,
+    limit: 100_000,
   });
-
+ 
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
-
+ 
   useEffect(() => {
     let cancelled = false;
     const hardTimeout = setTimeout(() => {
@@ -271,7 +270,7 @@ export default function HomeScreen() {
     })();
     return () => { cancelled = true; clearTimeout(hardTimeout); };
   }, []);
-
+ 
   useEffect(() => {
     if (!userLocation) return;
     (async () => {
@@ -281,12 +280,12 @@ export default function HomeScreen() {
       } catch {}
     })();
   }, [userLocation]);
-
+ 
   useEffect(() => {
     if (!jwt) { setBookmarks([]); return; }
     void loadBookmarks();
   }, [jwt]);
-
+ 
   async function loadBookmarks() {
     try {
       const bms = await listBookmarks(jwt);
@@ -295,12 +294,12 @@ export default function HomeScreen() {
       setBookmarks([]);
     }
   }
-
+ 
   async function handleDeleteBookmark(id: string) {
     try { await deleteBookmark(jwt, id); await loadBookmarks(); }
     catch (e) { Alert.alert('Delete failed', e instanceof Error ? e.message : 'Error'); }
   }
-
+ 
   function handlePlaceQueryChange(text: string) {
     setPlaceQuery(text);
     if (placeDebRef.current) clearTimeout(placeDebRef.current);
@@ -312,7 +311,7 @@ export default function HomeScreen() {
       finally { setPlaceBusy(false); }
     }, 350);
   }
-
+ 
   async function handleSavePlace(place: any) {
     if (!jwt) return;
     const labelMap = { home: 'Home', work: 'Work', school: 'School' };
@@ -326,7 +325,7 @@ export default function HomeScreen() {
     } catch (e) { Alert.alert('Save failed', e instanceof Error ? e.message : 'Error'); }
     setPlaceModal(null); setPlaceQuery(''); setPlaceSugg([]);
   }
-
+ 
   function handleMyLocation() {
     if (userLocation && mapRef.current) {
       mapRef.current.animateToRegion({
@@ -337,21 +336,21 @@ export default function HomeScreen() {
       }, 500);
     }
   }
-
+ 
   function handleZoomIn() {
     const d = Math.max(zoomLevel * 0.75, 0.002);
     setZoomLevel(d);
     mapRef.current?.animateToRegion({ ...mapRegion, latitudeDelta: d, longitudeDelta: d }, 300);
   }
-
+ 
   function handleZoomOut() {
     const d = Math.min(zoomLevel * 1.33, 10);
     setZoomLevel(d);
     mapRef.current?.animateToRegion({ ...mapRegion, latitudeDelta: d, longitudeDelta: d }, 300);
   }
-
+ 
   const handleSheetChange = useCallback((i: number) => setSheetIndex(i), []);
-
+ 
   const sheetBgStyle = useAnimatedStyle(() => {
     const h    = windowHeight - animatedPosition.value;
     const lo   = windowHeight * 0.12, hi = windowHeight * 0.55, full = windowHeight * 0.87;
@@ -360,28 +359,28 @@ export default function HomeScreen() {
     const mg   = interpolate(h, [hi, full], [8, 0],  Extrapolation.CLAMP);
     return { borderTopLeftRadius: r, borderTopRightRadius: r, borderBottomLeftRadius: bR, borderBottomRightRadius: bR, marginLeft: mg, marginRight: mg };
   });
-
+ 
   const TAB_H = -70;
   const zoomAnim    = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 116 }));
   const locateAnim  = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 60  }));
   const heatmapAnim = useAnimatedStyle(() => ({ bottom: windowHeight - animatedPosition.value - TAB_H + 10  }));
-
+ 
   const initialRegion = {
     latitude: 41.8827,
     longitude: -87.6233,
     latitudeDelta: 0.06,
     longitudeDelta: 0.06,
   };
-
+ 
   const userInitials = user?.email ? user.email.slice(0, 2).toUpperCase() : null;
   const recents = bookmarks.slice(0, 5);
-
+ 
   const shortcuts = [
     { key: 'home',   icon: 'home',       label: 'Home',   sub: homeLabel,   modal: 'home'   as const },
     { key: 'work',   icon: 'briefcase',  label: 'Work',   sub: workLabel,   modal: 'work'   as const },
     { key: 'school', icon: 'school',     label: 'School', sub: schoolLabel, modal: 'school' as const },
   ];
-
+ 
   if (isLoading || locationLoading) {
     return (
       <View style={s.centered}>
@@ -390,7 +389,7 @@ export default function HomeScreen() {
       </View>
     );
   }
-
+ 
   return (
     <View style={s.container}>
       <MapView
@@ -412,26 +411,27 @@ export default function HomeScreen() {
             points={crashPoints}
             region={mapRegion}
             opacity={0.75}
+            filter={heatmapFilter}
           />
         )}
       </MapView>
-
-        <HeatmapLegend visible={heatmapFilter !== 'off'} />
-
+ 
+      <HeatmapLegend visible={heatmapFilter !== 'off'} />
+ 
       {/* Zoom */}
       <Animated.View style={[s.zoomWrap, zoomAnim]}>
         <Pressable style={s.zoomBtn} onPress={handleZoomIn}><Ionicons name="add" size={22} color={TEXT_PRI} /></Pressable>
         <View style={s.zoomDiv} />
         <Pressable style={s.zoomBtn} onPress={handleZoomOut}><Ionicons name="remove" size={22} color={TEXT_PRI} /></Pressable>
       </Animated.View>
-
+ 
       {/* Locate */}
       <Animated.View style={[s.floatBtn, locateAnim]}>
         <Pressable style={s.floatBtnInner} onPress={handleMyLocation}>
           <Ionicons name="locate" size={20} color={GREEN} />
         </Pressable>
       </Animated.View>
-
+ 
       {/* Heatmap pill */}
       <Animated.View style={[s.heatmapWrap, heatmapAnim]}>
         <Pressable
@@ -451,9 +451,9 @@ export default function HomeScreen() {
           </Text>
         </Pressable>
       </Animated.View>
-
+ 
       <ProfileModal visible={showProfileModal} onClose={() => setShowProfileModal(false)} user={user} signOut={signOut} />
-
+ 
       <HeatmapModal
         visible={showHeatmapModal}
         activeFilter={heatmapFilter}
@@ -462,7 +462,7 @@ export default function HomeScreen() {
         crashCount={crashPoints.length}
         loading={crashLoading}
       />
-
+ 
       <Modal visible={placeModal !== null} transparent animationType="slide"
         onRequestClose={() => { setPlaceModal(null); setPlaceQuery(''); setPlaceSugg([]); }}>
         <Pressable style={hw.backdrop} onPress={() => { setPlaceModal(null); setPlaceQuery(''); setPlaceSugg([]); }}>
@@ -499,16 +499,16 @@ export default function HomeScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-
+ 
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
         backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
         handleIndicatorStyle={s.handle} enablePanDownToClose={false}>
-
+ 
         <BottomSheetScrollView
           contentContainerStyle={[s.sheetContent, { paddingBottom: insets.bottom + 24 }]}
           scrollEnabled={sheetIndex === 2}>
-
+ 
           <View style={s.searchRow}>
             <Pressable style={s.searchBar} onPress={() => router.push('/search')}>
               <Ionicons name="search" size={16} color={TEXT_MUT} />
@@ -522,7 +522,7 @@ export default function HomeScreen() {
                 : <Ionicons name="person-outline" size={18} color={TEXT_PRI} />}
             </Pressable>
           </View>
-
+ 
           {sheetIndex >= 1 && (
             <>
               <Text style={s.sectionLabel}>BOOKMARKED LOCATIONS</Text>
@@ -570,7 +570,7 @@ export default function HomeScreen() {
                   </Pressable>
                 )}
               </View>
-
+ 
               <Text style={[s.sectionLabel, { marginTop: 20 }]}>RECENTS</Text>
               <View style={s.recentCard}>
                 {recents.length > 0 ? recents.map((bm, i) => {
@@ -603,12 +603,12 @@ export default function HomeScreen() {
     </View>
   );
 }
-
+ 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: NAVY },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: NAVY },
   loadingText: { marginTop: 16, color: GREEN, fontSize: 14, fontWeight: '500' },
-
+ 
   zoomWrap: { position: 'absolute', right: 14, backgroundColor: NAVY_ITEM, borderRadius: 14, overflow: 'hidden', width: 42 },
   zoomBtn: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center' },
   zoomDiv: { height: 1, backgroundColor: '#2A3A55', marginHorizontal: 8 },
@@ -618,18 +618,18 @@ const s = StyleSheet.create({
   heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: NAVY_ITEM, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8 },
   heatmapInnerActive: { backgroundColor: '#0B1120', borderWidth: 1, borderColor: '#1ABC9340' },
   heatmapText: { color: TEXT_PRI, fontSize: 12, fontWeight: '600' },
-
+ 
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#2A3A55' },
   sheetContent: { paddingHorizontal: 16, paddingTop: 10 },
-
+ 
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 18 },
   searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: NAVY_CARD, borderRadius: 28, paddingHorizontal: 16, paddingVertical: 13 },
   searchPlaceholder: { color: TEXT_MUT, fontSize: 15, flex: 1 },
   avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#3A4A60', justifyContent: 'center', alignItems: 'center' },
   avatarText: { color: TEXT_PRI, fontSize: 14, fontWeight: '700' },
-
+ 
   sectionLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, marginBottom: 10 },
-
+ 
   bookmarkCard: { backgroundColor: NAVY_CARD, borderRadius: 18, paddingTop: 14, paddingBottom: 14, overflow: 'visible' },
   placesCount: { color: TEXT_PRI, fontSize: 15, fontWeight: '600', paddingHorizontal: 16, marginBottom: 10 },
   cardDivider: { height: 1, backgroundColor: DIVIDER, marginBottom: 16 },
@@ -640,7 +640,7 @@ const s = StyleSheet.create({
   shortcutSub: { color: TEXT_MUT, fontSize: 11 },
   loginBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 18 },
   loginBtnText: { color: GREEN, fontSize: 13, fontWeight: '600' },
-
+ 
   recentCard: { backgroundColor: NAVY_CARD, borderRadius: 18, overflow: 'hidden' },
   recentRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 14 },
   recentIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: NAVY_ITEM, justifyContent: 'center', alignItems: 'center' },
@@ -650,7 +650,7 @@ const s = StyleSheet.create({
   rowDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 68 },
   emptyText: { color: TEXT_MUT, fontSize: 13 },
 });
-
+ 
 const pm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   card: { backgroundColor: NAVY_CARD, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 20, alignItems: 'center' },
@@ -666,7 +666,7 @@ const pm = StyleSheet.create({
   rowValue: { color: TEXT_MUT, fontSize: 15 },
   div: { height: 1, backgroundColor: DIVIDER, marginLeft: 60 },
 });
-
+ 
 const hm = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   card: { backgroundColor: NAVY_CARD, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40 },
@@ -683,7 +683,7 @@ const hm = StyleSheet.create({
   filterDesc: { color: TEXT_MUT, fontSize: 12, opacity: 0.7 },
   filterDiv: { height: 1, backgroundColor: DIVIDER, marginLeft: 70 },
 });
-
+ 
 const hw = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   card: { backgroundColor: '#1C1C1E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40 },
