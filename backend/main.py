@@ -29,6 +29,26 @@ DAILY_API_LIMIT = 200  # hard cap — keeps us well under 50
 _api_call_count = 0
 _api_call_date = datetime.now(timezone.utc).date()
 
+# TomTom daily rate limiter
+TOMTOM_DAILY_LIMIT = 200  # keep well under 2500 free tier limit
+_tomtom_call_count = 0
+_tomtom_call_date = datetime.now(timezone.utc).date()
+
+
+def _check_and_increment_tomtom_limit():
+    """Increment TomTom daily counter. Raises HTTP 429 if limit hit."""
+    global _tomtom_call_count, _tomtom_call_date
+    today = datetime.now(timezone.utc).date()
+    if today != _tomtom_call_date:
+        _tomtom_call_count = 0
+        _tomtom_call_date = today
+    if _tomtom_call_count >= TOMTOM_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily TomTom API limit reached ({TOMTOM_DAILY_LIMIT} calls). Resets at midnight UTC.",
+        )
+    _tomtom_call_count += 1
+
 
 def _check_and_increment_api_limit():
     """Increment the daily counter. Raises HTTP 429 if we've hit the limit."""
@@ -395,6 +415,20 @@ def compute_route(payload: RouteRequest):
 
 
 @app.get("/maps/usage")
+@app.get("/traffic/usage")
+def tomtom_usage():
+    """Check how many TomTom API calls remain today."""
+    global _tomtom_call_count, _tomtom_call_date
+    today = datetime.now(timezone.utc).date()
+    if today != _tomtom_call_date:
+        _tomtom_call_count = 0
+        _tomtom_call_date = today
+    return {
+        "used": _tomtom_call_count,
+        "limit": TOMTOM_DAILY_LIMIT,
+        "remaining": max(0, TOMTOM_DAILY_LIMIT - _tomtom_call_count),
+    }
+
 def api_usage():
     """Check how many Google API calls remain today."""
     global _api_call_count, _api_call_date
@@ -923,7 +957,8 @@ def get_traffic_incidents(
         cached_at, data = _traffic_cache[cache_key]
         if time.time() - cached_at < TRAFFIC_CACHE_TTL:
             return data
-
+        
+    _check_and_increment_tomtom_limit()
     tomtom_key = os.getenv("TOMTOM_API_KEY")
     if not tomtom_key:
         raise HTTPException(status_code=500, detail="Missing TOMTOM_API_KEY in backend .env")
