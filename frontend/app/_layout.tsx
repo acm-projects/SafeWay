@@ -70,7 +70,7 @@ function AppSplash({ onFinish }: { onFinish: () => void }) {
 const sp = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0B1120',
+    backgroundColor: '#030427',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 999,
