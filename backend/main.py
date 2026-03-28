@@ -984,6 +984,32 @@ def get_traffic_incidents(
             "cached": False,
         }
         _traffic_cache[cache_key] = (time.time(), {**result, "cached": False})
+
+        # Store incidents in Supabase asynchronously
+        try:
+            supabase = get_supabase_client()
+            # Clean up expired incidents first
+            supabase.table("traffic_incidents").delete().lt("expires_at", datetime.now(timezone.utc).isoformat()).execute()
+            # Insert new incidents
+            if incidents:
+                records = [
+                    {
+                        "tomtom_id": inc.get("id", ""),
+                        "category": inc["category"],
+                        "incident_type": inc["type"],
+                        "latitude": inc["latitude"],
+                        "longitude": inc["longitude"],
+                        "description": inc.get("description", ""),
+                        "delay_seconds": inc.get("delay_seconds", 0),
+                        "road_numbers": inc.get("road", []),
+                    }
+                    for inc in incidents
+                ]
+                supabase.table("traffic_incidents").insert(records).execute()
+                print(f"[traffic] Stored {len(records)} incidents to Supabase")
+        except Exception as e:
+            print(f"[traffic] Supabase store failed: {e}")
+
         return result
 
     except requests.RequestException as e:
