@@ -21,7 +21,7 @@
  *    Always a formula from AADT — never a separate backend field.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   PanResponder,
@@ -32,11 +32,13 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useTheme } from '@/providers/theme-context';
+import { useTrafficIncidents, type TrafficIncident } from '@/hooks/useTrafficIncidents';
+import { IncidentBubble, IncidentDetailPopup } from '@/components/IncidentMarker';
 
 // ─── Types (mirrored from directions.tsx) ────────────────────────────────────
 export interface ModeRouteData {
@@ -300,21 +302,42 @@ function HourlyLineGraph({
 
 /** Semicircular speed gauge with spring needle (0–120 mph scale). */
 function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
-  const rot = useSharedValue(-210);
-  useEffect(() => {
-    const v = mph > 0 && Number.isFinite(mph) ? mph : 0;
-    const c = Math.min(120, Math.max(0, v));
-    rot.value = withSpring(-210 + (c / 120) * 240, { damping: 17, stiffness: 150 });
-  }, [mph]);
-
-  const needleStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rot.value}deg` }],
-  }));
+  const MIN_MPH = 0;
+  const MAX_MPH = 120;
+  const ARC_START_DEG = -165;
+  const ARC_END_DEG = -15;
+  const ARC_SWEEP_DEG = ARC_END_DEG - ARC_START_DEG;
 
   const W = 232;
   const H = 128;
   const cx = W / 2;
-  const hubY = H - 16;
+  const hubY = H - 18;
+  const arcRadius = 80;
+
+  const labelPoint = (v: number, rOffset = 16) => {
+    const t = (v - MIN_MPH) / (MAX_MPH - MIN_MPH);
+    const ang = (ARC_START_DEG + t * ARC_SWEEP_DEG) * (Math.PI / 180);
+    const r = arcRadius + rOffset;
+    return { x: cx + r * Math.cos(ang), y: hubY + r * Math.sin(ang) };
+  };
+  const p0 = labelPoint(0);
+  const p60 = labelPoint(60, 18);
+  const p120 = labelPoint(120);
+  const clampedMph = Math.min(MAX_MPH, Math.max(MIN_MPH, Number.isFinite(mph) ? mph : 0));
+  const needleAngleDeg = ARC_START_DEG + (clampedMph / MAX_MPH) * ARC_SWEEP_DEG;
+  const needleLen = 66;
+  const animatedNeedleDeg = useSharedValue(ARC_START_DEG);
+  useEffect(() => {
+    animatedNeedleDeg.value = withSpring(needleAngleDeg, { damping: 17, stiffness: 155 });
+  }, [needleAngleDeg]);
+  const animatedNeedleStyle = useAnimatedStyle(() => ({
+    // Pivot around the hub (needle left-center), without transformOrigin dependency.
+    transform: [
+      { translateX: -needleLen / 2 },
+      { rotate: `${animatedNeedleDeg.value}deg` },
+      { translateX: needleLen / 2 },
+    ],
+  }));
 
   return (
     <View style={{ width: W, height: H + 6 }}>
@@ -335,8 +358,8 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
       <View style={{ width: W, height: H, position: 'relative' }}>
         {Array.from({ length: 42 }, (_, i) => {
           const t = i / 41;
-          const ang = (-210 + t * 240) * (Math.PI / 180);
-          const r = 80;
+          const ang = (ARC_START_DEG + t * ARC_SWEEP_DEG) * (Math.PI / 180);
+          const r = arcRadius;
           const x = cx + r * Math.cos(ang) - 2.5;
           const y = hubY + r * Math.sin(ang) - 2.5;
           const speedAt = t * 120;
@@ -372,10 +395,10 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
             style={[
               {
                 position: 'absolute',
-                bottom: 0,
-                left: -2.5,
-                width: 5,
-                height: 66,
+                left: 0,
+                top: -2.5,
+                width: needleLen,
+                height: 5,
                 borderRadius: 2.5,
                 backgroundColor: accent,
                 shadowColor: accent,
@@ -383,10 +406,8 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
                 shadowOpacity: 0.85,
                 shadowRadius: 10,
                 elevation: 8,
-                // @ts-ignore
-                transformOrigin: '50% 100%',
               },
-              needleStyle,
+              animatedNeedleStyle,
             ]}
           />
         </View>
@@ -408,9 +429,9 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
         >
           <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent }} />
         </View>
-        <Text style={{ position: 'absolute', left: 6, bottom: 4, color: '#4ADE80', fontSize: 9, fontWeight: '800' }}>0</Text>
-        <Text style={{ position: 'absolute', left: W / 2 - 8, bottom: 0, color: '#64748B', fontSize: 9, fontWeight: '700' }}>60</Text>
-        <Text style={{ position: 'absolute', right: 6, bottom: 4, color: '#FB7185', fontSize: 9, fontWeight: '800' }}>120</Text>
+        <Text style={{ position: 'absolute', left: p0.x - 7, top: p0.y - 7, color: '#4ADE80', fontSize: 10, fontWeight: '800' }}>0</Text>
+        <Text style={{ position: 'absolute', left: p60.x - 8, top: p60.y - 8, color: '#64748B', fontSize: 10, fontWeight: '700' }}>60</Text>
+        <Text style={{ position: 'absolute', left: p120.x - 11, top: p120.y - 7, color: '#FB7185', fontSize: 10, fontWeight: '800' }}>120</Text>
       </View>
     </View>
   );
@@ -440,6 +461,7 @@ export function RouteInsightsPage({
 
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
+  const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
 
   // ── Derived values ──────────────────────────────────────────────────────────
   const avgSpeedMph = activeData
@@ -520,17 +542,34 @@ export function RouteInsightsPage({
     TRAVEL_TIME: 'Estimated total travel time from origin to destination under current traffic conditions.',
   };
 
+  const initialRegion: Region | null = useMemo(() => {
+    if (!destLat || !destLng) return null;
+    return {
+      latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
+      longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
+      latitudeDelta: 0.1,
+      longitudeDelta: 0.1,
+    };
+  }, [destLat, destLng, originLat, originLng]);
+  const [mapRegion, setMapRegion] = useState<Region | null>(initialRegion);
+
+  useEffect(() => {
+    setMapRegion(initialRegion);
+  }, [initialRegion, visible]);
+
+  const incidentRadiusKm = Math.max(2, Math.min(12, ((mapRegion?.latitudeDelta ?? 0.1) * 111) / 2));
+  const incidentsVisible = (mapRegion?.latitudeDelta ?? 1) < 0.2;
+  const { incidents } = useTrafficIncidents({
+    lat: mapRegion?.latitude ?? null,
+    lng: mapRegion?.longitude ?? null,
+    radiusKm: incidentRadiusKm,
+    enabled: visible && incidentsVisible && !!mapRegion,
+  });
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={s.backdrop}>
         <View style={[s.card, { height: CARD_HEIGHT, backgroundColor: T.BG, overflow: 'hidden' }]}>
-          <LinearGradient
-            colors={['#6366F1', '#22D3EE', '#A855F7']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={{ height: 4, width: '100%', opacity: 0.9 }}
-          />
-
           {/* ── Header ── */}
           <View style={s.tabRow}>
             <Text style={[s.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
@@ -652,13 +691,9 @@ export function RouteInsightsPage({
                   style={s.insightMap}
                   provider={PROVIDER_GOOGLE}
                   customMapStyle={DARK_MAP_STYLE}
-                  initialRegion={{
-                    latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
-                    longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
-                    latitudeDelta: 0.10,
-                    longitudeDelta: 0.10,
-                  }}
+                  initialRegion={initialRegion ?? undefined}
                   scrollEnabled zoomEnabled rotateEnabled={false} pitchEnabled={false}
+                  onRegionChangeComplete={setMapRegion}
                 >
                   {originLat && originLng && (
                     <Marker coordinate={{ latitude: originLat, longitude: originLng }}>
@@ -669,10 +704,26 @@ export function RouteInsightsPage({
                   {activeData?.coords?.length ? (
                     <Polyline coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={4} />
                   ) : null}
+                  {incidentsVisible && incidents.map(inc => (
+                    <Marker
+                      key={inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`}
+                      coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}
+                      anchor={{ x: 0.5, y: 1 }}
+                      tracksViewChanges={false}
+                      onPress={() => setSelectedIncident(inc)}
+                    >
+                      <IncidentBubble incident={inc} />
+                    </Marker>
+                  ))}
                 </MapView>
                 {activeData && (
                   <View style={s.routeTimeBubble}>
                     <Text style={s.routeTimeBubbleText}>{fmtSecs(activeData.durationSecs)}</Text>
+                  </View>
+                )}
+                {!incidentsVisible && (
+                  <View style={s.incidentHint}>
+                    <Text style={s.incidentHintText}>Zoom in to view live incidents</Text>
                   </View>
                 )}
               </View>
@@ -899,6 +950,10 @@ export function RouteInsightsPage({
           </ScrollView>
         </View>
       </View>
+      <IncidentDetailPopup
+        incident={selectedIncident}
+        onClose={() => setSelectedIncident(null)}
+      />
     </Modal>
   );
 }
@@ -927,6 +982,18 @@ const s = StyleSheet.create({
   insightMap: { width: '100%', height: '100%' },
   routeTimeBubble: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.75)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
   routeTimeBubbleText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  incidentHint: {
+    position: 'absolute',
+    left: 10,
+    top: 10,
+    backgroundColor: 'rgba(5,10,24,0.82)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#FFFFFF22',
+  },
+  incidentHintText: { color: '#CBD5E1', fontSize: 11, fontWeight: '700' },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
 

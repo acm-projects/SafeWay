@@ -39,6 +39,9 @@ import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
+import { useTrafficIncidents } from '@/hooks/useTrafficIncidents';
+import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
+import { IncidentBubble, IncidentDetailPopup } from '@/components/IncidentMarker';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -846,6 +849,9 @@ export default function DirectionsScreen() {
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [routeBusy, setRouteBusy] = useState(false);
   const [zoomDelta, setZoomDelta] = useState(0.05);
+  const [mapLatDelta, setMapLatDelta] = useState(0.05);
+  const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
+  const [showTraffic, setShowTraffic] = useState(true);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
@@ -873,6 +879,16 @@ export default function DirectionsScreen() {
     limit: 10_000,
   });
   const activeHeatmapInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
+
+  // ── Traffic incidents — only shown when zoomed in enough ─────────────────
+  const centerCoords = originCoords ?? destCoords;
+  const { incidents, loading: trafficLoading } = useTrafficIncidents({
+    lat: centerCoords?.lat ?? null,
+    lng: centerCoords?.lng ?? null,
+    radiusKm: 8,
+    enabled: showTraffic,
+  });
+  const incidentsVisible = mapLatDelta < 0.08;
 
   // Only fetch GPS location if no origin coords were passed from destination page
   useEffect(() => {
@@ -1154,7 +1170,9 @@ export default function DirectionsScreen() {
         provider={PROVIDER_GOOGLE}
         customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
-        initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}>
+        initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}
+        onRegionChangeComplete={(r) => setMapLatDelta(r.latitudeDelta)}>
+
         {originCoords && (
           <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.originDot}><View style={styles.originDotInner} /></View>
@@ -1183,7 +1201,26 @@ export default function DirectionsScreen() {
             gradient={{ colors: ['#00E5FF', '#FFD600', '#FF1744'], startPoints: [0.1, 0.5, 1.0], colorMapSize: 256 }}
           />
         )}
+
+        {/* ── Live traffic incident bubbles — only visible when zoomed in ── */}
+        {showTraffic && incidentsVisible && incidents.map(inc => (
+          <Marker
+            key={inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`}
+            coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}
+            anchor={{ x: 0.5, y: 1.0 }}
+            tracksViewChanges={false}
+            onPress={() => setSelectedIncident(inc)}
+          >
+            <IncidentBubble incident={inc} />
+          </Marker>
+        ))}
       </MapView>
+
+      {/* ── Incident detail popup ── */}
+      <IncidentDetailPopup
+        incident={selectedIncident}
+        onClose={() => setSelectedIncident(null)}
+      />
 
       {/* Back button */}
       <Pressable style={[styles.backBtn, { top: insets.top + 10, backgroundColor: T.isDark ? CARD_BG : T.CARD }]} onPress={() => router.back()}>
@@ -1323,6 +1360,24 @@ export default function DirectionsScreen() {
           {heatmapFilter !== 'off' && (
             <Text style={[styles.heatmapText, { color: activeHeatmapInfo?.color ?? T.ACCENT }]}>
               {activeHeatmapInfo?.label ?? 'Heatmap'}
+            </Text>
+          )}
+        </Pressable>
+      </View>
+
+      {/* Traffic incidents toggle pill — fixed below heatmap */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 202 }}>
+        <Pressable
+          style={[styles.heatmapInner, { backgroundColor: T.ITEM }, showTraffic && { borderColor: '#FF475744', borderWidth: 1 }]}
+          onPress={() => setShowTraffic(v => !v)}
+        >
+          {trafficLoading
+            ? <ActivityIndicator size="small" color="#FF4757" style={{ width: 14 }} />
+            : <Text style={{ fontSize: 13, lineHeight: 16 }}>🚦</Text>
+          }
+          {showTraffic && (
+            <Text style={[styles.heatmapText, { color: '#FF4757' }]}>
+              {incidentsVisible ? `${incidents.length}` : 'Traffic'}
             </Text>
           )}
         </Pressable>
