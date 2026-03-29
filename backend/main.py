@@ -1021,30 +1021,24 @@ def get_traffic_incidents(
         _traffic_cache[cache_key] = (time.time(), {**result, "cached": False})
 
         # Store incidents in Supabase asynchronously
+    
         try:
-            supabase = get_supabase_client()
-            # Clean up expired incidents first
-            supabase.table("traffic_incidents").delete().lt("expires_at", datetime.now(timezone.utc).isoformat()).execute()
-            # Insert new incidents
-            if incidents:
-                records = [
-                    {
-                        "tomtom_id": inc.get("id", ""),
-                        "category": inc["category"],
-                        "incident_type": inc["type"],
-                        "latitude": inc["latitude"],
-                        "longitude": inc["longitude"],
-                        "description": inc.get("description", ""),
-                        "delay_seconds": inc.get("delay_seconds", 0),
-                        "road_numbers": inc.get("road", []),
-                    }
-                    for inc in incidents
-                ]
-                supabase.table("traffic_incidents").insert(records).execute()
-                print(f"[traffic] Stored {len(records)} incidents to Supabase")
+            gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+            if gcs_key and os.path.isfile(gcs_key):
+                import gcsfs
+                import json as json_lib
+                fs = gcsfs.GCSFileSystem(token=gcs_key)
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                gcs_path = f"safeway-data/traffic_incidents/incidents_{timestamp}.json"
+                with fs.open(gcs_path, "w") as f:
+                    json_lib.dump({
+                        "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        "bbox": bbox,
+                        "incidents": incidents,
+                    }, f)
+                print(f"[traffic] Stored {len(incidents)} incidents to GCS: {gcs_path}")
         except Exception as e:
-            print(f"[traffic] Supabase store failed: {e}")
-
+            print(f"[traffic] GCS store failed: {e}")
         return result
 
     except requests.RequestException as e:
