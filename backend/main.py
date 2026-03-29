@@ -1,6 +1,5 @@
 import os
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -18,18 +17,7 @@ from supabase import Client, create_client
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-@asynccontextmanager
-async def lifespan(app):
-    """Load risk caches at startup so scores are ready before first request."""
-    try:
-        from backend.risk_cache import startup_load
-    except ModuleNotFoundError:
-        from risk_cache import startup_load
-    startup_load()
-    yield
-
-
-app = FastAPI(title="SafeWay API", lifespan=lifespan)
+app = FastAPI(title="SafeWay API")
 
 
 # ---------------------------------------------------------------------------
@@ -431,10 +419,7 @@ def compute_route(payload: RouteRequest):
 
     result_routes = []
     try:
-        try:
-            from backend.risk_cache import score_coordinates
-        except ModuleNotFoundError:
-            from risk_cache import score_coordinates
+        from risk_cache import score_coordinates
         for route in raw_routes:
             polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
             coordinates = decode_polyline(polyline) if polyline else []
@@ -485,54 +470,9 @@ def compute_route(payload: RouteRequest):
                 "route_source": "google",
             })
 
-    # ── SafeWay A* safer route ──────────────────────────────────────────
-    try:
-        try:
-            from backend.risk_cache import get_prepared_graph, score_coordinates as sc
-            from backend.model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
-        except ModuleNotFoundError:
-            from risk_cache import get_prepared_graph, score_coordinates as sc
-            from model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
-        import osmnx as ox
-
-        G = get_prepared_graph()
-        orig_node = ox.distance.nearest_nodes(G, X=payload.origin.lng, Y=payload.origin.lat)
-        dest_node = ox.distance.nearest_nodes(G, X=payload.destination.lng, Y=payload.destination.lat)
-
-        if orig_node != dest_node:
-            astar = find_safer_route(G, orig_node, dest_node, beta=0.5)
-            safe_coords = path_to_coordinates(G, astar["safe_path"])
-
-            if len(safe_coords) >= 2:
-                safe_polyline = encode_polyline(safe_coords)
-                safe_safety = sc(safe_coords, sample_every=3, departure_hour=payload.departure_hour)
-
-                # Duration as Google-format string (e.g. "600s")
-                safe_duration = f"{astar['safe_time_secs']}s"
-
-                aadt = estimate_route_aadt(G, astar["safe_path"])
-                result_routes.append({
-                    "distance_meters": astar["safe_distance_m"],
-                    "duration": safe_duration,
-                    "polyline": safe_polyline,
-                    "coordinates": safe_coords,
-                    "safety_score": safe_safety.get("score"),
-                    "safety_label": safe_safety.get("label", "unknown"),
-                    "route_source": "safeway",
-                    "risk_per_km": safe_safety.get("risk_per_km"),
-                    "total_exposure": safe_safety.get("total_exposure"),
-                    "route_km": safe_safety.get("route_km"),
-                    "n_high_risk": safe_safety.get("n_high_risk", 0),
-                    "top_risk_factors": safe_safety.get("top_risk_factors", []),
-                    "time_band": safe_safety.get("time_band"),
-                    "segment_risks": safe_safety.get("segment_risks", []),
-                    "time_penalty_pct": astar["time_penalty_pct"],
-                    "risk_reduction_pct": astar["risk_reduction_pct"],
-                    "aadt_avg": aadt.get("aadt_avg"),
-                    "aadt_max": aadt.get("aadt_max"),
-                })
-    except Exception as e:
-        print(f"[route] SafeWay A* route skipped: {e}", flush=True)
+    # ── SafeWay A* safer route — temporarily disabled ──────────────────
+    # TODO: re-enable once Google routes + scoring are confirmed working
+    pass
 
     # Sort: SafeWay route first, then by safety score ascending (safest first)
     result_routes.sort(key=lambda r: (
@@ -910,9 +850,6 @@ def admin_refresh_cache(authorization: str = Header(None)):
         expected = f"Bearer {admin_secret}"
         if not authorization or authorization != expected:
             raise HTTPException(status_code=403, detail="Forbidden")
-    try:
-        from backend.risk_cache import refresh_cache
-    except ModuleNotFoundError:
-        from risk_cache import refresh_cache
+    from risk_cache import refresh_cache
     result = refresh_cache()
     return result
