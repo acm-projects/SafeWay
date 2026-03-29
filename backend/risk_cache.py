@@ -212,21 +212,40 @@ def _hour_to_band(hour: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Graph loading: OSMnx directly
+# Graph loading: local GraphML first, OSMnx download as fallback
 # ---------------------------------------------------------------------------
 
 def get_graph():
-    """Return cached OSMnx graph G (downloaded from OSM on first call)."""
+    """Return cached OSMnx graph G. Loads from local GraphML file if available, otherwise downloads from OSM."""
     global _graph
     if _graph is not None:
         return _graph
+
+    # Try local cached GraphML first (bundled in Docker image, fast)
+    local_graphml = OUTPUT_DIR / "chicago_drive.graphml"
+    if local_graphml.exists():
+        import osmnx as ox
+        _graph = ox.load_graphml(local_graphml)
+        print(f"[risk_cache] loaded graph from local GraphML ({_graph.number_of_nodes()} nodes, {_graph.number_of_edges()} edges)", flush=True)
+        return _graph
+
+    # Fallback: download from OSM (slow, ~2 min)
+    print("[risk_cache] no local GraphML, downloading Chicago street network from OSM...", flush=True)
     import sys
     backend_dir = str(Path(__file__).resolve().parent)
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
-    print("[risk_cache] downloading Chicago street network from OSM...", flush=True)
     from model.data.intersections import get_chicago_intersections
     _, _graph = get_chicago_intersections()
+
+    # Save for next time
+    try:
+        import osmnx as ox
+        ox.save_graphml(_graph, local_graphml)
+        print(f"[risk_cache] saved graph to {local_graphml}", flush=True)
+    except Exception as e:
+        print(f"[risk_cache] could not save GraphML: {e}", flush=True)
+
     return _graph
 
 
