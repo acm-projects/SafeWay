@@ -394,6 +394,38 @@ def score_coordinates(
             "risk": round(seg_risk, 1),
         })
 
+    # Coordinates of high-risk nodes for ⚠️ map markers
+    high_risk_coords = []
+    for nid, r in zip(nearest, risks):
+        if r > 66:
+            try:
+                high_risk_coords.append({
+                    "latitude": G.nodes[nid]["y"],
+                    "longitude": G.nodes[nid]["x"],
+                })
+            except Exception:
+                pass
+
+    # AADT estimate from edge highway types at sampled nodes
+    _ROAD_CLASS = {
+        "residential": 1, "living_street": 1, "unclassified": 1,
+        "tertiary": 2, "tertiary_link": 2,
+        "secondary": 3, "secondary_link": 3,
+        "primary": 4, "primary_link": 4,
+        "trunk": 5, "trunk_link": 5,
+        "motorway": 6, "motorway_link": 6,
+    }
+    _AADT_PROXY = {1: 1_000, 2: 5_000, 3: 15_000, 4: 25_000, 5: 40_000, 6: 60_000}
+    aadt_values = []
+    for nid in nearest:
+        for _, _, ed in list(G.edges(nid, data=True))[:2]:
+            hw = ed.get("highway", "residential")
+            if isinstance(hw, list):
+                hw = hw[0] if hw else "residential"
+            aadt_values.append(_AADT_PROXY.get(_ROAD_CLASS.get(hw, 1), 1_000))
+    aadt_avg = round(sum(aadt_values) / len(aadt_values)) if aadt_values else None
+    aadt_max = max(aadt_values) if aadt_values else None
+
     return {
         "score": score,
         "label": label,
@@ -406,4 +438,7 @@ def score_coordinates(
         "top_risk_factors": top_risk_factors,
         "time_band": time_band,
         "segment_risks": segment_risks,
+        "high_risk_coords": high_risk_coords,
+        "aadt_avg": aadt_avg,
+        "aadt_max": aadt_max,
     }

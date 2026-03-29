@@ -78,6 +78,7 @@ interface ModeRouteData {
   topRiskFactors?: { factor: string; weight: number }[] | { label: string; count: number; pct: number }[];
   timeBand?: string;
   segmentRisks?: number[];
+  highRiskCoords?: Array<{ latitude: number; longitude: number }>;
   aadtAvg?: number;
   aadtMax?: number;
   timePenaltyPct?: number;
@@ -95,6 +96,7 @@ interface ModeRoutes {
     topRiskFactors?: any[];
     timeBand?: string;
     segmentRisks?: number[];
+    highRiskCoords?: Array<{ latitude: number; longitude: number }>;
     aadtAvg?: number;
     aadtMax?: number;
     timePenaltyPct?: number;
@@ -186,6 +188,7 @@ function mapSafetyRoutesToAlternatives(safetyRoutes: SafetyRoute[]): RouteAltRow
       topRiskFactors: r.top_risk_factors,
       timeBand: r.time_band,
       segmentRisks: r.segment_risks,
+      highRiskCoords: r.high_risk_coords ?? [],
       aadtAvg: r.aadt_avg,
       aadtMax: r.aadt_max,
       timePenaltyPct: r.time_penalty_pct,
@@ -211,6 +214,7 @@ function primaryToAlternativeRow(primary: ModeRouteData, index = 0): RouteAltRow
     topRiskFactors: primary.topRiskFactors,
     timeBand: primary.timeBand,
     segmentRisks: primary.segmentRisks,
+    highRiskCoords: primary.highRiskCoords,
     aadtAvg: primary.aadtAvg,
     aadtMax: primary.aadtMax,
     timePenaltyPct: primary.timePenaltyPct,
@@ -429,8 +433,22 @@ function RouteDetailsModal({
                     )}
                     <Marker coordinate={{ latitude: destLat, longitude: destLng }} pinColor="#FF4444" />
                     {activeData?.coords?.length ? (
-                      <Polyline coordinates={activeData.coords} strokeColor={activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'} strokeWidth={4} />
+                      (activeData.segmentRisks as any[])?.length
+                        ? (activeData.segmentRisks as any[]).map((seg: any, si: number) => (
+                            <Polyline
+                              key={`modal-seg-${si}`}
+                              coordinates={[seg.start, seg.end]}
+                              strokeColor={seg.risk > 66 ? '#FF4444' : seg.risk > 33 ? '#FFA500' : '#1ABC93'}
+                              strokeWidth={4}
+                            />
+                          ))
+                        : <Polyline coordinates={activeData.coords} strokeColor={activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'} strokeWidth={4} />
                     ) : null}
+                    {(activeData?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
+                      <Marker key={`modal-hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
+                        <Text style={{ fontSize: 14 }}>⚠️</Text>
+                      </Marker>
+                    ))}
                   </MapView>
                   {activeData && (
                     <View style={dm.routeTimeBubble}>
@@ -782,7 +800,7 @@ export default function DirectionsScreen() {
             safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
             riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
             topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
-            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
             timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
           },
           alternatives: alts,
@@ -819,7 +837,7 @@ export default function DirectionsScreen() {
             safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
             riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
             topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
-            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
             timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
           },
           alternatives: alts,
@@ -842,7 +860,7 @@ export default function DirectionsScreen() {
             safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
             riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
             topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
-            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
             timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
           },
           alternatives: alts,
@@ -981,7 +999,8 @@ export default function DirectionsScreen() {
         safetyScore: selectedAlt.safetyScore, safetyLabel: selectedAlt.safetyLabel, routeSource: selectedAlt.routeSource,
         riskPerKm: selectedAlt.riskPerKm, nHighRisk: selectedAlt.nHighRisk, routeKm: selectedAlt.routeKm,
         topRiskFactors: selectedAlt.topRiskFactors, timeBand: selectedAlt.timeBand,
-        segmentRisks: selectedAlt.segmentRisks, aadtAvg: selectedAlt.aadtAvg, aadtMax: selectedAlt.aadtMax,
+        segmentRisks: selectedAlt.segmentRisks, highRiskCoords: selectedAlt.highRiskCoords,
+        aadtAvg: selectedAlt.aadtAvg, aadtMax: selectedAlt.aadtMax,
         timePenaltyPct: selectedAlt.timePenaltyPct, riskReductionPct: selectedAlt.riskReductionPct,
       }
     : modeData?.primary ?? null;
@@ -1020,6 +1039,19 @@ export default function DirectionsScreen() {
         {alternatives.map((alt, i) => {
           if (!alt.coords?.length) return null;
           const isSelected = i === selectedRouteIndex;
+          const segs = alt.segmentRisks as any[] | undefined;
+          if (isSelected && segs?.length) {
+            return segs.map((seg: any, si: number) => (
+              <Polyline
+                key={`${travelMode}-alt-${i}-seg-${si}`}
+                coordinates={[seg.start, seg.end]}
+                strokeColor={seg.risk > 66 ? '#FF4444' : seg.risk > 33 ? '#FFA500' : '#1ABC93'}
+                strokeWidth={5}
+                tappable
+                onPress={() => setSelectedRouteIndex(i)}
+              />
+            ));
+          }
           return (
             <Polyline
               key={`${travelMode}-alt-${i}`}
@@ -1034,6 +1066,11 @@ export default function DirectionsScreen() {
         {alternatives.length === 0 && activeData?.coords?.length ? (
           <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
         ) : null}
+        {(alternatives[selectedRouteIndex]?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
+          <Marker key={`hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
+            <Text style={{ fontSize: 16 }}>⚠️</Text>
+          </Marker>
+        ))}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap points={crashPoints} opacity={0.72} radius={20}
             gradient={{ colors: ['#00E5FF', '#FFD600', '#FF1744'], startPoints: [0.1, 0.5, 1.0], colorMapSize: 256 }}

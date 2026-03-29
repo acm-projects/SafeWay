@@ -442,6 +442,9 @@ def compute_route(payload: RouteRequest):
                     "top_risk_factors": safety.get("top_risk_factors", []),
                     "time_band": safety.get("time_band"),
                     "segment_risks": safety.get("segment_risks", []),
+                    "high_risk_coords": safety.get("high_risk_coords", []),
+                    "aadt_avg": safety.get("aadt_avg"),
+                    "aadt_max": safety.get("aadt_max"),
                 }
             except Exception as score_err:
                 print(f"[route] score_coordinates failed for route: {score_err}", flush=True)
@@ -470,9 +473,15 @@ def compute_route(payload: RouteRequest):
                 "route_source": "google",
             })
 
-    # ── SafeWay A* safer route — temporarily disabled ──────────────────
-    # TODO: re-enable once Google routes + scoring are confirmed working
-    pass
+    # ── SafeWay A* safer route ──────────────────────────────────────────
+    from astar_route import compute_astar_route
+    astar_result = compute_astar_route(
+        payload.origin.lat, payload.origin.lng,
+        payload.destination.lat, payload.destination.lng,
+        departure_hour=payload.departure_hour,
+    )
+    if astar_result:
+        result_routes.append(astar_result)
 
     # Sort: SafeWay route first, then by safety score ascending (safest first)
     result_routes.sort(key=lambda r: (
