@@ -102,6 +102,8 @@ interface ModeRoutes {
   })[];
 }
 
+type RouteAltRow = ModeRoutes['alternatives'][number];
+
 const MAP_STYLE_OPTIONS: { id: 'standard'|'satellite'|'hybrid'|'terrain'; label: string; icon: string }[] = [
   { id: 'standard',  label: 'Default',   icon: 'map-outline'        },
   { id: 'satellite', label: 'Satellite', icon: 'earth-outline'      },
@@ -164,6 +166,58 @@ function fmtSecs(s: number): string {
   const m = Math.round(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+function mapSafetyRoutesToAlternatives(safetyRoutes: SafetyRoute[]): RouteAltRow[] {
+  return safetyRoutes.map((r: SafetyRoute, i: number) => {
+    const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
+    return {
+      index: i,
+      coords: r.coordinates,
+      distance: r.distance_meters ?? 0,
+      durationSecs,
+      label: fmtSecs(durationSecs),
+      routeLabels: [r.route_source],
+      safetyScore: r.safety_score,
+      safetyLabel: r.safety_label,
+      routeSource: r.route_source,
+      riskPerKm: r.risk_per_km,
+      nHighRisk: r.n_high_risk,
+      routeKm: r.route_km,
+      topRiskFactors: r.top_risk_factors,
+      timeBand: r.time_band,
+      segmentRisks: r.segment_risks,
+      aadtAvg: r.aadt_avg,
+      aadtMax: r.aadt_max,
+      timePenaltyPct: r.time_penalty_pct,
+      riskReductionPct: r.risk_reduction_pct,
+    };
+  });
+}
+
+function primaryToAlternativeRow(primary: ModeRouteData, index = 0): RouteAltRow {
+  return {
+    index,
+    coords: primary.coords,
+    distance: primary.distance,
+    durationSecs: primary.durationSecs,
+    label: fmtSecs(primary.durationSecs),
+    routeLabels: ['DEFAULT_ROUTE'],
+    safetyScore: primary.safetyScore,
+    safetyLabel: primary.safetyLabel,
+    routeSource: primary.routeSource,
+    riskPerKm: primary.riskPerKm,
+    nHighRisk: primary.nHighRisk,
+    routeKm: primary.routeKm,
+    topRiskFactors: primary.topRiskFactors,
+    timeBand: primary.timeBand,
+    segmentRisks: primary.segmentRisks,
+    aadtAvg: primary.aadtAvg,
+    aadtMax: primary.aadtMax,
+    timePenaltyPct: primary.timePenaltyPct,
+    riskReductionPct: primary.riskReductionPct,
+  };
+}
+
 function fmtDist(m: number): string {
   const miles = m / 1609.34;
   return miles >= 1 ? `${miles.toFixed(1)} mi` : `${Math.round(m * 3.281)} ft`;
@@ -687,41 +741,40 @@ export default function DirectionsScreen() {
     const departureHour = nowChoice === 'now' ? new Date().getHours() : pickerHour;
 
     try {
-      // Fetch all modes in parallel: backend for DRIVE (safety + SafeWay), Google direct for others
-      const [backendRes, driveGoogleRes, walkAlts, bikeAlts] = await Promise.allSettled([
+      const [
+        backendDriveRes,
+        backendWalkRes,
+        backendBikeRes,
+        driveGoogleRes,
+        walkGoogleRes,
+        bikeGoogleRes,
+      ] = await Promise.allSettled([
         getBackendRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', departure_hour: departureHour }),
+        getBackendRoutes({ origin: from, destination: to, travel_mode: 'WALK', departure_hour: departureHour }),
+        getBackendRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', departure_hour: departureHour }),
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE' }),
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK' }),
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
       ]);
 
-      // Try backend DRIVE routes first (includes SafeWay A* + safety scoring)
-      if (backendRes.status === 'fulfilled' && backendRes.value.routes.length > 0) {
-        const safetyRoutes = backendRes.value.routes;
-        const alts = safetyRoutes.map((r: SafetyRoute, i: number) => {
-          const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
-          return {
-            index: i,
-            coords: r.coordinates,
-            distance: r.distance_meters ?? 0,
-            durationSecs,
-            label: r.route_source === 'safeway' ? '🛡️ SafeWay Route' : i === 0 ? 'Fastest Route' : `Route ${i + 1}`,
-            routeLabels: [r.route_source],
-            safetyScore: r.safety_score,
-            safetyLabel: r.safety_label,
-            routeSource: r.route_source,
-            riskPerKm: r.risk_per_km,
-            nHighRisk: r.n_high_risk,
-            routeKm: r.route_km,
-            topRiskFactors: r.top_risk_factors,
-            timeBand: r.time_band,
-            segmentRisks: r.segment_risks,
-            aadtAvg: r.aadt_avg,
-            aadtMax: r.aadt_max,
-            timePenaltyPct: r.time_penalty_pct,
-            riskReductionPct: r.risk_reduction_pct,
-          };
-        });
+      if (__DEV__) {
+        if (backendDriveRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(DRIVE) failed:', backendDriveRes.reason);
+        } else if (backendDriveRes.value.routes.length === 0) {
+          console.warn('[directions] getBackendRoutes(DRIVE) returned no routes.');
+        } else {
+          const hasScore = backendDriveRes.value.routes.some(r => r.safety_score != null);
+          if (!hasScore) {
+            console.warn(
+              '[directions] Backend DRIVE routes have no safety_score — check server risk_map (GCS / intersection_scores.parquet).',
+            );
+          }
+        }
+      }
+
+      // DRIVE: backend first (SafeWay A* + scoring), else Google
+      if (backendDriveRes.status === 'fulfilled' && backendDriveRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendDriveRes.value.routes);
         const primary = alts[0];
         nd.DRIVE = {
           primary: {
@@ -736,8 +789,10 @@ export default function DirectionsScreen() {
         };
       }
 
-      // Fallback: if backend failed, use Google direct for DRIVE
       if (!nd.DRIVE && driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0) {
+        if (__DEV__) {
+          console.warn('[directions] Using Google-only DRIVE routes (no safety scores). Fix backend reachability or empty routes.');
+        }
         const alts = driveGoogleRes.value;
         nd.DRIVE = {
           primary: { coords: alts[0].coords, distance: alts[0].distance, durationSecs: alts[0].durationSecs },
@@ -745,7 +800,6 @@ export default function DirectionsScreen() {
         };
       }
 
-      // WALK & BICYCLE from Google
       const toModeRoutes = (res: PromiseSettledResult<AlternativeRoute[]>): ModeRoutes | undefined => {
         if (res.status !== 'fulfilled' || !res.value.length) return undefined;
         const alts = res.value;
@@ -754,14 +808,77 @@ export default function DirectionsScreen() {
           alternatives: alts,
         };
       };
-      const walk = toModeRoutes(walkAlts); if (walk) nd.WALK = walk;
-      const bike = toModeRoutes(bikeAlts); if (bike) nd.BICYCLE = bike;
+
+      // WALK: backend scored routes first, else Google
+      if (backendWalkRes.status === 'fulfilled' && backendWalkRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendWalkRes.value.routes);
+        const primary = alts[0];
+        nd.WALK = {
+          primary: {
+            coords: primary.coords, distance: primary.distance, durationSecs: primary.durationSecs,
+            safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
+            riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
+            topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
+            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
+          },
+          alternatives: alts,
+        };
+      } else {
+        if (__DEV__ && backendWalkRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(WALK) failed:', backendWalkRes.reason);
+        }
+        const walk = toModeRoutes(walkGoogleRes);
+        if (walk) nd.WALK = walk;
+      }
+
+      // BICYCLE: backend scored routes first, else Google
+      if (backendBikeRes.status === 'fulfilled' && backendBikeRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendBikeRes.value.routes);
+        const primary = alts[0];
+        nd.BICYCLE = {
+          primary: {
+            coords: primary.coords, distance: primary.distance, durationSecs: primary.durationSecs,
+            safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
+            riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
+            topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
+            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
+          },
+          alternatives: alts,
+        };
+      } else {
+        if (__DEV__ && backendBikeRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(BICYCLE) failed:', backendBikeRes.reason);
+        }
+        const bike = toModeRoutes(bikeGoogleRes);
+        if (bike) nd.BICYCLE = bike;
+      }
 
       if (nd.DRIVE) {
-        const ds = nd.DRIVE.primary.durationSecs;
         const avoidMult = 1 + (avoidSet.has('tolls') ? 0.05 : 0) + (avoidSet.has('highways') ? 0.15 : 0);
-        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4 * avoidMult) }, alternatives: [] };
-        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1 * avoidMult) }, alternatives: [] };
+        const busFactor = 1.4 * avoidMult;
+        const rideFactor = 1.1 * avoidMult;
+        const driveAlts = nd.DRIVE.alternatives?.length
+          ? nd.DRIVE.alternatives
+          : [primaryToAlternativeRow(nd.DRIVE.primary)];
+
+        const scaleAlts = (factor: number) =>
+          driveAlts.map((alt) => {
+            const durationSecs = Math.round(alt.durationSecs * factor);
+            return { ...alt, durationSecs, label: fmtSecs(durationSecs) };
+          });
+
+        const busAlts = scaleAlts(busFactor);
+        const rideAlts = scaleAlts(rideFactor);
+        nd.BUS = {
+          primary: { ...nd.DRIVE.primary, durationSecs: busAlts[0].durationSecs },
+          alternatives: busAlts,
+        };
+        nd.RIDESHARE = {
+          primary: { ...nd.DRIVE.primary, durationSecs: rideAlts[0].durationSecs },
+          alternatives: rideAlts,
+        };
       }
       setRouteByMode(nd);
     } catch (e) {
@@ -1338,7 +1455,7 @@ export default function DirectionsScreen() {
                 const safetyPct = score != null ? Math.max(0, 100 - Math.round(score)) : null;
                 const safetyColor = score == null ? '#7A8FA6'
                   : score < 33 ? '#1ABC93' : score < 66 ? '#FFA500' : '#FF4444';
-                const routeName = alt.label ?? (isSafeWay ? '🛡️ SafeWay Route' : `Route ${i + 1}`);
+                const routeName = alt.label ?? fmtSecs(alt.durationSecs);
 
                 return (
                   <Pressable
@@ -1376,12 +1493,17 @@ export default function DirectionsScreen() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI }]}>{routeName}</Text>
                         {isSafeWay && (
-                          <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>A*</Text>
+                          <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="shield-checkmark" size={10} color="#1ABC93" />
+                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>Generated by SafeWay</Text>
                           </View>
                         )}
                       </View>
-                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtSecs(alt.durationSecs)}  •  {fmtDist(alt.distance)}</Text>
+                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>
+                        {fmtDist(alt.distance)}
+                        {score != null ? `  •  Risk: ${Math.round(score)}` : ''}
+                        {alt.safetyLabel && alt.safetyLabel !== 'unknown' ? ` (${alt.safetyLabel})` : ''}
+                      </Text>
                       <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>
                         Arrive ~{arrivalFrom(alt.durationSecs)}
                         {alt.nHighRisk ? `  •  ${alt.nHighRisk} hot spots` : ''}

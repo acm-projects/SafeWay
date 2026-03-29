@@ -563,8 +563,8 @@ def build_training_dataset(
     if _all_camera_locs:
         cam_coords = np.vstack(_all_camera_locs)
         print(f"  Computing nearest camera distance for {len(df)} intersections from {len(cam_coords)} cameras...", flush=True)
-        int_lats = df["latitude"].values
-        int_lngs = df["longitude"].values
+        int_lats = df["lat"].values
+        int_lngs = df["lon"].values
         # Vectorized haversine: for each intersection find min distance to any camera
         cam_lat_r = np.radians(cam_coords[:, 0])
         cam_lng_r = np.radians(cam_coords[:, 1])

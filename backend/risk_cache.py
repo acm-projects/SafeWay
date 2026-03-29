@@ -288,7 +288,15 @@ def score_coordinates(
         "risk_per_km": None, "top_risk_factors": [], "time_band": None,
     }
 
-    if not coordinates or not risk_map:
+    if not coordinates:
+        return empty
+
+    if not risk_map:
+        print(
+            "[risk_cache] score_coordinates: risk_map is empty — cannot score route. "
+            "Check GCS credentials / bucket access or local backend/model/output/intersection_scores.parquet.",
+            flush=True,
+        )
         return empty
 
     sampled = coordinates[::sample_every] if sample_every > 1 else coordinates

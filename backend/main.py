@@ -21,7 +21,10 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 @asynccontextmanager
 async def lifespan(app):
     """Load risk caches at startup so scores are ready before first request."""
-    from risk_cache import startup_load
+    try:
+        from backend.risk_cache import startup_load
+    except ModuleNotFoundError:
+        from risk_cache import startup_load
     startup_load()
     yield
 
@@ -428,7 +431,10 @@ def compute_route(payload: RouteRequest):
 
     result_routes = []
     try:
-        from risk_cache import score_coordinates
+        try:
+            from backend.risk_cache import score_coordinates
+        except ModuleNotFoundError:
+            from risk_cache import score_coordinates
         for route in raw_routes:
             polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
             coordinates = decode_polyline(polyline) if polyline else []
@@ -481,8 +487,12 @@ def compute_route(payload: RouteRequest):
 
     # ── SafeWay A* safer route ──────────────────────────────────────────
     try:
-        from risk_cache import get_prepared_graph, score_coordinates as sc
-        from model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
+        try:
+            from backend.risk_cache import get_prepared_graph, score_coordinates as sc
+            from backend.model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
+        except ModuleNotFoundError:
+            from risk_cache import get_prepared_graph, score_coordinates as sc
+            from model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
         import osmnx as ox
 
         G = get_prepared_graph()
@@ -900,6 +910,9 @@ def admin_refresh_cache(authorization: str = Header(None)):
         expected = f"Bearer {admin_secret}"
         if not authorization or authorization != expected:
             raise HTTPException(status_code=403, detail="Forbidden")
-    from risk_cache import refresh_cache
+    try:
+        from backend.risk_cache import refresh_cache
+    except ModuleNotFoundError:
+        from risk_cache import refresh_cache
     result = refresh_cache()
     return result

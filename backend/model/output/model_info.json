@@ -53,8 +53,8 @@
     "speed_x_poor_lighting",
     "arterial_x_no_signal"
   ],
-  "stage1_mean_auc": 0.8910669557141423,
-  "stage1_mean_f1": 0.8636455735657768,
+  "stage1_mean_auc": 0.890949461063899,
+  "stage1_mean_f1": 0.8651028736523785,
   "stage2_hyperparams": {
     "max_depth": 4,
     "n_estimators": 300,
@@ -62,10 +62,10 @@
     "subsample": 0.8,
     "colsample_bytree": 0.8
   },
-  "stage2_mean_r2": 0.7419003032067295,
-  "stage2_subset_size": 22411,
+  "stage2_mean_r2": 0.7441255909709342,
+  "stage2_subset_size": 22379,
   "stage2_threshold": 0.35,
-  "combined_spearman": 0.8690108759579424,
-  "combined_spearman_vs_severity": 0.8690108759579424,
-  "combined_top10_recall": 0.8033231603933537
+  "combined_spearman": 0.869552545031142,
+  "combined_spearman_vs_severity": 0.869552545031142,
+  "combined_top10_recall": 0.8019667683960665
 }

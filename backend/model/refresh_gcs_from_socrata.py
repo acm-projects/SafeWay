@@ -280,21 +280,26 @@ def main() -> None:
     except Exception as e:
         print(f"  Streetlight fetch failed: {e}; skipping.", flush=True)
 
-    # --- Red Light Camera LOCATIONS (7mgr-iety) ---
-    # Static dataset: where cameras are physically installed (~150 locations).
-    # Different from violations — this is for deterrence proximity features.
-    print("Fetching red light camera locations...", flush=True)
+    # --- Red Light Camera LOCATIONS (derived from violations spqx-js37) ---
+    # The original locations dataset (7mgr-iety) was retired by the City of Chicago.
+    # We derive unique camera locations from the violations data instead.
+    print("Deriving red light camera locations from violations...", flush=True)
     try:
-        rlc_locs = fetch_all(
-            "7mgr-iety",
+        rlc_locs_raw = fetch_all(
+            "spqx-js37",
             where="latitude IS NOT NULL",
-            select=["intersection", "latitude", "longitude", "first_approach", "second_approach"],
+            select=["intersection", "latitude", "longitude"],
             log_label="RedLightCameraLocations",
         )
-        if not rlc_locs.empty:
+        if not rlc_locs_raw.empty:
             for col in ("latitude", "longitude"):
-                rlc_locs[col] = pd.to_numeric(rlc_locs[col], errors="coerce")
-            rlc_locs = rlc_locs.dropna(subset=["latitude", "longitude"])
+                rlc_locs_raw[col] = pd.to_numeric(rlc_locs_raw[col], errors="coerce")
+            rlc_locs = (
+                rlc_locs_raw
+                .dropna(subset=["latitude", "longitude"])
+                .drop_duplicates(subset=["intersection"])
+                .reset_index(drop=True)
+            )
             with fs.open("safeway-data/red_light_camera_locations.parquet", "wb") as f:
                 rlc_locs.to_parquet(f, index=False)
             print(f"  red_light_camera_locations.parquet -> gs://safeway-data/ ({len(rlc_locs)} rows)", flush=True)
