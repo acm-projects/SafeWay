@@ -362,6 +362,24 @@ def compute_route(payload: RouteRequest):
     result_routes = []
     try:
         from risk_cache import score_coordinates
+        from model.generic_scorer import score_coordinates_generic
+
+        
+
+        # Check if route is within Chicago bounds
+        CHICAGO_BOUNDS = {
+            "min_lat": 41.63, "max_lat": 42.05,
+            "min_lng": -87.94, "max_lng": -87.52,
+        }
+
+        def is_in_chicago(lat: float, lng: float) -> bool:
+            return (
+                CHICAGO_BOUNDS["min_lat"] <= lat <= CHICAGO_BOUNDS["max_lat"] and
+                CHICAGO_BOUNDS["min_lng"] <= lng <= CHICAGO_BOUNDS["max_lng"]
+            )
+
+        use_chicago_model = is_in_chicago(payload.origin.lat, payload.origin.lng)
+
         for route in raw_routes:
             polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
             coordinates = decode_polyline(polyline) if polyline else []
@@ -369,13 +387,19 @@ def compute_route(payload: RouteRequest):
             safety_label = "unknown"
             extra = {}
             try:
-                
-                safety = score_coordinates(
-                    coordinates,
-                    sample_every=5,
-                    departure_hour=payload.departure_hour,
-                    travel_mode=payload.travel_mode,
-                )
+                if use_chicago_model:
+                    safety = score_coordinates(
+                        coordinates,
+                        sample_every=5,
+                        departure_hour=payload.departure_hour,
+                        travel_mode=payload.travel_mode,
+                    )
+                else:
+                    safety = score_coordinates_generic(
+                        coordinates,
+                        sample_every=5,
+                        travel_mode=payload.travel_mode,
+                    )
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
                 extra = {
@@ -386,8 +410,9 @@ def compute_route(payload: RouteRequest):
                     "top_risk_factors": safety.get("top_risk_factors", []),
                     "time_band": safety.get("time_band"),
                 }
-            except Exception:
-                pass
+            except Exception as scoring_err:
+                print(f"[route] scoring error: {scoring_err}")
+
             result_routes.append({
                 "distance_meters": route.get("distanceMeters"),
                 "duration": route.get("duration"),
@@ -410,7 +435,6 @@ def compute_route(payload: RouteRequest):
                 "safety_score": None,
                 "safety_label": "unknown",
             })
-
     return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
 
