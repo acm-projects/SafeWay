@@ -45,6 +45,7 @@
     "has_speed_camera",
     "n_streetlight_outages",
     "has_light_outage",
+    "nearest_camera_dist_m",
     "crash_rate_per_exposure",
     "fsi_rate_per_exposure",
     "severity_rate_per_exposure",
@@ -61,10 +62,10 @@
     "subsample": 0.8,
     "colsample_bytree": 0.8
   },
-  "stage2_mean_r2": 0.7421285515664312,
+  "stage2_mean_r2": 0.7419003032067295,
   "stage2_subset_size": 22411,
   "stage2_threshold": 0.35,
-  "combined_spearman": 0.8690038237020953,
-  "combined_spearman_vs_severity": 0.8690038237020953,
-  "combined_top10_recall": 0.8023058663953883
+  "combined_spearman": 0.8690108759579424,
+  "combined_spearman_vs_severity": 0.8690108759579424,
+  "combined_top10_recall": 0.8033231603933537
 }

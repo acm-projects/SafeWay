@@ -52,33 +52,12 @@ export type RoutePoint = {
   longitude: number;
 };
 
-export type RiskFactor = {
-  label: string;
-  count: number;
-  pct: number;
-};
-
-export type RouteInfo = {
+export type RouteResponse = {
   distance_meters: number;
   duration: string;
+  travel_mode: string;
   polyline: string;
   coordinates: RoutePoint[];
-  safety_score?: number;
-  safety_label?: string;
-  // Phase E: distance-weighted scoring
-  risk_per_km?: number;
-  total_exposure?: number;
-  route_km?: number;
-  n_high_risk?: number;
-  // Phase F: SHAP explainability
-  top_risk_factors?: RiskFactor[];
-  // Phase G: time-of-day
-  time_band?: string;
-};
-
-export type RouteResponse = {
-  routes: RouteInfo[];
-  travel_mode: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -105,9 +84,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function searchPlaces(query: string): Promise<PlaceSearchResult[]> {
-  const encoded = encodeURIComponent(query.trim());
-  const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encoded}`);
-  return payload.results ?? [];
+  const t = query.trim();
+  if (!t) return [];
+
+  // Call Google Places Text Search (New) API directly from the client so that
+  // search works on physical devices regardless of backend reachability.
+  if (googleMapsKey) {
+    try {
+      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleMapsKey,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri',
+        },
+        body: JSON.stringify({ textQuery: t, maxResultCount: 8 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const places: any[] = data.places ?? [];
+        return places.map((p: any) => ({
+          place_id: p.id ?? '',
+          name: p.displayName?.text ?? '',
+          address: p.formattedAddress ?? '',
+          lat: p.location?.latitude ?? 0,
+          lng: p.location?.longitude ?? 0,
+          google_maps_uri: p.googleMapsUri,
+        }));
+      }
+    } catch {
+      // fall through to backend fallback
+    }
+  }
+
+  // Fallback: try the backend
+  try {
+    const payload = await request<{ results: PlaceSearchResult[] }>(`/maps/search?query=${encodeURIComponent(t)}`);
+    return payload.results ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // Returns true for real Google Place IDs (e.g. ChIJ...).
@@ -187,12 +203,210 @@ export async function getRoute(params: {
   origin: { lat: number; lng: number };
   destination: { lat: number; lng: number };
   travel_mode?: 'DRIVE' | 'WALK' | 'BICYCLE' | 'TWO_WHEELER';
-  departure_hour?: number;
 }): Promise<RouteResponse> {
   return request<RouteResponse>('/maps/route', {
     method: 'POST',
     body: JSON.stringify(params),
   });
+}
+
+// ── Rich route from backend with safety scoring, SHAP factors, AADT ──────────
+export type SafetyRoute = {
+  distance_meters: number;
+  duration: string;            // e.g. "600s"
+  polyline: string;
+  coordinates: RoutePoint[];
+  safety_score: number | null;
+  safety_label: string;        // "safe" | "moderate" | "high_risk" | "unknown"
+  route_source: 'google' | 'safeway';
+  risk_per_km?: number;
+  total_exposure?: number;
+  route_km?: number;
+  n_high_risk?: number;
+  top_risk_factors?: { factor: string; weight: number }[];
+  time_band?: string;
+  segment_risks?: number[];
+  time_penalty_pct?: number;
+  risk_reduction_pct?: number;
+  aadt_avg?: number;
+  aadt_max?: number;
+};
+
+export type SafetyRoutesResponse = {
+  routes: SafetyRoute[];
+  travel_mode: string;
+};
+
+export async function getBackendRoutes(params: {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  travel_mode?: 'DRIVE' | 'WALK' | 'BICYCLE';
+  departure_hour?: number;
+  avoid?: string[];
+}): Promise<SafetyRoutesResponse> {
+  const res = await request<any>('/maps/route', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+
+  return {
+    travel_mode: res.travel_mode ?? res.travelMode ?? 'DRIVE',
+    routes: (res.routes ?? []).map((r: any) => ({
+      distance_meters: r.distance_meters ?? r.distance ?? 0,
+      duration: typeof r.duration === 'string'
+        ? r.duration
+        : r.durationSecs != null
+          ? `${r.durationSecs}s`
+          : r.duration?.value != null
+            ? `${r.duration.value}s`
+            : '0s',
+      polyline: r.polyline ?? '',
+      coordinates: r.coordinates ?? (r.polyline ? decodePolyline(r.polyline) : []),
+      safety_score: r.safety_score ?? null,
+      safety_label: r.safety_label ?? 'unknown',
+      route_source: r.route_source ?? r.routeSource ?? 'google',
+      risk_per_km: r.risk_per_km,
+      total_exposure: r.total_exposure,
+      route_km: r.route_km,
+      n_high_risk: r.n_high_risk ?? r.nHighRisk ?? 0,
+      top_risk_factors: r.top_risk_factors ?? r.topRiskFactors,
+      time_band: r.time_band ?? r.timeBand,
+      segment_risks: r.segment_risks ?? r.segmentRisks,
+      time_penalty_pct: r.time_penalty_pct ?? r.timePenaltyPct,
+      risk_reduction_pct: r.risk_reduction_pct ?? r.riskReductionPct,
+      aadt_avg: r.aadt_avg ?? r.aadtAvg,
+      aadt_max: r.aadt_max ?? r.aadtMax,
+    })),
+  };
+}
+
+// ── Multiple alternative routes via Google Routes API directly ────────────────
+// The backend only returns routes[0]. This function calls the Routes API
+// directly from the frontend with computeAlternativeRoutes=true to get up to
+// 3 routes (main + up to 2 alternatives) for a given mode.
+
+export type AlternativeRoute = {
+  index: number;            // 0 = primary, 1+ = alternatives
+  coords: RoutePoint[];
+  distance: number;         // metres
+  durationSecs: number;
+  label: string;            // e.g. "Fastest", "Alternative 1"
+  routeLabels: string[];    // raw labels from Google: ["DEFAULT_ROUTE", "DEFAULT_ROUTE_ALTERNATE"]
+};
+
+function decodePolyline(encoded: string): RoutePoint[] {
+  const points: RoutePoint[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b: number, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return points;
+}
+
+/** Local wall-clock time → RFC3339 with offset (for Google Routes departure/arrival). */
+function localWallTimeToRFC3339(hour: number, minute: number): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setHours(hour, minute, 0, 0);
+  const now = new Date();
+  if (d.getTime() < now.getTime()) {
+    d.setDate(d.getDate() + 1);
+  }
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const se = pad(d.getSeconds());
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offMin);
+  const oh = pad(Math.floor(abs / 60));
+  const om = pad(abs % 60);
+  return `${y}-${mo}-${da}T${h}:${mi}:${se}${sign}${oh}:${om}`;
+}
+
+export type RouteTimingInput =
+  | { kind: 'now' }
+  | { kind: 'depart'; hour: number; minute: number }
+  | { kind: 'arrive'; hour: number; minute: number };
+
+export async function getMultipleRoutes(params: {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  travel_mode: 'DRIVE' | 'WALK' | 'BICYCLE';
+  avoid?: Set<string>;
+  /** When set (DRIVE + traffic-aware), influences ETA via departure or arrival time. */
+  timing?: RouteTimingInput;
+}): Promise<AlternativeRoute[]> {
+  if (!googleMapsKey) return [];
+
+  const body: Record<string, any> = {
+    origin: { location: { latLng: { latitude: params.origin.lat, longitude: params.origin.lng } } },
+    destination: { location: { latLng: { latitude: params.destination.lat, longitude: params.destination.lng } } },
+    travelMode: params.travel_mode,
+    computeAlternativeRoutes: true,
+  };
+  if (params.travel_mode === 'DRIVE') {
+    body.routingPreference = 'TRAFFIC_AWARE';
+    // Pass avoid preferences as routeModifiers
+    if (params.avoid && params.avoid.size > 0) {
+      body.routeModifiers = {
+        avoidTolls:    params.avoid.has('tolls'),
+        avoidHighways: params.avoid.has('highways'),
+        avoidFerries:  params.avoid.has('ferries'),
+      };
+    }
+    const t = params.timing;
+    if (t && t.kind === 'depart') {
+      body.departureTime = localWallTimeToRFC3339(t.hour, t.minute);
+    } else if (t && t.kind === 'arrive') {
+      body.arrivalTime = localWallTimeToRFC3339(t.hour, t.minute);
+    }
+  }
+
+  const fields = 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.routeLabels,routes.description';
+
+  try {
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': googleMapsKey,
+        'X-Goog-FieldMask': fields,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const routes: any[] = data.routes ?? [];
+
+    const ROUTE_NAMES = ['Fastest Route', 'Alternative Route', 'Scenic Route'];
+
+    return routes.map((r: any, i: number) => {
+      const polyline = r.polyline?.encodedPolyline ?? '';
+      const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
+      const labels: string[] = r.routeLabels ?? [];
+      const name = ROUTE_NAMES[i] ?? `Route ${i + 1}`;
+      return {
+        index: i,
+        coords: decodePolyline(polyline),
+        distance: r.distanceMeters ?? 0,
+        durationSecs,
+        label: name,
+        routeLabels: labels,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 function authHeaders(jwt: string) {
@@ -233,116 +447,24 @@ export async function getWeather(lat: number, lng: number): Promise<WeatherData>
   return request<WeatherData>(`/weather?lat=${lat}&lng=${lng}`);
 }
 
-// ── Recent Searches ─────────────────────────────────────────────────────────
-
-export type RecentSearch = {
-  id: string;
-  query: string;
-  place_id?: string;
-  place_name?: string;
-  place_address?: string;
-  lat?: number;
-  lng?: number;
-  searched_at: string;
-};
-
-export async function listRecentSearches(jwt: string): Promise<RecentSearch[]> {
-  return request<RecentSearch[]>('/recent-searches', { headers: authHeaders(jwt) });
-}
-
-export async function saveRecentSearch(
-  jwt: string,
-  data: { query: string; place_id?: string; place_name?: string; place_address?: string; lat?: number; lng?: number }
-): Promise<RecentSearch> {
-  return request<RecentSearch>('/recent-searches', {
-    method: 'POST',
-    headers: authHeaders(jwt),
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteRecentSearch(jwt: string, id: string): Promise<void> {
-  await request<{ deleted: boolean }>(`/recent-searches/${id}`, {
-    method: 'DELETE',
-    headers: authHeaders(jwt),
-  });
-}
-
-export async function clearRecentSearches(jwt: string): Promise<void> {
-  await request<{ cleared: boolean }>('/recent-searches', {
-    method: 'DELETE',
-    headers: authHeaders(jwt),
-  });
-}
-
-// ── Emergency Contacts ──────────────────────────────────────────────────────
-
-export type EmergencyContact = {
-  id: string;
-  name: string;
-  phone: string;
-  relationship?: string;
-  priority: number;
-  created_at: string;
-};
-
-export async function listEmergencyContacts(jwt: string): Promise<EmergencyContact[]> {
-  return request<EmergencyContact[]>('/emergency-contacts', { headers: authHeaders(jwt) });
-}
-
 export async function createEmergencyContact(
   jwt: string,
-  data: { name: string; phone: string; relationship?: string; priority?: number }
-): Promise<EmergencyContact> {
-  return request<EmergencyContact>('/emergency-contacts', {
+  payload: { name: string; phone: string; relationship: string },
+): Promise<any> {
+  return request('/emergency-contacts', {
     method: 'POST',
     headers: authHeaders(jwt),
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
 }
 
-export async function deleteEmergencyContact(jwt: string, id: string): Promise<void> {
-  await request<{ deleted: boolean }>(`/emergency-contacts/${id}`, {
-    method: 'DELETE',
-    headers: authHeaders(jwt),
-  });
-}
-
-// ── User Settings ───────────────────────────────────────────────────────────
-
-export type UserSettings = {
-  sos_direct_911: boolean;
-  sos_silent_share: boolean;
-};
-
-export async function getUserSettings(jwt: string): Promise<UserSettings> {
-  return request<UserSettings>('/user-settings', { headers: authHeaders(jwt) });
-}
-
-export async function updateUserSettings(jwt: string, data: UserSettings): Promise<UserSettings> {
-  return request<UserSettings>('/user-settings', {
+export async function updateUserSettings(
+  jwt: string,
+  payload: Record<string, any>,
+): Promise<any> {
+  return request('/user/settings', {
     method: 'PUT',
     headers: authHeaders(jwt),
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
-}
-
-// ── News ────────────────────────────────────────────────────────────────────
-
-export type NewsArticle = {
-  title: string;
-  description: string;
-  url: string;
-  image: string | null;
-  publishedAt: string;
-  source: string;
-};
-
-export async function getNews(category?: string, location?: string): Promise<NewsArticle[]> {
-  const params = new URLSearchParams();
-  if (category) params.set('category', category);
-  if (location) params.set('location', location);
-  const q = params.toString() ? `?${params.toString()}` : '';
-  const data = await request<{ articles: NewsArticle[] }>(`/news${q}`);
-  return data.articles ?? [];
 }

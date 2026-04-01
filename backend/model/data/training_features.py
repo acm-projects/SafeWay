@@ -449,6 +449,8 @@ def build_training_dataset(
     red_light_violations: pd.DataFrame | None = None,
     speed_violations: pd.DataFrame | None = None,
     streetlights_out: pd.DataFrame | None = None,
+    red_light_camera_locations: pd.DataFrame | None = None,
+    speed_camera_locations: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Merge past feature aggregates + future labels on intersection_id (node_id).
@@ -548,6 +550,35 @@ def build_training_dataset(
         if c not in df.columns:
             df[c] = 0
         df[c] = df[c].fillna(0)
+
+    # --- Camera location proximity (deterrence gradient) ---
+    # Combines red light + speed camera physical locations to compute
+    # distance to nearest camera for each intersection.
+    _all_camera_locs = []
+    for cam_df in [red_light_camera_locations, speed_camera_locations]:
+        if cam_df is not None and not cam_df.empty:
+            _valid = cam_df.dropna(subset=["latitude", "longitude"])
+            if not _valid.empty:
+                _all_camera_locs.append(_valid[["latitude", "longitude"]].values)
+    if _all_camera_locs:
+        cam_coords = np.vstack(_all_camera_locs)
+        print(f"  Computing nearest camera distance for {len(df)} intersections from {len(cam_coords)} cameras...", flush=True)
+        int_lats = df["latitude"].values
+        int_lngs = df["longitude"].values
+        # Vectorized haversine: for each intersection find min distance to any camera
+        cam_lat_r = np.radians(cam_coords[:, 0])
+        cam_lng_r = np.radians(cam_coords[:, 1])
+        min_dists = np.full(len(df), 99999.0)
+        for i in range(len(cam_coords)):
+            dlat = np.radians(int_lats) - cam_lat_r[i]
+            dlng = np.radians(int_lngs) - cam_lng_r[i]
+            a = np.sin(dlat / 2) ** 2 + np.cos(np.radians(int_lats)) * np.cos(cam_lat_r[i]) * np.sin(dlng / 2) ** 2
+            d = 6371000.0 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+            min_dists = np.minimum(min_dists, d)
+        df["nearest_camera_dist_m"] = min_dists
+        print(f"  Camera proximity: median={np.median(min_dists):.0f}m, min={min_dists.min():.0f}m", flush=True)
+    else:
+        df["nearest_camera_dist_m"] = 99999.0
 
     past_crash_feat = aggregate_crash_features(past_crashes, "past_")
     if not past_crash_feat.empty:

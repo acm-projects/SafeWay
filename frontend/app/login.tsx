@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,21 +11,18 @@ import {
   Text,
   TextInput,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '@/providers/auth-provider';
-import { Gradients, palette } from '@/constants/theme';
-
-const UI = { card: '#FFFFFF', text: '#000000', textSec: '#333333', inputBg: '#F8F7FF', border: '#E5E7EB' };
+import { useTheme } from '@/providers/theme-context';
 
 export default function LoginScreen() {
   const { signInWithPassword, signUpWithPassword, signInWithGoogle, session } = useAuth();
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { T } = useTheme();
 
   const [email, setEmail]           = useState('');
   const [password, setPassword]     = useState('');
@@ -36,9 +32,7 @@ export default function LoginScreen() {
   const [showPass, setShowPass]     = useState(false);
 
   useEffect(() => {
-    if (session) {
-      router.replace('/(tabs)');
-    }
+    if (session) router.replace('/(tabs)');
   }, [session]);
 
   async function handleAuth() {
@@ -75,213 +69,145 @@ export default function LoginScreen() {
     }
   }
 
-  function handleSkip() {
-    router.replace('/(tabs)');
-  }
-
   const anyBusy = busy || googleBusy;
 
+  // Light mode: purple-accented white theme
+  const inputBg       = T.isDark ? '#F0F4F8' : '#EEF0F8';
+  const inputColor    = '#1A2B3C';
+  const googleBtnBg   = T.isDark ? '#141D2E' : '#FFFFFF';
+  const googleBorder  = T.isDark ? '#1E2D45' : '#DDE0F0';
+  const googleTextCol = T.isDark ? '#FFFFFF' : T.TEXT_PRI;
+  const dividerCol    = T.isDark ? '#1E2D45' : '#DDE0F0';
+  const faceBorderCol = T.isDark ? '#FFFFFF' : T.PURPLE;
+
   return (
-    <ImageBackground
-      source={require('../assets/images/landing-bg.png')}
-      style={[s.container, { backgroundColor: '#1A0A2E', minWidth: width, minHeight: height }]}
-      resizeMode="cover"
-    >
-      {/* White-ish fade overlay at bottom only */}
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.95)']}
-        locations={[0.3, 0.7, 1]}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <ScrollView
-          contentContainerStyle={[s.scroll, { paddingTop: insets.top + 16, paddingBottom: Math.max(insets.bottom, 12) + 100 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: T.BG }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView
+        contentContainerStyle={[s.scroll, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 32 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Logo */}
+        <View style={s.logoWrap}>
+          <Image source={require('../assets/safeway-logo.png')} style={s.logo} resizeMode="contain" />
+        </View>
+        <Text style={[s.appName, { color: T.TEXT_PRI }]}>SafeWay</Text>
+        <Text style={[s.tagline, { color: T.TEXT_MUT }]}>Navigate Safer, Arrive Better</Text>
+
+        {/* Inputs */}
+        <View style={s.inputsWrap}>
+          <TextInput
+            value={email}
+            onChangeText={setEmail}
+            placeholder="Email Address"
+            placeholderTextColor={T.TEXT_MUT}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            style={[s.input, { backgroundColor: inputBg, color: inputColor }]}
+          />
+          <View style={[s.passRow, { backgroundColor: inputBg }]}>
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Password"
+              placeholderTextColor={T.TEXT_MUT}
+              secureTextEntry={!showPass}
+              style={[s.input, s.passInput, { backgroundColor: 'transparent', color: inputColor }]}
+            />
+            <Pressable style={s.eyeBtn} onPress={() => setShowPass(p => !p)}>
+              <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={20} color={T.TEXT_MUT} />
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Gradient Login / Sign Up button */}
+        <Pressable style={[s.gradBtn, anyBusy && s.disabled]} onPress={handleAuth} disabled={anyBusy}>
+          <LinearGradient
+            colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={StyleSheet.absoluteFillObject}
+          />
+          <View style={s.gradBtnContent}>
+            {busy
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={s.gradBtnLabel}>{isSignUp ? 'Create Account' : 'Login'}</Text>
+            }
+          </View>
+        </Pressable>
+
+        {/* Divider */}
+        <View style={s.divRow}>
+          <View style={[s.divLine, { backgroundColor: dividerCol }]} />
+          <Text style={[s.divText, { color: T.TEXT_MUT }]}>or</Text>
+          <View style={[s.divLine, { backgroundColor: dividerCol }]} />
+        </View>
+
+        {/* Google */}
+        <Pressable
+          style={[s.googleBtn, { backgroundColor: googleBtnBg, borderColor: googleBorder }, anyBusy && s.disabled]}
+          onPress={handleGoogle} disabled={anyBusy}
         >
-          {/* Skip */}
-          <Pressable style={s.skipBtn} onPress={handleSkip}>
-            <Text style={s.skipText}>Skip</Text>
-          </Pressable>
+          {googleBusy
+            ? <ActivityIndicator color={T.TEXT_PRI} />
+            : (
+              <>
+                <View style={s.gIconWrap}><Text style={s.gG}>G</Text></View>
+                <Text style={[s.googleText, { color: googleTextCol }]}>Continue with Google</Text>
+              </>
+            )
+          }
+        </Pressable>
 
-          {/* Logo */}
-          <View style={s.logoWrap}>
-            <Image source={require('../assets/safeway-logo.png')} style={s.logo} resizeMode="contain" />
-          </View>
-          <Text style={s.appName}>SafeWay</Text>
-
-          {/* Form card */}
-          <View style={[s.formCard, { backgroundColor: UI.card, borderRadius: 24, borderWidth: 1, borderColor: UI.border, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4 }]}>
-            <Text style={[s.formTitle, { color: UI.text }]}>{isSignUp ? 'Create Account' : 'Welcome Back'}</Text>
-            <Text style={[s.formSubtitle, { color: UI.textSec }]}>
-              {isSignUp ? 'Sign up to start navigating safely' : 'Sign in to continue'}
-            </Text>
-
-            {/* Email */}
-            <View style={s.inputWrap}>
-              <Text style={[s.inputLabel, { color: UI.text }]}>Email Address</Text>
-              <View style={[s.inputRow, { backgroundColor: UI.inputBg, borderColor: UI.border }]}>
-                <Ionicons name="mail-outline" size={18} color={palette.mutedGray} style={s.inputIcon} />
-                <TextInput
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="name@company.com"
-                  placeholderTextColor={UI.textSec}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  style={s.input}
-                />
-              </View>
-            </View>
-
-            {/* Password */}
-            <View style={s.inputWrap}>
-              <View style={s.passwordHeader}>
-                <Text style={s.inputLabel}>Password</Text>
-                {!isSignUp && (
-                  <Pressable onPress={() => Alert.alert('Forgot Password', 'A password reset email feature would go here.')}>
-                    <Text style={s.forgotText}>Forgot Password?</Text>
-                  </Pressable>
-                )}
-              </View>
-              <View style={[s.inputRow, { backgroundColor: UI.inputBg, borderColor: UI.border }]}>
-                <Ionicons name="lock-closed-outline" size={18} color={palette.mutedGray} style={s.inputIcon} />
-                <TextInput
-                  value={password}
-                  onChangeText={setPassword}
-                  placeholder="••••••••"
-                  placeholderTextColor={UI.textSec}
-                  secureTextEntry={!showPass}
-                  style={[s.input, { flex: 1 }]}
-                />
-                <Pressable style={s.eyeBtn} onPress={() => setShowPass(p => !p)}>
-                  <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={palette.mutedGray} />
-                </Pressable>
-              </View>
-            </View>
-
-            {/* Primary button */}
-            <Pressable
-              style={[s.primaryBtn, anyBusy && s.disabled]}
-              onPress={handleAuth}
-              disabled={anyBusy}
-            >
-              <LinearGradient
-                colors={[...Gradients.button]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={StyleSheet.absoluteFill}
-              />
-              <View style={s.btnContent}>
-                {busy
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={s.btnLabel}>{isSignUp ? 'Create Account' : 'Log In'}</Text>
-                }
-              </View>
+        {/* Quick Access */}
+        {!isSignUp && (
+          <View style={s.quickWrap}>
+            <Text style={[s.quickLabel, { color: T.TEXT_PRI }]}>QUICK ACCESS</Text>
+            <Pressable style={[s.faceBtn, { borderColor: faceBorderCol }]}>
+              <Ionicons name="scan-outline" size={32} color={T.isDark ? '#FFFFFF' : T.PURPLE} />
             </Pressable>
-
-            {/* Divider */}
-            <View style={s.divRow}>
-              <View style={[s.divLine, { backgroundColor: UI.border }]} />
-              <Text style={[s.divText, { color: UI.textSec }]}>OR CONTINUE WITH</Text>
-              <View style={s.divLine} />
-            </View>
-
-            {/* OAuth buttons */}
-            <View style={s.oauthRow}>
-              <Pressable style={[s.oauthBtn, { backgroundColor: UI.inputBg, borderColor: UI.border }, anyBusy && s.disabled]} onPress={handleGoogle} disabled={anyBusy}>
-                {googleBusy
-                  ? <ActivityIndicator color={palette.brightPurple} size="small" />
-                  : (
-                    <>
-                      <View style={s.gIconWrap}><Text style={s.gG}>G</Text></View>
-                      <Text style={[s.oauthText, { color: UI.text }]}>Google</Text>
-                    </>
-                  )
-                }
-              </Pressable>
-              {Platform.OS === 'ios' && (
-                <Pressable style={[s.oauthBtn, { backgroundColor: UI.inputBg, borderColor: UI.border }, anyBusy && s.disabled]} disabled={anyBusy}>
-                  <Ionicons name="logo-apple" size={20} color={UI.text} />
-                  <Text style={[s.oauthText, { color: UI.text }]}>Apple</Text>
-                </Pressable>
-              )}
-            </View>
-
-            {/* Toggle */}
-            <Pressable onPress={() => setIsSignUp(p => !p)} style={s.toggle}>
-              <Text style={[s.toggleText, { color: UI.textSec }]}>
-                {isSignUp ? 'Already have an account? ' : 'New to SafeWay? '}
-                <Text style={s.toggleAction}>{isSignUp ? 'Sign In' : 'Create Account'}</Text>
-              </Text>
-            </Pressable>
+            <Text style={[s.faceText, { color: T.TEXT_MUT }]}>Tap To Use Face ID</Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </ImageBackground>
+        )}
+
+        {/* Toggle */}
+        <Pressable onPress={() => setIsSignUp(p => !p)} style={s.toggle}>
+          <Text style={[s.toggleText, { color: T.TEXT_PRI }]}>
+            {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+            <Text style={s.toggleAction}>{isSignUp ? 'Sign In' : 'Sign-Up'}</Text>
+          </Text>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1 },
-  scroll: { alignItems: 'center', paddingHorizontal: 24 },
-
-  skipBtn: { alignSelf: 'flex-end', paddingHorizontal: 8, paddingVertical: 6, marginBottom: 8 },
-  skipText: { color: 'rgba(255,255,255,0.6)', fontSize: 15, fontWeight: '500' },
-
-  logoWrap: { width: 80, height: 80, marginBottom: 10, borderRadius: 20, overflow: 'hidden' },
-  logo: { width: 80, height: 80 },
-  appName: { color: '#FFFFFF', fontSize: 30, fontWeight: '800', marginBottom: 24, letterSpacing: 0.5 },
-
-  formCard: { width: '100%', padding: 24, marginBottom: 20 },
-  formTitle: { color: '#FFFFFF', fontSize: 24, fontWeight: '700', marginBottom: 4 },
-  formSubtitle: { color: palette.mutedGray, fontSize: 14, marginBottom: 24 },
-
-  inputWrap: { marginBottom: 16 },
-  inputLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600', marginBottom: 8 },
-  passwordHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  forgotText: { color: palette.brightPurple, fontSize: 13, fontWeight: '600' },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    paddingHorizontal: 14,
-  },
-  inputIcon: { marginRight: 10 },
-  input: { flex: 1, color: '#1A0A2E', fontSize: 15, paddingVertical: 14 },
-  eyeBtn: { paddingHorizontal: 8, paddingVertical: 4 },
-
-  primaryBtn: { width: '100%', height: 52, borderRadius: 14, overflow: 'hidden', marginTop: 8, marginBottom: 20 },
-  disabled: { opacity: 0.6 },
-  btnContent: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
-  btnLabel: { color: '#fff', fontSize: 17, fontWeight: '700' },
-
-  divRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
-  divLine: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
-  divText: { color: palette.mutedGray, fontSize: 11, fontWeight: '600', letterSpacing: 1 },
-
-  oauthRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
-  oauthBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  gIconWrap: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
-  gG: { color: '#4285F4', fontSize: 13, fontWeight: '800' },
-  oauthText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
-
-  toggle: { alignItems: 'center' },
-  toggleText: { color: 'rgba(255,255,255,0.7)', fontSize: 14, textAlign: 'center' },
-  toggleAction: { color: palette.brightPurple, fontWeight: '700' },
+  scroll:       { alignItems: 'center', paddingHorizontal: 28 },
+  logoWrap:     { width: 110, height: 110, marginBottom: 16, marginTop: 8, borderRadius: 22, overflow: 'hidden' },
+  logo:         { width: 110, height: 110 },
+  appName:      { fontSize: 34, fontWeight: '800', marginBottom: 6 },
+  tagline:      { fontSize: 15, marginBottom: 36 },
+  inputsWrap:   { width: '100%', gap: 14, marginBottom: 20 },
+  input:        { width: '100%', borderRadius: 14, paddingHorizontal: 18, paddingVertical: 16, fontSize: 16 },
+  passRow:      { flexDirection: 'row', alignItems: 'center', borderRadius: 14 },
+  passInput:    { flex: 1, width: undefined },
+  eyeBtn:       { paddingHorizontal: 16 },
+  gradBtn:      { width: '100%', height: 54, borderRadius: 14, overflow: 'hidden', marginBottom: 18 },
+  disabled:     { opacity: 0.6 },
+  gradBtnContent: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
+  gradBtnLabel: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  divRow:       { flexDirection: 'row', alignItems: 'center', width: '100%', gap: 12, marginBottom: 18 },
+  divLine:      { flex: 1, height: 1 },
+  divText:      { fontSize: 13 },
+  googleBtn:    { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, borderRadius: 14, paddingVertical: 15, borderWidth: 1.5, marginBottom: 32 },
+  gIconWrap:    { width: 26, height: 26, borderRadius: 13, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
+  gG:           { color: '#4285F4', fontSize: 15, fontWeight: '800' },
+  googleText:   { fontSize: 16, fontWeight: '600' },
+  quickWrap:    { alignItems: 'center', gap: 12, marginBottom: 36 },
+  quickLabel:   { fontSize: 11, fontWeight: '700', letterSpacing: 1.8 },
+  faceBtn:      { width: 60, height: 60, borderRadius: 16, borderWidth: 2, justifyContent: 'center', alignItems: 'center' },
+  faceText:     { fontSize: 13 },
+  toggle:       { marginTop: 4 },
+  toggleText:   { fontSize: 15, textAlign: 'center' },
+  toggleAction: { color: '#1ABC93', fontWeight: '700' },
 });
