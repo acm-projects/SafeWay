@@ -243,11 +243,43 @@ export async function getBackendRoutes(params: {
   destination: { lat: number; lng: number };
   travel_mode?: 'DRIVE' | 'WALK' | 'BICYCLE';
   departure_hour?: number;
+  avoid?: string[];
 }): Promise<SafetyRoutesResponse> {
-  return request<SafetyRoutesResponse>('/maps/route', {
+  const res = await request<any>('/maps/route', {
     method: 'POST',
     body: JSON.stringify(params),
   });
+
+  return {
+    travel_mode: res.travel_mode ?? res.travelMode ?? 'DRIVE',
+    routes: (res.routes ?? []).map((r: any) => ({
+      distance_meters: r.distance_meters ?? r.distance ?? 0,
+      duration: typeof r.duration === 'string'
+        ? r.duration
+        : r.durationSecs != null
+          ? `${r.durationSecs}s`
+          : r.duration?.value != null
+            ? `${r.duration.value}s`
+            : '0s',
+      polyline: r.polyline ?? '',
+      coordinates: r.coordinates ?? (r.polyline ? decodePolyline(r.polyline) : []),
+      safety_score: r.safety_score ?? null,
+      safety_label: r.safety_label ?? 'unknown',
+      route_source: r.route_source ?? r.routeSource ?? 'google',
+      risk_per_km: r.risk_per_km,
+      total_exposure: r.total_exposure,
+      route_km: r.route_km,
+      n_high_risk: r.n_high_risk ?? r.nHighRisk ?? 0,
+      top_risk_factors: r.top_risk_factors ?? r.topRiskFactors,
+      time_band: r.time_band ?? r.timeBand,
+      segment_risks: r.segment_risks ?? r.segmentRisks,
+      time_penalty_pct: r.time_penalty_pct ?? r.timePenaltyPct,
+      risk_reduction_pct: r.risk_reduction_pct ?? r.riskReductionPct,
+      aadt_avg: r.aadt_avg ?? r.aadtAvg,
+      aadt_max: r.aadt_max ?? r.aadtMax,
+      high_risk_coords: r.high_risk_coords ?? r.highRiskCoords,
+    })),
+  };
 }
 
 // ── Multiple alternative routes via Google Routes API directly ────────────────
@@ -279,10 +311,42 @@ function decodePolyline(encoded: string): RoutePoint[] {
   return points;
 }
 
+/** Local wall-clock time → RFC3339 with offset (for Google Routes departure/arrival). */
+function localWallTimeToRFC3339(hour: number, minute: number): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setHours(hour, minute, 0, 0);
+  const now = new Date();
+  if (d.getTime() < now.getTime()) {
+    d.setDate(d.getDate() + 1);
+  }
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const se = pad(d.getSeconds());
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offMin);
+  const oh = pad(Math.floor(abs / 60));
+  const om = pad(abs % 60);
+  return `${y}-${mo}-${da}T${h}:${mi}:${se}${sign}${oh}:${om}`;
+}
+
+export type RouteTimingInput =
+  | { kind: 'now' }
+  | { kind: 'depart'; hour: number; minute: number }
+  | { kind: 'arrive'; hour: number; minute: number };
+
 export async function getMultipleRoutes(params: {
   origin: { lat: number; lng: number };
   destination: { lat: number; lng: number };
   travel_mode: 'DRIVE' | 'WALK' | 'BICYCLE';
+  avoid?: Set<string>;
+  /** When set (DRIVE + traffic-aware), influences ETA via departure or arrival time. */
+  timing?: RouteTimingInput;
 }): Promise<AlternativeRoute[]> {
   if (!googleMapsKey) return [];
 
@@ -294,6 +358,20 @@ export async function getMultipleRoutes(params: {
   };
   if (params.travel_mode === 'DRIVE') {
     body.routingPreference = 'TRAFFIC_AWARE';
+    // Pass avoid preferences as routeModifiers
+    if (params.avoid && params.avoid.size > 0) {
+      body.routeModifiers = {
+        avoidTolls:    params.avoid.has('tolls'),
+        avoidHighways: params.avoid.has('highways'),
+        avoidFerries:  params.avoid.has('ferries'),
+      };
+    }
+    const t = params.timing;
+    if (t && t.kind === 'depart') {
+      body.departureTime = localWallTimeToRFC3339(t.hour, t.minute);
+    } else if (t && t.kind === 'arrive') {
+      body.arrivalTime = localWallTimeToRFC3339(t.hour, t.minute);
+    }
   }
 
   const fields = 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.routeLabels,routes.description';

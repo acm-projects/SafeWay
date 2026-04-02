@@ -80,7 +80,7 @@ const FLOAT_RADIUS = 24;  // corner radius of the floating sheet
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
   return (
     <ReAnimated.View pointerEvents="none"
-      style={[StyleSheet.absoluteFillObject, { backgroundColor: bg ?? '#0B1120' }, style]} />
+      style={[StyleSheet.absoluteFillObject, { backgroundColor: bg ?? '#030427' }, style]} />
   );
 }
 
@@ -664,6 +664,7 @@ export default function HomeScreen() {
 
   const [currentRegion, setCurrentRegion] = useState(mapRegion);
 
+
   const userInitials = user?.email ? user.email.slice(0, 2).toUpperCase() : null;
   const weatherIcon = (() => {
     const d = (weather?.description ?? '').toLowerCase();
@@ -949,14 +950,14 @@ export default function HomeScreen() {
               <Pressable onPress={startHomeMic} hitSlop={12} onStartShouldSetResponder={() => true}>
                 <ReAnimated.View style={[{ width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
                   homeMicListening && { backgroundColor: T.ACCENT }, homeMicStyle]}>
-                  <Ionicons name={homeMicListening ? 'mic' : 'mic-outline'} size={18} color={homeMicListening ? '#FFFFFF' : T.TEXT_MUT} />
+                  <Ionicons name="mic" size={18} color="#FFFFFF" />
                 </ReAnimated.View>
               </Pressable>
             </Pressable>
-            <Pressable style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: T.ITEM, justifyContent: 'center', alignItems: 'center' }} onPress={() => setShowProfileModal(true)}>
+            <Pressable style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#3A4A60', justifyContent: 'center', alignItems: 'center' }} onPress={() => setShowProfileModal(true)}>
               {userInitials
-                ? <Text style={{ color: T.TEXT_PRI, fontSize: 14, fontWeight: '700' }}>{userInitials}</Text>
-                : <Ionicons name="person-outline" size={18} color={T.TEXT_PRI} />}
+                ? <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '700' }}>{userInitials}</Text>
+                : <Ionicons name="person-outline" size={18} color="#FFFFFF" />}
             </Pressable>
           </View>
 
@@ -974,9 +975,9 @@ export default function HomeScreen() {
             <Text style={{ color: T.TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, marginBottom: 10 }}>BOOKMARKED LOCATIONS</Text>
               <View style={{ backgroundColor: T.CARD, borderRadius: 18, paddingTop: 14, paddingBottom: 14, overflow: 'visible' }}>
                 <Text style={{ color: T.TEXT_PRI, fontSize: 15, fontWeight: '600', paddingHorizontal: 16, marginBottom: 10 }}>
-                  {bookmarks.filter(b => !b.title.startsWith('Home: ') && !b.title.startsWith('Work: ') && !b.title.startsWith('School: ')).length + localBookmarks.filter(lb => !bookmarks.some((b: Bookmark) => b.title === lb.title)).length} Places
+                  {bookmarks.length + localBookmarks.filter(lb => !bookmarks.some((b: Bookmark) => b.title === lb.title)).length} {(bookmarks.length + localBookmarks.filter(lb => !bookmarks.some((b: Bookmark) => b.title === lb.title)).length) === 1 ? 'Place' : 'Places'}
                 </Text>
-                <View style={{ height: 1, backgroundColor: T.DIVIDER, marginBottom: 16 }} />
+                <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.25)', marginBottom: 16 }} />
                 {user ? (
                   <NativeViewGestureHandler ref={bookmarksScrollRef} disallowInterruption>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false}
@@ -1005,12 +1006,12 @@ export default function HomeScreen() {
                               { text: 'Remove', style: 'destructive', onPress: () => void handleDeleteShortcut(sc.modal) },
                             ]);
                           }}>
-                          {/* Circle — white bg in light mode, no dark hardcode */}
+                          {/* Circle — #E6E9F3 bg, #4A63BA icon */}
                           <View style={[
-                            { width: 64, height: 64, borderRadius: 32, backgroundColor: T.isDark ? '#1A2540' : '#E8ECF8', justifyContent: 'center', alignItems: 'center' },
-                            sc.sub && { borderWidth: 2.5, borderColor: '#2563EB' },
+                            { width: 64, height: 64, borderRadius: 32, backgroundColor: '#E6E9F3', justifyContent: 'center', alignItems: 'center' },
+                            sc.sub && { borderWidth: 2.5, borderColor: '#4A63BA' },
                           ]}>
-                            <Ionicons name={sc.icon as any} size={26} color="#2563EB" />
+                            <Ionicons name={sc.icon as any} size={26} color="#4A63BA" />
                           </View>
                           <Text style={{ color: T.TEXT_PRI, fontSize: 12, fontWeight: '600', textAlign: 'center' }}>{sc.label}</Text>
                           <Text style={{ color: T.TEXT_MUT, fontSize: 11, textAlign: 'center' }} numberOfLines={2}>
@@ -1031,15 +1032,15 @@ export default function HomeScreen() {
                               if (!String(bm.id).startsWith('local_')) void handleDeleteBookmark(bm.id);
                             }},
                           ])}>
-                          <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: T.isDark ? '#1A2540' : '#E8ECF8', justifyContent: 'center', alignItems: 'center' }}>
-                            <Ionicons name="bookmark-outline" size={22} color="#2563EB" />
+                          <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#E6E9F3', justifyContent: 'center', alignItems: 'center' }}>
+                            <Ionicons name="bookmark-outline" size={22} color="#4A63BA" />
                           </View>
                           <Text style={{ color: T.TEXT_PRI, fontSize: 12, fontWeight: '600', textAlign: 'center' }} numberOfLines={2}>{bm.title}</Text>
                         </Pressable>
                       ))}
                       <Pressable style={{ alignItems: 'center', gap: 4, width: 68 }} onPress={() => { setAddQuery(''); setAddSugg([]); setShowAddModal(true); }}>
-                        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#D8DCF0', justifyContent: 'center', alignItems: 'center' }}>
-                          <Ionicons name="add" size={28} color="#2563EB" />
+                        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#E6E9F3', justifyContent: 'center', alignItems: 'center' }}>
+                          <Ionicons name="add" size={28} color="#4A63BA" />
                         </View>
                         <Text style={{ color: T.TEXT_PRI, fontSize: 12, fontWeight: '600', textAlign: 'center' }}>Add</Text>
                       </Pressable>

@@ -24,9 +24,9 @@ import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 
 // ─── Static design tokens (dark-only fallbacks for non-themed elements) ────────
-const NAVY      = '#0B1120';
-const NAVY_CARD = '#141D2E';
-const NAVY_ITEM = '#1A2540';
+const NAVY      = '#030427';
+const NAVY_CARD = '#222344';
+const NAVY_ITEM = '#2A2F5A';
 const GREEN     = '#1ABC93';
 const TEXT_PRI  = '#FFFFFF';
 const TEXT_MUT  = '#7A8FA6';
@@ -405,14 +405,14 @@ export default function DestinationScreen() {
                   autoFocus
                   style={[s.topRouteInput, { color: T.TEXT_PRI }]}
                   selectionColor={T.ACCENT}
-                  onBlur={() => setTimeout(() => setEditingOrigin(false), 200)}
+                  onBlur={() => setEditingOrigin(false)}
                 />
               ) : (
                 <Text style={[s.topRouteLabel, { color: T.TEXT_PRI }]} numberOfLines={1}>{originLabel || currentAddress}</Text>
               )}
             </Pressable>
 
-            <View style={[s.topFieldDivider, { backgroundColor: T.DIVIDER }]} />
+            <View style={[s.topFieldDivider, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
 
             {/* Destination field */}
             <Pressable style={s.topRouteField} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
@@ -531,7 +531,7 @@ export default function DestinationScreen() {
             <View style={hm.mapStyleRow}>
               {MAP_STYLE_OPTIONS.map(opt => {
                 const active = mapStyleType === opt.id;
-                const activeBg = T.isDark ? '#0D2B22' : '#EDE8FF';
+                const activeBg = '#030427';
                 return (
                   <Pressable key={opt.id}
                     style={[hm.mapStyleBtn, { backgroundColor: T.ITEM }, active && { borderColor: T.ACCENT, backgroundColor: activeBg }]}
@@ -608,25 +608,19 @@ export default function DestinationScreen() {
                 <View style={{ flex: 1 }}>
                   <Text
                     style={[s.placeName, { color: T.TEXT_PRI }]}
-                    numberOfLines={1}
+                    numberOfLines={2}
                     adjustsFontSizeToFit
                     minimumFontScale={0.6}
                   >{placeName}</Text>
-                  <View style={s.subtitleRow}>
+                  <View style={[s.subtitleRow, { marginTop: 6 }]}>
                     <Text style={[s.placeType, { color: T.TEXT_MUT }]}>{placeType}</Text>
                     {placeAddr ? (
-                      <Text style={[s.placeType, { color: T.ACCENT }]}>
+                      <Text style={[s.placeType, { color: '#4A90E2' }]}>
                         {'  •  '}{placeAddr.split(',').slice(-2, -1)[0]?.trim()}
                       </Text>
                     ) : null}
                   </View>
                 </View>
-                <Pressable
-                  style={{ backgroundColor: T.ACCENT, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}
-                  onPress={() => router.push({ pathname: '/directions', params: { destLat: String(lat), destLng: String(lng), destName: placeName, originAddress: originLabel || currentAddress, ...(originCoords ? { originLat: String(originCoords.lat), originLng: String(originCoords.lng) } : {}) } })}
-                >
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Go</Text>
-                </Pressable>
                 <Pressable style={[s.closeBtn, { backgroundColor: T.ITEM }]} onPress={() => router.back()}>
                   <Ionicons name="close" size={18} color={T.TEXT_PRI} />
                 </Pressable>
@@ -644,7 +638,7 @@ export default function DestinationScreen() {
               {ohText ? (
                 <View style={s.hoursRow}>
                   {isOpenNow !== null && (
-                    <Text style={[s.openTag, { color: isOpenNow ? T.ACCENT : '#FF4444' }]}>
+                    <Text style={[s.openTag, { color: isOpenNow ? '#22C55E' : '#FF4444' }]}>
                       {isOpenNow ? 'Open' : 'Closed'}
                     </Text>
                   )}
@@ -656,9 +650,9 @@ export default function DestinationScreen() {
                 </View>
               ) : null}
 
-              {/* ── View Routes ── dark = gradient, light = purple solid */}
+              {/* ── View Routes ── gradient with white border, left-aligned */}
               <Pressable
-                style={s.routesBtn}
+                style={[s.routesBtn, { borderWidth: 1.5, borderColor: '#FFFFFF' }]}
                 onPress={() =>
                   router.push({
                     pathname: '/directions',
@@ -672,16 +666,12 @@ export default function DestinationScreen() {
                   })
                 }
               >
-                {T.isDark ? (
-                  <LinearGradient
-                    colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                ) : (
-                  <View style={[StyleSheet.absoluteFillObject, { backgroundColor: T.ACCENT }]} />
-                )}
+                <LinearGradient
+                  colors={['#4FA8A0', '#71BB81']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={StyleSheet.absoluteFillObject}
+                />
                 <View style={s.routesBtnContent}>
                   <Ionicons name="navigate" size={18} color="#FFFFFF" />
                   <Text style={s.routesBtnText}>View Routes</Text>
@@ -703,7 +693,7 @@ export default function DestinationScreen() {
                   { icon: 'list-outline',       label: 'Services', onPress: () => setShowServicesModal(true) },
                   { icon: 'ellipsis-horizontal', label: 'More',    onPress: () => setShowMoreModal(true) },
                 ].map(a => (
-                  <Pressable key={a.label} style={[s.actionBtn, { backgroundColor: T.ITEM }]} onPress={a.onPress}>
+                  <Pressable key={a.label} style={[s.actionBtn, { backgroundColor: T.ITEM, borderWidth: 1, borderColor: '#FFFFFF' }]} onPress={a.onPress}>
                     <Ionicons name={a.icon as any} size={22} color={T.TEXT_PRI} />
                     <Text style={[s.actionLabel, { color: T.TEXT_PRI }]}>{a.label}</Text>
                   </Pressable>
@@ -752,7 +742,7 @@ export default function DestinationScreen() {
                           <Ionicons name={item.icon as any} size={18} color={item.onPress ? T.ACCENT : T.TEXT_MUT} style={{ marginTop: 2 }} />
                           <Text style={[s.aboutText, { color: T.TEXT_MUT }, item.onPress && { color: T.ACCENT }]}>{item.label}</Text>
                         </Pressable>
-                        {i < aboutRows.length - 1 && <View style={[s.aboutDiv, { backgroundColor: T.DIVIDER }]} />}
+                        {i < aboutRows.length - 1 && <View style={[s.aboutDiv, { backgroundColor: 'rgba(255,255,255,0.35)' }]} />}
                       </View>
                     ))}
                   </View>
@@ -876,15 +866,15 @@ const s = StyleSheet.create({
   heatmapInnerActive: { borderWidth: 1, borderColor: '#1ABC9340' },
   heatmapText: { fontSize: 12, fontWeight: '600' },
   handle: { width: 36, height: 4, borderRadius: 2 },
-  sheetContent: { paddingHorizontal: 16, paddingTop: 8 },
+  sheetContent: { paddingHorizontal: 16, paddingTop: 2 },
   miniRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, paddingHorizontal: 16, gap: 8 },
   miniTitle: { flex: 1, fontSize: 20, fontWeight: '800', textAlign: 'center' },
   miniClose: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
-  placeName: { fontSize: 24, fontWeight: '800', lineHeight: 30 },
+  placeName: { fontSize: 28, fontWeight: '800', lineHeight: 30 },
   closeBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    justifyContent: 'center', alignItems: 'center', marginTop: 2,
+    width: 34, height: 34, borderRadius: 16,
+    justifyContent: 'center', alignItems: 'center', marginTop: -30,
   },
   subtitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   placeType: { fontSize: 13 },
@@ -894,11 +884,12 @@ const s = StyleSheet.create({
   openTag: { fontSize: 13, fontWeight: '700' },
   hoursText: { flex: 1, fontSize: 13 },
   routesBtn: {
-    height: 52, borderRadius: 16, overflow: 'hidden', marginBottom: 14,
+    height: 48, borderRadius: 16, overflow: 'hidden', marginBottom: 14,
+    alignSelf: 'flex-start', minWidth: 180,
   },
   routesBtnContent: {
     ...StyleSheet.absoluteFillObject,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 24,
   },
   routesBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   actionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
@@ -911,10 +902,10 @@ const s = StyleSheet.create({
   aboutCard: { borderRadius: 16, overflow: 'hidden' },
   aboutRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 12,
-    paddingHorizontal: 14, paddingVertical: 13,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
   aboutText: { flex: 1, fontSize: 13, lineHeight: 18 },
-  aboutDiv: { height: 1, marginLeft: 44 },
+  aboutDiv: { height: 1, marginLeft: 44, marginBottom: 2 },
 });
 
 const hm = StyleSheet.create({

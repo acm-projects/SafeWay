@@ -216,7 +216,7 @@ export default function StreetViewModal({ visible, lat, lng, placeName, onClose,
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B1120' },
+  container: { flex: 1, backgroundColor: '#030427' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -9,18 +9,6 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider } from '@/providers/auth-provider';
 import { ThemeProvider as AppThemeProvider } from '@/providers/theme-context';
 
-const SafeWayDark = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    background: '#0B1120',
-    card: '#141D2E',
-    primary: '#1ABC93',
-    text: '#FFFFFF',
-    border: '#1E2D45',
-  },
-};
-
 // Inline the splash so there is zero module resolution ambiguity
 import { useEffect } from 'react';
 import { Image, StyleSheet, Text } from 'react-native';
@@ -82,7 +70,7 @@ function AppSplash({ onFinish }: { onFinish: () => void }) {
 const sp = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0B1120',
+    backgroundColor: '#030427',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 999,
@@ -106,7 +94,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
         <AppThemeProvider>
-          <ThemeProvider value={colorScheme === 'dark' ? SafeWayDark : DefaultTheme}>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
             <Stack>
               <Stack.Screen name="(tabs)"      options={{ headerShown: false }} />
               <Stack.Screen name="search"      options={{ headerShown: false, animation: 'slide_from_bottom' }} />

@@ -4,6 +4,7 @@ import {
   Alert,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -20,6 +21,7 @@ import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import { getBackendRoutes, SafetyRoute } from '@/lib/api';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -31,8 +33,9 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
-import { getRoute, getMultipleRoutes, getBackendRoutes, searchPlaces } from '@/lib/api';
-import type { AlternativeRoute, PlaceSearchResult, RoutePoint, SafetyRoute } from '@/lib/api';
+import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
+import type { AlternativeRoute, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
+import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
@@ -42,10 +45,10 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 // ─── Static dark-only tokens (for non-themed legacy elements) ─────────────────
-const BG       = '#0B1120';
-const SHEET_BG = '#0B1120';
-const CARD_BG  = '#141D2E';
-const ITEM_BG  = '#1A2540';
+const BG       = '#030427';
+const SHEET_BG = '#030427';
+const CARD_BG  = '#222344';
+const ITEM_BG  = '#2A2F5A';
 const GREEN    = '#1ABC93';
 const TEXT_PRI = '#FFFFFF';
 const TEXT_MUT = '#7A8FA6';
@@ -230,6 +233,298 @@ function arrivalFrom(secs: number): string {
   return new Date(Date.now() + secs * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// ─── Interactive Bar Chart with hover/drag tooltip ───────────────────────────
+function InteractiveBarChart({
+  data, maxVal, activeColor, inactiveColor, highlightIndex, unit, chartHeight = 70, formatValue,
+}: {
+  data: { day: string; val: number }[];
+  maxVal: number;
+  activeColor: string;
+  inactiveColor: string;
+  highlightIndex: number;
+  unit: string;
+  chartHeight?: number;
+  formatValue?: (v: number) => string;
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [tooltipX, setTooltipX] = useState(0);
+  const [tooltipY, setTooltipY] = useState(0);
+  const containerWidth = useRef(300);
+  const containerRef = useRef<View>(null);
+
+  const activeIdx = hoveredIndex ?? highlightIndex;
+  const fmt = formatValue ?? ((v: number) => v.toLocaleString());
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.floor((x / containerWidth.current) * data.length)));
+        setHoveredIndex(idx);
+        setTooltipX(x);
+        setTooltipY(evt.nativeEvent.locationY);
+      },
+      onPanResponderMove: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.floor((x / containerWidth.current) * data.length)));
+        setHoveredIndex(idx);
+        setTooltipX(x);
+        setTooltipY(evt.nativeEvent.locationY);
+      },
+      onPanResponderRelease: () => {
+        setTimeout(() => setHoveredIndex(null), 1500);
+      },
+      onPanResponderTerminate: () => {
+        setTimeout(() => setHoveredIndex(null), 1500);
+      },
+    })
+  ).current;
+
+  return (
+    <View>
+      <View
+        ref={containerRef}
+        onLayout={e => { containerWidth.current = e.nativeEvent.layout.width; }}
+        style={{ height: chartHeight + 20, position: 'relative' }}
+        {...panResponder.panHandlers}
+      >
+        {/* Tooltip */}
+        {hoveredIndex !== null && (
+          <View style={{
+            position: 'absolute',
+            left: Math.min(Math.max(tooltipX - 42, 0), containerWidth.current - 90),
+            top: Math.max(0, tooltipY - 52),
+            backgroundColor: '#1A2040',
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderWidth: 1,
+            borderColor: activeColor + '66',
+            zIndex: 10,
+            minWidth: 88,
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.4,
+            shadowRadius: 6,
+            elevation: 8,
+          }}>
+            <Text style={{ color: activeColor, fontSize: 14, fontWeight: '800' }}>
+              {fmt(data[hoveredIndex].val)}
+            </Text>
+            <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 1 }}>
+              {data[hoveredIndex].day} · {unit}
+            </Text>
+          </View>
+        )}
+
+        {/* Bars */}
+        <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: data.length > 8 ? 3 : 6, height: chartHeight, position: 'absolute', bottom: 20, left: 0, right: 0 }}>
+          {data.map((d, i) => {
+            const barH = maxVal > 0 ? Math.max(4, (d.val / maxVal) * (chartHeight - 10)) : 4;
+            const isActive = i === activeIdx;
+            return (
+              <View key={d.day} style={{ flex: 1, alignItems: 'center', gap: 3 }}>
+                <View style={{
+                  width: '100%', height: barH, borderRadius: 4,
+                  backgroundColor: isActive ? activeColor : inactiveColor,
+                  opacity: hoveredIndex !== null && !isActive ? 0.5 : 1,
+                }} />
+              </View>
+            );
+          })}
+        </View>
+
+        {/* X-axis labels */}
+        <View style={{ flexDirection: 'row', position: 'absolute', bottom: 0, left: 0, right: 0, gap: data.length > 8 ? 3 : 6 }}>
+          {data.map((d, i) => {
+            const isActive = i === activeIdx;
+            return (
+              <View key={d.day} style={{ flex: 1, alignItems: 'center' }}>
+                <Text style={{
+                  color: isActive ? activeColor : '#7A8FA6',
+                  fontSize: data.length > 8 ? 7 : 9,
+                  fontWeight: '600',
+                }}>{d.day}</Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ─── Hourly Line Graph with projected data ────────────────────────────────────
+function HourlyLineGraph({
+  data, nowHour, lineColor, projectedColor, formatValue, unit,
+}: {
+  data: { h: number; label: string; val: number; isProjected: boolean }[];
+  nowHour: number;
+  lineColor: string;
+  projectedColor: string;
+  formatValue: (v: number) => string;
+  unit: string;
+}) {
+  const [containerWidth, setContainerWidth] = useState(280);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const CHART_H = 80;
+  const LABEL_H = 18;
+
+  const vals = data.map(d => d.val);
+  const maxVal = Math.max(...vals, 1);
+  const minVal = 0;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1))));
+        setHoveredIndex(idx);
+      },
+      onPanResponderMove: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const idx = Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1))));
+        setHoveredIndex(idx);
+      },
+      onPanResponderRelease: () => { setTimeout(() => setHoveredIndex(null), 2000); },
+      onPanResponderTerminate: () => { setTimeout(() => setHoveredIndex(null), 2000); },
+    })
+  ).current;
+
+  // Calculate point positions
+  const points = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * containerWidth;
+    const y = CHART_H - ((d.val - minVal) / (maxVal - minVal)) * (CHART_H - 10);
+    return { x, y, ...d };
+  });
+
+  // Build SVG-style path segments split at nowHour
+  const solidPoints = points.filter(p => !p.isProjected);
+  const projectedPoints = points.filter(p => p.isProjected || p.h === nowHour);
+
+  const toPolyline = (pts: typeof points) =>
+    pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  const activeIdx = hoveredIndex ?? nowHour;
+  const activePoint = points[activeIdx];
+
+  return (
+    <View
+      onLayout={e => setContainerWidth(e.nativeEvent.layout.width)}
+      style={{ height: CHART_H + LABEL_H + 8, position: 'relative' }}
+      {...panResponder.panHandlers}
+    >
+      {/* Tooltip */}
+      {hoveredIndex !== null && activePoint && (
+        <View style={{
+          position: 'absolute',
+          left: Math.min(Math.max(activePoint.x - 36, 0), containerWidth - 80),
+          top: Math.max(0, activePoint.y - 42),
+          backgroundColor: '#1A2040',
+          borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+          borderWidth: 1, borderColor: lineColor + '66',
+          zIndex: 10, minWidth: 76, alignItems: 'center',
+          shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.4, shadowRadius: 6, elevation: 8,
+        }}>
+          <Text style={{ color: lineColor, fontSize: 13, fontWeight: '800' }}>{formatValue(activePoint.val)}</Text>
+          <Text style={{ color: '#7A8FA6', fontSize: 9, marginTop: 1 }}>{activePoint.label} · {unit}</Text>
+        </View>
+      )}
+
+      {/* Chart area */}
+      <View style={{ height: CHART_H, overflow: 'hidden' }}>
+        {/* Grid lines */}
+        {[0.25, 0.5, 0.75].map(frac => (
+          <View key={frac} style={{
+            position: 'absolute', left: 0, right: 0,
+            top: frac * CHART_H, height: 1,
+            backgroundColor: '#FFFFFF0A',
+          }} />
+        ))}
+
+        {/* Solid line segments (past + now) */}
+        {solidPoints.length > 1 && solidPoints.slice(0, -1).map((p, i) => {
+          const next = solidPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          return (
+            <View key={i} style={{
+              position: 'absolute',
+              left: p.x, top: p.y - 1.5,
+              width: len, height: 3, borderRadius: 1.5,
+              backgroundColor: lineColor,
+              transform: [{ rotate: `${angle}deg` }],
+              transformOrigin: '0 50%',
+            }} />
+          );
+        })}
+
+        {/* Projected dashed segments */}
+        {projectedPoints.length > 1 && projectedPoints.slice(0, -1).map((p, i) => {
+          const next = projectedPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          // Simulate dashed by alternating opacity segments
+          return (
+            <View key={`proj-${i}`} style={{
+              position: 'absolute',
+              left: p.x, top: p.y - 1.5,
+              width: len, height: 3, borderRadius: 1.5,
+              backgroundColor: projectedColor,
+              transform: [{ rotate: `${angle}deg` }],
+              transformOrigin: '0 50%',
+              opacity: 0.7,
+            }} />
+          );
+        })}
+
+        {/* Current hour dot */}
+        {points[nowHour] && (
+          <View style={{
+            position: 'absolute',
+            left: points[nowHour].x - 5,
+            top: points[nowHour].y - 5,
+            width: 10, height: 10, borderRadius: 5,
+            backgroundColor: lineColor,
+            borderWidth: 2, borderColor: '#fff',
+          }} />
+        )}
+
+        {/* Hover dot */}
+        {hoveredIndex !== null && activePoint && (
+          <View style={{
+            position: 'absolute',
+            left: activePoint.x - 5, top: activePoint.y - 5,
+            width: 10, height: 10, borderRadius: 5,
+            backgroundColor: activePoint.isProjected ? projectedColor : lineColor,
+            borderWidth: 2, borderColor: '#fff',
+          }} />
+        )}
+      </View>
+
+      {/* X-axis labels — show every 4 hours */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 0 }}>
+        {data.filter((_, i) => i % 4 === 0).map(d => (
+          <Text key={d.h} style={{
+            color: d.h === nowHour ? lineColor : '#7A8FA6',
+            fontSize: 9, fontWeight: d.h === nowHour ? '700' : '500',
+          }}>{d.label}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // ─── Route Details Modal ──────────────────────────────────────────────────────
 function RouteDetailsModal({
   visible, onClose, originLabel, originAddress, destLabel, activeData, travelMode,
@@ -248,7 +543,6 @@ function RouteDetailsModal({
   originLat?: number;
   originLng?: number;
 }) {
-  const [tab, setTab] = useState<'details' | 'insights'>('details');
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [showHotspotsModal, setShowHotspotsModal] = useState(false);
   const { height: screenH } = useWindowDimensions();
@@ -281,14 +575,9 @@ function RouteDetailsModal({
         {/* Card background uses T.BG so it's white in light mode */}
         <View style={[dm.card, { height: CARD_HEIGHT, backgroundColor: T.BG }]}>
 
-          {/* ── Tab row + close ── */}
+          {/* ── Header + close ── */}
           <View style={dm.tabRow}>
-            <Pressable onPress={() => setTab('details')} style={[dm.tab, tab === 'details' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
-              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'details' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Details</Text>
-            </Pressable>
-            <Pressable onPress={() => setTab('insights')} style={[dm.tab, tab === 'insights' && [dm.tabActive, { borderBottomColor: T.ACCENT }]]}>
-              <Text style={[dm.tabText, { color: T.TEXT_MUT }, tab === 'insights' && { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
-            </Pressable>
+            <Text style={[dm.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Details</Text>
             <View style={{ flex: 1 }} />
             <Pressable onPress={onClose}>
               <View style={[dm.closeBtnCircle, { backgroundColor: T.ITEM }]}>
@@ -297,19 +586,23 @@ function RouteDetailsModal({
             </Pressable>
           </View>
 
-          {/* ── Details tab ── */}
-          {tab === 'details' && (
-            <ScrollView style={dm.tabBody} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              <View style={dm.stepRow}>
-                <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
-                  <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
-                </View>
+          {/* ── Details content ── */}
+<ScrollView
+  style={dm.tabBody}
+  showsVerticalScrollIndicator={false}
+  contentContainerStyle={{ paddingBottom: 20 }}
+>
+  <View style={{ backgroundColor: T.CARD, borderRadius: 16, overflow: 'hidden', marginBottom: 8 }}>
+    <View style={[dm.stepRow, { paddingLeft: 8 }]}>
+      <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
+        <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
+      </View>
                 <View style={dm.stepContent}>
                   <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>From {originLabel}</Text>
                   <Text style={[dm.stepInst, { color: T.TEXT_MUT }]} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
                 </View>
               </View>
-              <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER }]} />
+              <View style={[dm.lineDivider, { backgroundColor: '#FFFFFF' }]} />
 
               {steps.length > 0 ? steps.map((step, i) => (
                 <View key={i}>
@@ -341,7 +634,7 @@ function RouteDetailsModal({
                       <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>{step.instruction}</Text>
                     </View>
                   </View>
-                  <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER }]} />
+                  <View style={[dm.lineDivider, { backgroundColor: '#FFFFFF' }]} />
                 </View>
               )) : (
                 <View style={dm.stepRow}>
@@ -351,7 +644,7 @@ function RouteDetailsModal({
                 </View>
               )}
 
-              <View style={dm.stepRow}>
+              <View style={[dm.stepRow, { paddingLeft: 8 }]}>
                 <View style={[dm.stepIcon, { backgroundColor: T.isDark ? '#1ABC9322' : '#EDE8FF' }]}>
                   <Ionicons name="location" size={20} color={T.ACCENT} />
                 </View>
@@ -660,6 +953,8 @@ function RouteDetailsModal({
   );
 }
 
+
+
 // ─── Draggable stop (still used internally, not shown in bottom sheet anymore) ─
 function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
   label: string; sub: string; isOrigin: boolean;
@@ -702,6 +997,138 @@ function DraggableStopRow({ label, sub, isOrigin, onPressLabel, onSwap }: {
   );
 }
 
+// ─── Time Slider Picker ───────────────────────────────────────────────────────
+function TimeSliderPicker({
+  hour, min, onChangeHour, onChangeMin, label, accentColor, textPri, textMut, itemBg,
+}: {
+  hour: number; min: 0 | 30;
+  onChangeHour: (h: number) => void;
+  onChangeMin: (m: 0 | 30) => void;
+  label: string;
+  accentColor: string; textPri: string; textMut: string; itemBg: string;
+}) {
+  // 48 slots: each slot = 30 min. slot index = hour*2 + (min===30?1:0)
+  const slotIndex = hour * 2 + (min === 30 ? 1 : 0);
+  const TOTAL_SLOTS = 48;
+  const sliderWidth = useRef(280);
+  const trackRef = useRef<View>(null);
+
+  function slotToLabel(slot: number) {
+    const h = Math.floor(slot / 2);
+    const m = slot % 2 === 1 ? '30' : '00';
+    const period = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${m} ${period}`;
+  }
+
+  function applySlot(slot: number) {
+    const clamped = Math.max(0, Math.min(TOTAL_SLOTS - 1, slot));
+    onChangeHour(Math.floor(clamped / 2));
+    onChangeMin(clamped % 2 === 1 ? 30 : 0);
+  }
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const slot = Math.round((x / sliderWidth.current) * (TOTAL_SLOTS - 1));
+        applySlot(slot);
+      },
+      onPanResponderMove: (evt) => {
+        const x = evt.nativeEvent.locationX;
+        const slot = Math.round((x / sliderWidth.current) * (TOTAL_SLOTS - 1));
+        applySlot(slot);
+      },
+    })
+  ).current;
+
+  const fillPct = (slotIndex / (TOTAL_SLOTS - 1)) * 100;
+
+  // Hour tick marks to show (every 4 hours = every 8 slots)
+  const hourTicks = [0, 4, 8, 12, 16, 20];
+
+  return (
+    <View style={{ marginBottom: 20 }}>
+      <Text style={{ color: textMut, fontSize: 12, fontWeight: '600', marginBottom: 12, letterSpacing: 0.8 }}>
+        {label}
+      </Text>
+
+      {/* Big time display */}
+      <View style={{ alignItems: 'center', marginBottom: 18 }}>
+        <Text style={{ color: textPri, fontSize: 44, fontWeight: '800', letterSpacing: -1 }}>
+          {slotToLabel(slotIndex)}
+        </Text>
+      </View>
+
+      {/* Slider track */}
+      <View
+        ref={trackRef}
+        onLayout={e => { sliderWidth.current = e.nativeEvent.layout.width; }}
+        style={{ height: 48, justifyContent: 'center', paddingHorizontal: 2 }}
+        {...panResponder.panHandlers}
+      >
+        {/* Background track */}
+        <View style={{ height: 10, backgroundColor: itemBg, borderRadius: 5, overflow: 'visible' }}>
+          {/* Filled portion */}
+          <View style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: `${fillPct}%`,
+            backgroundColor: accentColor,
+            borderRadius: 5,
+          }} />
+          {/* Thumb */}
+          <View style={{
+            position: 'absolute',
+            left: `${fillPct}%`,
+            top: '50%',
+            width: 26, height: 26,
+            borderRadius: 13,
+            backgroundColor: accentColor,
+            borderWidth: 3,
+            borderColor: '#fff',
+            marginLeft: -13,
+            marginTop: -13,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.3,
+            shadowRadius: 4,
+            elevation: 4,
+          }} />
+        </View>
+      </View>
+
+      {/* Hour tick labels */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingHorizontal: 2 }}>
+        {hourTicks.map(h => (
+          <Text key={h} style={{ color: textMut, fontSize: 10, fontWeight: '600' }}>
+            {h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`}
+          </Text>
+        ))}
+        <Text style={{ color: textMut, fontSize: 10, fontWeight: '600' }}>11p</Text>
+      </View>
+
+      {/* Quick presets */}
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+        {[{ label: 'Now', slot: new Date().getHours() * 2 + (new Date().getMinutes() >= 30 ? 1 : 0) },
+          { label: 'Morning', slot: 16 }, { label: 'Noon', slot: 24 },
+          { label: 'Evening', slot: 34 }, { label: 'Night', slot: 42 }].map(preset => {
+          const isActive = slotIndex === preset.slot;
+          return (
+            <Pressable key={preset.label}
+              style={{ flex: 1, paddingVertical: 7, borderRadius: 10, alignItems: 'center',
+                backgroundColor: isActive ? accentColor : itemBg }}
+              onPress={() => applySlot(preset.slot)}>
+              <Text style={{ fontSize: 10, fontWeight: '700', color: isActive ? '#fff' : textMut }}>{preset.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function DirectionsScreen() {
   const params = useLocalSearchParams<{ destLat: string; destLng: string; destName: string; originAddress?: string; originLat?: string; originLng?: string }>();
@@ -716,11 +1143,11 @@ export default function DirectionsScreen() {
   // Pixel-based snap points so the sheet never covers the top search card
   // Top card is at: insets.top + 14 (top padding) + ~52 (card height) + 10 (gap) = insets.top + 76
   const snapPoints = useMemo(() => {
-    // Zoom (+) button is at TOP_BTNS = insets.top + 118
-    // Sheet max stops just above it so buttons are never covered
-    const safeMax = windowHeight - (insets.top + 118) - 8;
+    // Top route card ends at approx: insets.top + 10 (top) + 110 (card height) + 12 (gap)
+    const cardBottom = insets.top + 132;
+    const safeMax = windowHeight - cardBottom - 8;
     const miniSnap = 46 + insets.bottom;
-    return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
+    return [miniSnap, Math.round(windowHeight * 0.50), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
   const [sheetIndex, setSheetIndex] = useState(1);
@@ -751,6 +1178,7 @@ export default function DirectionsScreen() {
   const [routeBusy, setRouteBusy] = useState(false);
   const [zoomDelta, setZoomDelta] = useState(0.05);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
@@ -759,8 +1187,9 @@ export default function DirectionsScreen() {
   const [showNowModal, setShowNowModal] = useState(false);
   const [showAvoidModal, setShowAvoidModal] = useState(false);
   const [nowChoice, setNowChoice] = useState<'now'|'depart'|'arrive'>('now');
-  const [avoidSet, setAvoidSet] = useState<Set<string>>(new Set());
-  // Time picker state: hour (0-23), minute (0 or 30)
+  const [avoidList, setAvoidList] = useState<string[]>([]);
+  const avoidSet = new Set(avoidList);
+  const avoidActive = avoidList.length > 0;
   const [pickerHour, setPickerHour] = useState(() => new Date().getHours());
   const [pickerMin,  setPickerMin]  = useState<0|30>(() => new Date().getMinutes() >= 30 ? 30 : 0);
   const pickerTimeLabel = `${pickerHour % 12 === 0 ? 12 : pickerHour % 12}:${pickerMin === 0 ? '00' : '30'} ${pickerHour < 12 ? 'AM' : 'PM'}`;
@@ -768,7 +1197,6 @@ export default function DirectionsScreen() {
   const nowLabel = nowChoice === 'now' ? 'Now'
     : nowChoice === 'depart' ? `Depart ${pickerTimeLabel}`
     : `Arrive ${pickerTimeLabel}`;
-  const avoidActive = avoidSet.size > 0;
 
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
@@ -807,10 +1235,6 @@ export default function DirectionsScreen() {
     })();
   }, []);
 
-  useEffect(() => {
-    if (originCoords && destCoords) void fetchAllRoutes();
-  }, [originCoords, destCoords]);
-
   async function fetchAllRoutes() {
     if (!originCoords || !destCoords) return;
     setRouteBusy(true);
@@ -819,7 +1243,18 @@ export default function DirectionsScreen() {
     const to   = stopsSwapped ? originCoords! : destCoords;
 
     const nd: Partial<Record<TravelMode, ModeRoutes>> = {};
+    // Backend scores risk by hour of day (integer). Half-hours use the chosen hour.
     const departureHour = nowChoice === 'now' ? new Date().getHours() : pickerHour;
+
+    const currentAvoidSet = new Set(avoidList);
+    const hasAvoid = avoidList.length > 0;
+
+    const timing: RouteTimingInput =
+      nowChoice === 'now'
+        ? { kind: 'now' }
+        : nowChoice === 'depart'
+          ? { kind: 'depart', hour: pickerHour, minute: pickerMin }
+          : { kind: 'arrive', hour: pickerHour, minute: pickerMin };
 
     try {
       const [
@@ -833,10 +1268,12 @@ export default function DirectionsScreen() {
         getBackendRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', departure_hour: departureHour }),
         getBackendRoutes({ origin: from, destination: to, travel_mode: 'WALK', departure_hour: departureHour }),
         getBackendRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', departure_hour: departureHour }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE' }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK' }),
-        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE' }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', avoid: currentAvoidSet, timing }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK', timing }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', timing }),
       ]);
+
+      const googleDriveOk = driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0;
 
       if (__DEV__) {
         if (backendDriveRes.status === 'rejected') {
@@ -853,8 +1290,15 @@ export default function DirectionsScreen() {
         }
       }
 
-      // DRIVE: backend first (SafeWay A* + scoring), else Google
-      if (backendDriveRes.status === 'fulfilled' && backendDriveRes.value.routes.length > 0) {
+      // DRIVE: prefer Google Routes API when Avoid filters are active (tolls/highways/ferries);
+      // otherwise use backend (SafeWay A* + safety scoring).
+      if (hasAvoid && googleDriveOk) {
+        const alts = driveGoogleRes.value;
+        nd.DRIVE = {
+          primary: { coords: alts[0].coords, distance: alts[0].distance, durationSecs: alts[0].durationSecs },
+          alternatives: alts,
+        };
+      } else if (backendDriveRes.status === 'fulfilled' && backendDriveRes.value.routes.length > 0) {
         const alts = mapSafetyRoutesToAlternatives(backendDriveRes.value.routes);
         const primary = alts[0];
         nd.DRIVE = {
@@ -870,7 +1314,8 @@ export default function DirectionsScreen() {
         };
       }
 
-      if (!nd.DRIVE && driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0) {
+      // Fallback: if backend failed or returned nothing, use Google direct for DRIVE
+      if (!nd.DRIVE && googleDriveOk) {
         if (__DEV__) {
           console.warn('[directions] Using Google-only DRIVE routes (no safety scores). Fix backend reachability or empty routes.');
         }
@@ -969,10 +1414,9 @@ export default function DirectionsScreen() {
     }
   }
 
-  // Re-fetch routes whenever timing choice or avoid filters change
   useEffect(() => {
     if (originCoords && destCoords) void fetchAllRoutes();
-  }, [nowChoice, avoidSet]);
+  }, [originCoords, destCoords, nowChoice, pickerHour, pickerMin, avoidList, stopsSwapped]);
 
   useEffect(() => {
     const modeData = routeByMode[travelMode];
@@ -988,7 +1432,6 @@ export default function DirectionsScreen() {
     setStopsSwapped(s => !s);
     setRouteByMode({});
     setSelectedRouteIndex(0);
-    setTimeout(() => { void fetchAllRoutes(); }, 50);
   }
 
   function handleOriginQueryChange(text: string) {
@@ -1119,7 +1562,7 @@ export default function DirectionsScreen() {
             <Polyline
               key={`${travelMode}-alt-${i}`}
               coordinates={alt.coords}
-              strokeColor={isSelected ? (alt.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2') : 'rgba(74,144,226,0.28)'}
+              strokeColor={isSelected ? '#4A90E2' : 'rgba(74,144,226,0.28)'}
               strokeWidth={isSelected ? 5 : 3}
               tappable
               onPress={() => setSelectedRouteIndex(i)}
@@ -1200,7 +1643,7 @@ export default function DirectionsScreen() {
               )}
             </Pressable>
 
-            <View style={[styles.topFieldDivider, { backgroundColor: T.DIVIDER }]} />
+            <View style={[styles.topFieldDivider, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
 
             {/* Destination field */}
             <Pressable style={styles.topRouteField} onPress={() => { setEditingOrigin(false); setEditingDest(true); setDestQuery(''); }}>
@@ -1304,15 +1747,14 @@ export default function DirectionsScreen() {
       {/* Heatmap filter modal */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
-          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: '#030427' }]} onPress={() => {}}>
             <Text style={[hm.title, { color: T.TEXT_PRI }]}>Map Style</Text>
             <View style={hm.mapStyleRow}>
               {MAP_STYLE_OPTIONS.map(opt => {
                 const active = mapStyleType === opt.id;
-                const activeBg = T.isDark ? '#0D2B22' : '#EDE8FF';
                 return (
                   <Pressable key={opt.id}
-                    style={[hm.mapStyleBtn, { backgroundColor: T.ITEM }, active && { borderColor: T.ACCENT, backgroundColor: activeBg }]}
+                    style={[hm.mapStyleBtn, { backgroundColor: '#222344' }, active && { borderColor: T.ACCENT, backgroundColor: '#222344' }]}
                     onPress={() => setMapStyleType(opt.id)}>
                     <Ionicons name={opt.icon as any} size={22} color={active ? T.ACCENT : T.TEXT_MUT} />
                     <Text style={[hm.mapStyleLabel, { color: active ? T.ACCENT : T.TEXT_MUT }]}>{opt.label}</Text>
@@ -1320,11 +1762,11 @@ export default function DirectionsScreen() {
                 );
               })}
             </View>
-            <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
+            <View style={[hm.sectionDiv, { backgroundColor: '#1E2D45' }]} />
             <View style={hm.header}>
               <Text style={[hm.title, { color: T.TEXT_PRI }]}>Safety Heatmap</Text>
               {heatmapFilter !== 'off' && (
-                <View style={[hm.countBadge, { backgroundColor: T.ITEM }]}>
+                <View style={[hm.countBadge, { backgroundColor: '#222344' }]}>
                   {crashLoading
                     ? <ActivityIndicator size="small" color={T.ACCENT} />
                     : <Text style={[hm.countText, { color: T.ACCENT }]}>{crashPoints.length.toLocaleString()} points</Text>
@@ -1333,7 +1775,7 @@ export default function DirectionsScreen() {
               )}
             </View>
             <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
-            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
+            <View style={[hm.filterList, { backgroundColor: '#222344' }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;
                 return (
@@ -1342,7 +1784,7 @@ export default function DirectionsScreen() {
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
                     >
-                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : T.BG }]}>
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : '#030427' }]}>
                         <Ionicons name={f.icon as any} size={20} color={active ? f.color : T.TEXT_MUT} />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -1351,7 +1793,7 @@ export default function DirectionsScreen() {
                       </View>
                       {active && <Ionicons name="checkmark-circle" size={20} color={T.ACCENT} />}
                     </Pressable>
-                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: T.DIVIDER }]} />}
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: '#1E2D45' }]} />}
                   </View>
                 );
               })}
@@ -1363,7 +1805,7 @@ export default function DirectionsScreen() {
       {/* ── NOW modal — time picker ── */}
       <Modal visible={showNowModal} transparent animationType="slide" onRequestClose={() => setShowNowModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowNowModal(false)}>
-          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: '#030427' }]} onPress={() => {}}>
             <Text style={[hm.title, { color: T.TEXT_PRI }]}>Departure Time</Text>
 
             {/* Mode selector */}
@@ -1383,48 +1825,19 @@ export default function DirectionsScreen() {
               })}
             </View>
 
-            {/* Time picker — shown for depart/arrive */}
+            {/* Time slider — shown for depart/arrive */}
             {nowChoice !== 'now' && (
-              <View style={{ marginBottom: 20 }}>
-                <Text style={{ color: T.TEXT_MUT, fontSize: 12, fontWeight: '600', marginBottom: 10, letterSpacing: 0.8 }}>
-                  {nowChoice === 'depart' ? 'DEPARTING AT' : 'ARRIVING BY'}
-                </Text>
-                {/* Hour scroll */}
-                <View style={{ backgroundColor: T.ITEM, borderRadius: 16, padding: 4 }}>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 8, gap: 4 }}>
-                    {Array.from({ length: 24 }, (_, h) => {
-                      const active = pickerHour === h;
-                      const label = `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? 'AM' : 'PM'}`;
-                      return (
-                        <Pressable key={h}
-                          style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
-                            backgroundColor: active ? T.ACCENT : 'transparent' }}
-                          onPress={() => setPickerHour(h)}>
-                          <Text style={{ fontSize: 14, fontWeight: '600', color: active ? '#fff' : T.TEXT_MUT }}>{label}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-                {/* Minute buttons */}
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                  {([0, 30] as const).map(m => {
-                    const active = pickerMin === m;
-                    return (
-                      <Pressable key={m}
-                        style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center',
-                          backgroundColor: active ? T.ACCENT : T.ITEM }}
-                        onPress={() => setPickerMin(m)}>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: active ? '#fff' : T.TEXT_MUT }}>:{m === 0 ? '00' : '30'}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                {/* Preview */}
-                <View style={{ alignItems: 'center', marginTop: 12 }}>
-                  <Text style={{ color: T.TEXT_PRI, fontSize: 28, fontWeight: '800' }}>{pickerTimeLabel}</Text>
-                </View>
-              </View>
+              <TimeSliderPicker
+                hour={pickerHour}
+                min={pickerMin}
+                onChangeHour={setPickerHour}
+                onChangeMin={setPickerMin}
+                label={nowChoice === 'depart' ? 'DEPARTING AT' : 'ARRIVING BY'}
+                accentColor={T.ACCENT}
+                textPri={T.TEXT_PRI}
+                textMut={T.TEXT_MUT}
+                itemBg={T.ITEM}
+              />
             )}
 
             <Pressable
@@ -1440,7 +1853,7 @@ export default function DirectionsScreen() {
       {/* ── AVOID modal ── */}
       <Modal visible={showAvoidModal} transparent animationType="slide" onRequestClose={() => setShowAvoidModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowAvoidModal(false)}>
-          <Pressable style={[hm.card, { backgroundColor: T.CARD }]} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: '#030427' }]} onPress={() => {}}>
             <Text style={[hm.title, { color: T.TEXT_PRI }]}>Avoid</Text>
             <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Select route conditions to avoid.</Text>
             <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
@@ -1451,9 +1864,10 @@ export default function DirectionsScreen() {
                     <Pressable
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => {
-                        const next = new Set(avoidSet);
-                        active ? next.delete(opt.id) : next.add(opt.id);
-                        setAvoidSet(next);
+                        const next = avoidSet.has(opt.id)
+                          ? avoidList.filter(x => x !== opt.id)
+                          : [...avoidList, opt.id];
+                        setAvoidList(next);
                       }}
                     >
                       <View style={{ flex: 1 }}>
@@ -1485,6 +1899,17 @@ export default function DirectionsScreen() {
         destLabel={destLabel}
         activeData={activeData ?? null}
         travelMode={travelMode}
+        destLat={destCoords?.lat}
+        destLng={destCoords?.lng}
+        originLat={originCoords?.lat}
+        originLng={originCoords?.lng}
+      />
+
+      {/* Route insights — extracted to RouteInsightsPage.tsx */}
+      <RouteInsightsPage
+        visible={showInsightsModal}
+        onClose={() => setShowInsightsModal(false)}
+        activeData={activeData ?? null}
         destLat={destCoords?.lat}
         destLng={destCoords?.lng}
         originLat={originCoords?.lat}
@@ -1523,8 +1948,8 @@ export default function DirectionsScreen() {
                       key={mode}
                       style={[
                         styles.modeChip,
-                        { backgroundColor: T.CARD },
-                        active && { backgroundColor: T.ACCENT, borderColor: T.ACCENT },
+                        { backgroundColor: active ? '#4A63BA' : T.CARD },
+                        active && { borderColor: '#4A63BA' },
                       ]}
                       onPress={() => handleSetTravelMode(mode)}
                     >
@@ -1537,7 +1962,7 @@ export default function DirectionsScreen() {
               {/* Now / Avoid chips — functional */}
               <View style={styles.filterRow}>
                 <Pressable
-                  style={[styles.filterChip, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}
+                  style={[styles.filterChip, { backgroundColor: T.CARD, borderColor: 'rgba(255,255,255,0.45)' }]}
                   onPress={() => setShowNowModal(true)}
                 >
                   <Text style={[styles.filterText, { color: T.TEXT_PRI }]}>{nowLabel}</Text>
@@ -1546,12 +1971,12 @@ export default function DirectionsScreen() {
                 <Pressable
                   style={[
                     styles.filterChip,
-                    { backgroundColor: T.CARD, borderColor: avoidActive ? T.ACCENT : T.DIVIDER },
+                    { backgroundColor: T.CARD, borderColor: avoidActive ? T.ACCENT : 'rgba(255,255,255,0.45)' },
                   ]}
                   onPress={() => setShowAvoidModal(true)}
                 >
                   <Text style={[styles.filterText, { color: avoidActive ? T.ACCENT : T.TEXT_PRI }]}>
-                    {avoidActive ? `Avoid (${avoidSet.size})` : 'Avoid'}
+                    {avoidActive ? `Avoid (${avoidList.length})` : 'Avoid'}
                   </Text>
                   <Ionicons name="chevron-down" size={14} color={avoidActive ? T.ACCENT : T.TEXT_MUT} />
                 </Pressable>
@@ -1569,46 +1994,61 @@ export default function DirectionsScreen() {
                 const isSelected = i === selectedRouteIndex;
                 const isSafeWay = alt.routeSource === 'safeway';
                 const score = alt.safetyScore;
-                const safetyPct = score != null ? Math.max(0, 100 - Math.round(score)) : null;
+                // Backend score is 0–100 risk; safety % = 100 - score
+                const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
                 const safetyColor = score == null ? '#7A8FA6'
                   : score < 33 ? '#1ABC93' : score < 66 ? '#FFA500' : '#FF4444';
                 const routeName = alt.label ?? fmtSecs(alt.durationSecs);
 
                 return (
                   <Pressable
-                    key={`${travelMode}-card-${i}`}
-                    style={[
-                      styles.routeOptionCard,
-                      { backgroundColor: T.CARD, borderColor: isSelected ? T.ACCENT : 'transparent' },
-                    ]}
-                    onPress={() => setSelectedRouteIndex(i)}
-                  >
-                    {/* Safety badge */}
-                    <View style={[styles.matchBadge, styles.matchBadgeActive]}>
-                      {isSafeWay ? (
+                   key={i}
+                  style={[
+                    styles.routeOptionCard,
+                    { backgroundColor: T.CARD, borderColor: isSelected ? '#1ABC93' : 'transparent', flexWrap: 'wrap' },
+                    isSelected && { borderWidth: 4 },
+                  ]}
+                  onPress={() => setSelectedRouteIndex(i)}
+                >
+                  {/* Top row: Safety badge + route info */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12, width: '100%' }}>
+
+                  {/* Safety badge — green tint when safe, color-coded by score */}
+                    <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive]}>
+                      {isSelected && isSafeWay ? (
                         <LinearGradient
-                          colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                          colors={['#4FA8A0', '#71BB81']}
                           start={{ x: 0, y: 0 }}
-                          end={{ x: 0, y: 1 }}
+                          end={{ x: 1, y: 0 }}
                           style={StyleSheet.absoluteFillObject}
                         />
-                      ) : (
+                      ) : isSelected ? (
                         <View style={[StyleSheet.absoluteFillObject, { backgroundColor: safetyColor, opacity: 0.15, borderRadius: 12 }]} />
-                      )}
+                      ) : null}
                       <View style={styles.matchBadgeContent}>
-                        <Text style={[styles.matchWord, { color: isSafeWay ? '#fff' : safetyColor }]}>
+                        <Text style={[styles.matchWord, { color: safetyPct != null ? '#fff' : '#7A8FA6', fontSize: 11 }]}>
                           {isSafeWay ? 'SAFEWAY' : 'SAFETY'}
                         </Text>
-                        <Text style={[styles.matchPct, { color: isSafeWay ? '#fff' : safetyColor }]}>
-                          {safetyPct != null ? `${safetyPct}%` : '–'}
-                        </Text>
+                        {safetyPct != null ? (
+                          <Text style={[styles.matchPct, { color: isSelected ? '#fff' : safetyColor, fontSize: 26 }]}>
+                            {safetyPct}%
+                          </Text>
+                        ) : (
+                          <>
+                            <Text style={{ color: '#7A8FA6', fontSize: 15, fontWeight: '800' }}>N/A</Text>
+                            <Text style={{ color: '#7A8FA6', fontSize: 7, textAlign: 'center', marginTop: 2, lineHeight: 9 }}>
+                              {'no\ncoverage'}
+                            </Text>
+                          </>
+                        )}
                       </View>
                     </View>
 
-                    {/* Route info */}
+                    {/* Route info — your layout, other branch's data */}
                     <Pressable style={styles.routeOptionInfo} onPress={() => { setSelectedRouteIndex(i); setShowDetailsModal(true); }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI }]}>{routeName}</Text>
+                        {/* Main label = travel time */}
+                        <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI, fontSize: 22, fontWeight: '800' }]}>{fmtSecs(alt.durationSecs)}</Text>
                         {isSafeWay && (
                           <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                             <Ionicons name="shield-checkmark" size={10} color="#1ABC93" />
@@ -1626,10 +2066,12 @@ export default function DirectionsScreen() {
                         {alt.nHighRisk ? `  •  ${alt.nHighRisk} hot spots` : ''}
                       </Text>
                     </Pressable>
+                  </View>
 
-                    {/* Start button */}
+                  {/* Bottom row: Start + Insights — your UI addition */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, width: '100%' }}>
                     <Pressable
-                      style={[styles.startBtnWrap, !isSelected && { backgroundColor: T.ITEM }]}
+                      style={[styles.startBtnWrap, { flex: 1, height: 40 }, !isSelected && { backgroundColor: T.ITEM }]}
                       onPress={() => {
                         setSelectedRouteIndex(i);
                         const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
@@ -1646,7 +2088,7 @@ export default function DirectionsScreen() {
                     >
                       {isSelected && (
                         <LinearGradient
-                          colors={['#0A9E6E', '#1ABC93', '#44D9B8']}
+                          colors={['#4FA8A0', '#71BB81']}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 0 }}
                           style={StyleSheet.absoluteFillObject}
@@ -1654,48 +2096,76 @@ export default function DirectionsScreen() {
                       )}
                       <Text style={[styles.startBtnText, !isSelected && { color: T.TEXT_MUT }]}>Start</Text>
                     </Pressable>
-                  </Pressable>
+
+                    <Pressable
+                      style={[styles.startBtnWrap, {
+                        flex: 1, height: 40, flexDirection: 'row', gap: 5,
+                        backgroundColor: T.isDark ? 'rgba(74,144,226,0.18)' : 'rgba(74,144,226,0.12)',
+                        borderWidth: 1.5,
+                        borderColor: 'rgba(74,144,226,0.45)',
+                      }]}
+                      onPress={() => { setSelectedRouteIndex(i); setShowInsightsModal(true); }}
+                    >
+                      <Ionicons name="stats-chart" size={13} color="#4A90E2" />
+                      <Text style={{ color: '#4A90E2', fontSize: 13, fontWeight: '700', zIndex: 1 }}>Insights</Text>
+                    </Pressable>
+                  </View>
+                </Pressable>
                 );
               })}
 
               {/* Fallback card (BUS/RIDESHARE) */}
               {!routeBusy && alternatives.length === 0 && activeData && (
-                <View style={[styles.routeOptionCard, { backgroundColor: T.CARD, borderColor: T.ACCENT }]}>
-                  <View style={[styles.matchBadge, styles.matchBadgeActive]}>
-                    <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={StyleSheet.absoluteFillObject} />
-                    <View style={styles.matchBadgeContent}>
-                      <Text style={[styles.matchWord, { color: '#fff' }]}>SAFETY</Text>
-                      <Text style={[styles.matchPct, { color: '#fff' }]}>
-                        {activeData.safetyScore != null ? `${Math.max(0, 100 - Math.round(activeData.safetyScore))}%` : '–'}
-                      </Text>
-                    </View>
-                  </View>
-                  <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
-                    <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI }]}>Route 1</Text>
-                    <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtSecs(activeSecs)}  •  {fmtDist(activeData.distance)}</Text>
-                    <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>Arrive ~{arrivalFrom(activeSecs)}</Text>
-                  </Pressable>
-                  <Pressable style={styles.startBtnWrap} onPress={() => {
-                    const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
-                    const from = stopsSwapped ? destCoords : originCoords;
-                    const to   = stopsSwapped ? originCoords : destCoords;
-                    const routeCoords = activeData?.coords ?? [];
-                    const inner = routeCoords.slice(1, -1);
-                    const step = inner.length > 8 ? Math.floor(inner.length / 8) : 1;
-                    const wpts = inner.filter((_: RoutePoint, idx: number) => idx % step === 0).slice(0, 8);
-                    const waypointsParam = wpts.length > 0 ? `&waypoints=${encodeURIComponent(wpts.map((p: RoutePoint) => `${p.latitude},${p.longitude}`).join('|'))}` : '';
-                    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}${waypointsParam}&travelmode=${modeMap[travelMode]}`);
-                  }}>
-                    <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
-                    <Text style={styles.startBtnText}>Start</Text>
-                  </Pressable>
-                </View>
-              )}
+                <View style={[styles.routeOptionCard, { backgroundColor: T.CARD, borderColor: '#1ABC93', borderWidth: 4, flexWrap: 'wrap' }]}>
 
-              {!routeBusy && !modeData && (
-                <Pressable style={[styles.getDirectionsBtn, { backgroundColor: T.ACCENT }]} onPress={() => { if (originCoords) void fetchAllRoutes(); }}>
-                  <Text style={styles.getDirectionsBtnText}>Get Directions</Text>
-                </Pressable>
+                  {/* Top row: Safety badge + route info */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12, width: '100%' }}>
+                    <View style={[styles.matchBadge, styles.matchBadgeActive]}>
+                      <LinearGradient colors={['#4FA8A0', '#71BB81']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
+                      <View style={styles.matchBadgeContent}>
+                        <Text style={[styles.matchWord, { color: '#fff', fontSize: 13 }]}>SAFETY</Text>
+                        <Text style={[styles.matchPct, { color: '#fff' }]}>
+                          {activeData.safetyScore != null ? `${Math.max(0, 100 - Math.round(activeData.safetyScore))}%` : '–'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Pressable style={styles.routeOptionInfo} onPress={() => setShowDetailsModal(true)}>
+                      <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI, fontSize: 18 }]}>{fmtSecs(activeSecs)}</Text>
+                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtDist(activeData.distance)}</Text>
+                      <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>Arrive ~{arrivalFrom(activeSecs)}</Text>
+                    </Pressable>
+                  </View>
+
+                  {/* Bottom row: Start + Insights */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, width: '100%' }}>
+                    <Pressable
+                      style={[styles.startBtnWrap, { flex: 1, height: 40 }]}
+                      onPress={() => {
+                        const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
+                        const from = stopsSwapped ? destCoords : originCoords;
+                        const to   = stopsSwapped ? originCoords : destCoords;
+                        Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                      }}
+                    >
+                      <LinearGradient colors={['#4FA8A0', '#71BB81']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
+                      <Text style={styles.startBtnText}>Start</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[styles.startBtnWrap, {
+                        flex: 1, height: 40, flexDirection: 'row', gap: 5,
+                        backgroundColor: T.isDark ? 'rgba(74,144,226,0.18)' : 'rgba(74,144,226,0.12)',
+                        borderWidth: 1.5, borderColor: 'rgba(74,144,226,0.45)',
+                      }]}
+                      onPress={() => setShowInsightsModal(true)}
+                    >
+                      <Ionicons name="stats-chart" size={13} color="#4A90E2" />
+                      <Text style={{ color: '#4A90E2', fontSize: 13, fontWeight: '700', zIndex: 1 }}>Insights</Text>
+                    </Pressable>
+                  </View>
+
+                </View>
               )}
           </>
         </BottomSheetScrollView>
@@ -1759,7 +2229,7 @@ const styles = StyleSheet.create({
   closeBtn: { width: 34, height: 34, justifyContent: 'center', alignItems: 'center' },
   closeBtnCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   modeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
-  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
+  modeChip: { flex: 1, height: 48, marginHorizontal: 3, borderRadius: 16, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'transparent' },
   // Stops card styles (used by DraggableStopRow)
   stopRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 12, minHeight: 64 },
   stopIconWrap: { width: 26, alignItems: 'center' },
@@ -1773,12 +2243,13 @@ const styles = StyleSheet.create({
   filterText: { fontSize: 14, fontWeight: '500' },
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 },
   loadingText: { fontSize: 14 },
-  routeOptionCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 18, padding: 14, marginBottom: 12, borderWidth: 1.5, gap: 12 },
-  matchBadge: { borderRadius: 14, paddingVertical: 12, paddingHorizontal: 10, alignItems: 'center', width: 76, overflow: 'hidden', position: 'relative' },
+  routeOptionCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1.5, gap: 12 },
+  matchBadge: { borderRadius: 16, paddingVertical: 12, paddingHorizontal: 10, alignItems: 'center', width: 76, overflow: 'hidden', position: 'relative' },
   matchBadgeActive: { backgroundColor: 'transparent' },
+  matchBadgeInactive: { backgroundColor: '#3C3D66' },
   matchBadgeContent: { alignItems: 'center' },
-  matchWord: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, marginBottom: 2 },
-  matchPct: { fontSize: 24, fontWeight: '800' },
+  matchWord: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 2 },
+  matchPct: { fontSize: 28, fontWeight: '800' },
   routeOptionInfo: { flex: 1 },
   routeOptionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 3 },
   routeOptionMeta: { fontSize: 13, marginBottom: 2 },
@@ -1796,7 +2267,7 @@ const dm = StyleSheet.create({
   card: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 24 },
   tabRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 20 },
   tab: { paddingBottom: 8, borderBottomWidth: 2.5, borderBottomColor: 'transparent' },
-  tabActive: { borderBottomColor: GREEN },
+  tabActive: { borderBottomColor: '#FFFFFF' },
   tabText: { fontSize: 18, fontWeight: '600' },
   tabBody: { flex: 1 },
   closeBtnCircle: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },

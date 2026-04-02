@@ -4,14 +4,14 @@ import { createContext, useContext, useState, ReactNode } from 'react';
 export function makeTokens(dark: boolean) {
   return {
     isDark:    dark,
-    BG:        dark ? '#0B1120' : '#F2F4F8',
-    CARD:      dark ? '#141D2E' : '#FFFFFF',
-    ITEM:      dark ? '#1A2540' : '#EEF0F6',
+    BG:        dark ? '#030427' : '#F2F4F8',
+    CARD:      dark ? '#222344' : '#FFFFFF',
+    ITEM:      dark ? '#2A2F5A' : '#EEF0F6',
     GREEN:     '#1ABC93',
     PURPLE:    '#7C5CBF',
     // ACCENT = teal in dark mode, purple in light mode
     ACCENT:    dark ? '#1ABC93' : '#7C5CBF',
-    TEXT_PRI:  dark ? '#FFFFFF' : '#0B1120',
+    TEXT_PRI:  dark ? '#FFFFFF' : '#030427',
     TEXT_MUT:  dark ? '#7A8FA6' : '#8894A8',
     DIVIDER:   dark ? '#1E2D45' : '#E0E4EE',
     HANDLE:    dark ? '#2A3A55' : '#C8CEDD',
