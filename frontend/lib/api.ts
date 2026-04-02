@@ -1,6 +1,31 @@
 import Constants from 'expo-constants';
 
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://10.0.2.2:8000';
+// Force HTTP for local/LAN backend URLs — uvicorn serves plain HTTP, never TLS.
+// If the .env accidentally has https://, this corrects it at runtime so React Native
+// doesn't throw "Network request failed" from a failed SSL handshake.
+function _resolveBaseUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname;
+    const isLocal =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '10.0.2.2' ||           // Android emulator host alias
+      /^192\.168\./.test(host) ||
+      /^10\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    if (isLocal && u.protocol === 'https:') {
+      u.protocol = 'http:';
+      return u.toString().replace(/\/$/, '');
+    }
+  } catch {
+    // not a valid URL, return as-is
+  }
+  return raw.replace(/\/$/, '');
+}
+
+const _rawBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://10.0.2.2:8000';
+const apiBaseUrl = _resolveBaseUrl(_rawBaseUrl);
 
 // `EXPO_PUBLIC_*` vars are inlined at build time. When running via `npx expo start`
 // with a local .env they work directly. As a fallback we also read from
@@ -225,7 +250,8 @@ export type SafetyRoute = {
   n_high_risk?: number;
   top_risk_factors?: { factor: string; weight: number }[];
   time_band?: string;
-  segment_risks?: number[];
+  segment_risks?: any[];
+  high_risk_coords?: Array<{ latitude: number; longitude: number }>;
   time_penalty_pct?: number;
   risk_reduction_pct?: number;
   aadt_avg?: number;
@@ -251,32 +277,39 @@ export async function getBackendRoutes(params: {
 
   return {
     travel_mode: res.travel_mode ?? res.travelMode ?? 'DRIVE',
-    routes: (res.routes ?? []).map((r: any) => ({
-      distance_meters: r.distance_meters ?? r.distance ?? 0,
-      duration: typeof r.duration === 'string'
-        ? r.duration
-        : r.durationSecs != null
-          ? `${r.durationSecs}s`
-          : r.duration?.value != null
-            ? `${r.duration.value}s`
-            : '0s',
-      polyline: r.polyline ?? '',
-      coordinates: r.coordinates ?? (r.polyline ? decodePolyline(r.polyline) : []),
-      safety_score: r.safety_score ?? null,
-      safety_label: r.safety_label ?? 'unknown',
-      route_source: r.route_source ?? r.routeSource ?? 'google',
-      risk_per_km: r.risk_per_km,
-      total_exposure: r.total_exposure,
-      route_km: r.route_km,
-      n_high_risk: r.n_high_risk ?? r.nHighRisk ?? 0,
-      top_risk_factors: r.top_risk_factors ?? r.topRiskFactors,
-      time_band: r.time_band ?? r.timeBand,
-      segment_risks: r.segment_risks ?? r.segmentRisks,
-      time_penalty_pct: r.time_penalty_pct ?? r.timePenaltyPct,
-      risk_reduction_pct: r.risk_reduction_pct ?? r.riskReductionPct,
-      aadt_avg: r.aadt_avg ?? r.aadtAvg,
-      aadt_max: r.aadt_max ?? r.aadtMax,
-    })),
+    routes: (res.routes ?? []).map((r: any) => {
+      const rawDist = r.distance_meters ?? r.distance ?? 0;
+      const routeKmVal = r.route_km;
+      // SafeWay A* sometimes returns distance_meters=0 but has route_km — derive fallback
+      const effectiveDist = rawDist > 0 ? rawDist : (routeKmVal ? Math.round(routeKmVal * 1000) : 0);
+      return {
+        distance_meters: effectiveDist,
+        duration: typeof r.duration === 'string'
+          ? r.duration
+          : r.durationSecs != null
+            ? `${r.durationSecs}s`
+            : r.duration?.value != null
+              ? `${r.duration.value}s`
+              : '0s',
+        polyline: r.polyline ?? '',
+        coordinates: r.coordinates ?? (r.polyline ? decodePolyline(r.polyline) : []),
+        safety_score: r.safety_score ?? null,
+        safety_label: r.safety_label ?? 'unknown',
+        route_source: r.route_source ?? r.routeSource ?? 'google',
+        risk_per_km: r.risk_per_km,
+        total_exposure: r.total_exposure,
+        route_km: routeKmVal,
+        n_high_risk: r.n_high_risk ?? r.nHighRisk ?? 0,
+        top_risk_factors: r.top_risk_factors ?? r.topRiskFactors,
+        time_band: r.time_band ?? r.timeBand,
+        segment_risks: r.segment_risks ?? r.segmentRisks,
+        time_penalty_pct: r.time_penalty_pct ?? r.timePenaltyPct,
+        risk_reduction_pct: r.risk_reduction_pct ?? r.riskReductionPct,
+        aadt_avg: r.aadt_avg ?? r.aadtAvg,
+        aadt_max: r.aadt_max ?? r.aadtMax,
+        high_risk_coords: r.high_risk_coords ?? [],
+      };
+    }),
   };
 }
 
@@ -352,7 +385,9 @@ export async function getMultipleRoutes(params: {
     origin: { location: { latLng: { latitude: params.origin.lat, longitude: params.origin.lng } } },
     destination: { location: { latLng: { latitude: params.destination.lat, longitude: params.destination.lng } } },
     travelMode: params.travel_mode,
-    computeAlternativeRoutes: true,
+    // Google Routes API v2 only supports computeAlternativeRoutes for DRIVE/TWO_WHEELER.
+    // Sending it for WALK or BICYCLE causes a 400 error and returns no routes at all.
+    computeAlternativeRoutes: params.travel_mode === 'DRIVE' || (params.travel_mode as string) === 'TWO_WHEELER',
   };
   if (params.travel_mode === 'DRIVE') {
     body.routingPreference = 'TRAFFIC_AWARE';
@@ -404,6 +439,49 @@ export async function getMultipleRoutes(params: {
         routeLabels: labels,
       };
     });
+  } catch {
+    return [];
+  }
+}
+
+// ── Turn-by-turn directions via Google Routes API ─────────────────────────────
+export type DirectionStep = {
+  distanceMeters: number;
+  staticDuration: string;
+  htmlInstruction: string;
+  maneuver: string;
+};
+
+export async function getRouteDirections(params: {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  travel_mode: 'DRIVE' | 'WALK' | 'BICYCLE';
+}): Promise<DirectionStep[]> {
+  if (!googleMapsKey) return [];
+  try {
+    const body = {
+      origin: { location: { latLng: { latitude: params.origin.lat, longitude: params.origin.lng } } },
+      destination: { location: { latLng: { latitude: params.destination.lat, longitude: params.destination.lng } } },
+      travelMode: params.travel_mode,
+    };
+    const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': googleMapsKey,
+        'X-Goog-FieldMask': 'routes.legs.steps',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const steps: any[] = data.routes?.[0]?.legs?.[0]?.steps ?? [];
+    return steps.map((s: any) => ({
+      distanceMeters: s.distanceMeters ?? 0,
+      staticDuration: s.staticDuration ?? '0s',
+      htmlInstruction: s.navigationInstruction?.instructions ?? '',
+      maneuver: s.navigationInstruction?.maneuver ?? 'STRAIGHT',
+    }));
   } catch {
     return [];
   }

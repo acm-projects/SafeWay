@@ -1,36 +1,43 @@
-# test_gcs.py
+"""
+Standalone GCS connectivity test — no app, no project imports.
+Reads all 3 data files from GCS and prints what it finds.
+Run with: python backend/test_gcs.py
+"""
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
 
 import gcsfs
 import pandas as pd
+import joblib
 
+gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+fs = gcsfs.GCSFileSystem(token=gcs_key if gcs_key and Path(gcs_key).exists() else "cloud")
 
-def main() -> None:
-    """Tiny GCS write/read test using GCS_CREDENTIALS_PATH (no hardcoded key path)."""
-    gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
-    if not gcs_key or not os.path.isfile(gcs_key):
-        raise SystemExit(
-            "Set GCS_CREDENTIALS_PATH to your service account JSON path before running test_gcs.py."
-        )
+print("Testing GCS connectivity...\n")
 
-    fs = gcsfs.GCSFileSystem(token=gcs_key)
+print("1. intersection_scores.parquet")
+with fs.open("safeway-data/intersection_scores.parquet", "rb") as f:
+    df = pd.read_parquet(f)
+print(f"   {len(df)} rows, columns: {list(df.columns)}")
+print(df.head(3).to_string())
+print()
 
-    # write a tiny test file
-    test_df = pd.DataFrame({"test": [1, 2, 3]})
-    with fs.open("safeway-data/test.parquet", "wb") as f:
-        test_df.to_parquet(f, index=False)
-    print("Write OK")
+print("2. shap_top3.pkl")
+with fs.open("safeway-data/shap_top3.pkl", "rb") as f:
+    shap = joblib.load(f)
+first_key = next(iter(shap))
+print(f"   {len(shap)} entries")
+print(f"   Sample key={first_key}: {shap[first_key]}")
+print()
 
-    # read it back
-    with fs.open("safeway-data/test.parquet", "rb") as f:
-        result = pd.read_parquet(f)
-    print(f"Read OK — {len(result)} rows")
-    print(result)
+print("3. hourly_risk_factors.parquet")
+with fs.open("safeway-data/hourly_risk_factors.parquet", "rb") as f:
+    tod = pd.read_parquet(f)
+print(f"   {len(tod)} rows, columns: {list(tod.columns)}")
+print(tod.head(3).to_string())
+print()
 
-    # clean up
-    fs.rm("safeway-data/test.parquet")
-    print("Cleanup OK — bucket is ready")
-
-
-if __name__ == "__main__":
-    main()
+print("All GCS files OK.")

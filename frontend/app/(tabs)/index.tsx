@@ -74,7 +74,7 @@ const MAP_STYLE_OPTIONS: { id: 'standard'|'satellite'|'hybrid'|'terrain'; label:
 ];
 
 const FLOAT_SIDE   = 10;  // gap left & right of the floating sheet
-const FLOAT_BOTTOM = 14;  // gap below the floating sheet
+const FLOAT_BOTTOM = 8;  // gap below the floating sheet
 const FLOAT_RADIUS = 24;  // corner radius of the floating sheet
 
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
@@ -310,7 +310,7 @@ export default function HomeScreen() {
 
   // Min snap: handle(~14) + searchRow(44) + no extra margin = just the pill visible
   const snapPoints = useMemo(() => {
-    const searchBarOnly = 63 + insets.bottom;
+    const searchBarOnly = 86;
     const mid = Math.round(windowHeight * 0.52);
     const max = Math.round(windowHeight * 0.92);
     return [searchBarOnly, mid, max];
@@ -646,7 +646,7 @@ export default function HomeScreen() {
   const outerWrapStyle = useAnimatedStyle(() => ({
     left:   FLOAT_SIDE,
     right:  FLOAT_SIDE,
-    bottom: FLOAT_BOTTOM,
+    bottom: insets.bottom + FLOAT_BOTTOM,
   }));
   const clipWrapStyle = useAnimatedStyle(() => ({
     borderTopLeftRadius:     FLOAT_RADIUS,
@@ -1056,7 +1056,7 @@ export default function HomeScreen() {
 
               {/* RECENTS */}
               <Text style={{ color: T.TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, marginBottom: 10, marginTop: 20 }}>RECENTS</Text>
-              <View style={{ backgroundColor: T.CARD, borderRadius: 18, overflow: 'hidden' }}>
+              <View style={{ backgroundColor: T.CARD, borderRadius: 12, overflow: 'hidden' }}>
                 {recentPlaces.length > 0 ? recentPlaces.map((rp, i) => {
                   const { icon, bg } = placeIconFor(rp.title);
                   return (

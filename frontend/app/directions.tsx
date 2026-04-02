@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -33,15 +34,15 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
-import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
-import type { AlternativeRoute, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
+import { getRoute, getMultipleRoutes, searchPlaces, getRouteDirections } from '@/lib/api';
+import type { AlternativeRoute, DirectionStep, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
 import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
 import { useTrafficIncidents } from '@/hooks/useTrafficIncidents';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
-import { IncidentBubble, IncidentDetailPopup } from '@/components/IncidentMarker';
+import { IncidentBubble, IncidentDetailPopup, IncidentMarker } from '@/components/IncidentMarker';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -84,6 +85,7 @@ interface ModeRouteData {
   topRiskFactors?: { factor: string; weight: number }[] | { label: string; count: number; pct: number }[];
   timeBand?: string;
   segmentRisks?: number[];
+  highRiskCoords?: Array<{ latitude: number; longitude: number }>;
   aadtAvg?: number;
   aadtMax?: number;
   timePenaltyPct?: number;
@@ -101,12 +103,15 @@ interface ModeRoutes {
     topRiskFactors?: any[];
     timeBand?: string;
     segmentRisks?: number[];
+    highRiskCoords?: Array<{ latitude: number; longitude: number }>;
     aadtAvg?: number;
     aadtMax?: number;
     timePenaltyPct?: number;
     riskReductionPct?: number;
   })[];
 }
+
+type RouteAltRow = ModeRoutes['alternatives'][number];
 
 const MAP_STYLE_OPTIONS: { id: 'standard'|'satellite'|'hybrid'|'terrain'; label: string; icon: string }[] = [
   { id: 'standard',  label: 'Default',   icon: 'map-outline'        },
@@ -158,7 +163,7 @@ const INFO_CONTENT: Record<string, { title: string; body: string }> = {
 };
 
 const FLOAT_SIDE   = 10;
-const FLOAT_BOTTOM = 14;
+const FLOAT_BOTTOM = 19;
 const FLOAT_RADIUS = 24;
 
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
@@ -170,6 +175,64 @@ function fmtSecs(s: number): string {
   const m = Math.round(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+function mapSafetyRoutesToAlternatives(safetyRoutes: SafetyRoute[]): RouteAltRow[] {
+  return safetyRoutes.map((r: SafetyRoute, i: number) => {
+    const rawDurationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
+    // If A* returned 0 duration but has route_km, estimate at ~30 km/h urban speed
+    const durationSecs = rawDurationSecs > 0
+      ? rawDurationSecs
+      : r.route_km ? Math.round((r.route_km / 30) * 3600) : 0;
+    return {
+      index: i,
+      coords: r.coordinates,
+      distance: r.distance_meters ?? 0,
+      durationSecs,
+      label: fmtSecs(durationSecs),
+      routeLabels: [r.route_source],
+      safetyScore: r.safety_score,
+      safetyLabel: r.safety_label,
+      routeSource: r.route_source,
+      riskPerKm: r.risk_per_km,
+      nHighRisk: r.n_high_risk,
+      routeKm: r.route_km,
+      topRiskFactors: r.top_risk_factors,
+      timeBand: r.time_band,
+      segmentRisks: r.segment_risks,
+      highRiskCoords: r.high_risk_coords ?? [],
+      aadtAvg: r.aadt_avg,
+      aadtMax: r.aadt_max,
+      timePenaltyPct: r.time_penalty_pct,
+      riskReductionPct: r.risk_reduction_pct,
+    };
+  });
+}
+
+function primaryToAlternativeRow(primary: ModeRouteData, index = 0): RouteAltRow {
+  return {
+    index,
+    coords: primary.coords,
+    distance: primary.distance,
+    durationSecs: primary.durationSecs,
+    label: fmtSecs(primary.durationSecs),
+    routeLabels: ['DEFAULT_ROUTE'],
+    safetyScore: primary.safetyScore,
+    safetyLabel: primary.safetyLabel,
+    routeSource: primary.routeSource,
+    riskPerKm: primary.riskPerKm,
+    nHighRisk: primary.nHighRisk,
+    routeKm: primary.routeKm,
+    topRiskFactors: primary.topRiskFactors,
+    timeBand: primary.timeBand,
+    segmentRisks: primary.segmentRisks,
+    highRiskCoords: primary.highRiskCoords,
+    aadtAvg: primary.aadtAvg,
+    aadtMax: primary.aadtMax,
+    timePenaltyPct: primary.timePenaltyPct,
+    riskReductionPct: primary.riskReductionPct,
+  };
+}
+
 function fmtDist(m: number): string {
   const miles = m / 1609.34;
   return miles >= 1 ? `${miles.toFixed(1)} mi` : `${Math.round(m * 3.281)} ft`;
@@ -489,34 +552,53 @@ function RouteDetailsModal({
   originLng?: number;
 }) {
   const [infoKey, setInfoKey] = useState<string | null>(null);
+  const [steps, setSteps] = useState<DirectionStep[]>([]);
+  const [stepsLoading, setStepsLoading] = useState(false);
   const { height: screenH } = useWindowDimensions();
   const { T } = useTheme();
   const CARD_HEIGHT = screenH * 0.72;
 
-  const steps = activeData?.distance
-    ? [
-        { frac: 0.06,  instruction: 'Turn Right' },
-        { frac: 0.015, instruction: 'Turn Left'  },
-        { frac: 0.12,  instruction: 'Keep Right' },
-        { frac: 0.02,  instruction: 'Turn Right' },
-        { frac: 0.12,  instruction: 'Turn Left'  },
-        { frac: 0.665, instruction: 'Keep Right' },
-      ].map(s => ({ dist: fmtDist(activeData.distance * s.frac), instruction: s.instruction }))
-    : [];
+  // Fetch real turn-by-turn directions whenever modal opens with valid coords
+  useEffect(() => {
+    if (!visible || !originLat || !originLng || !destLat || !destLng) {
+      setSteps([]);
+      return;
+    }
+    let cancelled = false;
+    setStepsLoading(true);
+    const apiMode: 'DRIVE' | 'WALK' | 'BICYCLE' =
+      travelMode === 'BUS' || travelMode === 'RIDESHARE' ? 'DRIVE' : travelMode as any;
+    getRouteDirections({
+      origin: { lat: originLat, lng: originLng },
+      destination: { lat: destLat, lng: destLng },
+      travel_mode: apiMode,
+    })
+      .then(result => { if (!cancelled) setSteps(result); })
+      .catch(() => { if (!cancelled) setSteps([]); })
+      .finally(() => { if (!cancelled) setStepsLoading(false); });
+    return () => { cancelled = true; };
+  }, [visible, originLat, originLng, destLat, destLng, travelMode]);
 
   const modeIcon: Record<TravelMode, any> = {
     DRIVE: 'car', WALK: 'walk', BICYCLE: 'bicycle', BUS: 'bus', RIDESHARE: 'car-sport',
   };
 
-  const avgSpeedMph = activeData
-    ? Math.round((activeData.distance / 1609.34) / (activeData.durationSecs / 3600))
-    : 0;
-  const distMiles = activeData ? activeData.distance / 1609.34 : 0;
+  // Map Google maneuver codes to Ionicons name + rotation
+  function maneuverIcon(maneuver: string): { name: any; rotate: string } {
+    const m = (maneuver ?? '').toUpperCase();
+    if (m.includes('TURN_RIGHT') || m === 'TURN-RIGHT') return { name: 'arrow-forward', rotate: '45deg' };
+    if (m.includes('TURN_LEFT')  || m === 'TURN-LEFT')  return { name: 'arrow-back',    rotate: '-45deg' };
+    if (m.includes('UTURN'))       return { name: 'return-down-back', rotate: '0deg' };
+    if (m.includes('ROUNDABOUT')) return { name: 'refresh',           rotate: '0deg' };
+    if (m.includes('RAMP') || m.includes('FORK') || m.includes('MERGE')) return { name: 'git-merge', rotate: '0deg' };
+    if (m.includes('FERRY'))       return { name: 'boat',             rotate: '0deg' };
+    if (m.includes('ARRIVE'))      return { name: 'location',         rotate: '0deg' };
+    return { name: 'arrow-up', rotate: '0deg' };
+  }
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={dm.backdrop}>
-        {/* Card background uses T.BG so it's white in light mode */}
         <View style={[dm.card, { height: CARD_HEIGHT, backgroundColor: T.BG }]}>
 
           {/* ── Header + close ── */}
@@ -531,63 +613,70 @@ function RouteDetailsModal({
           </View>
 
           {/* ── Details content ── */}
-<ScrollView
-  style={dm.tabBody}
-  showsVerticalScrollIndicator={false}
-  contentContainerStyle={{ paddingBottom: 20 }}
->
-  <View style={{ backgroundColor: T.CARD, borderRadius: 16, overflow: 'hidden', marginBottom: 8 }}>
-    <View style={[dm.stepRow, { paddingLeft: 8 }]}>
-      <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
-        <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
-      </View>
+          <ScrollView
+            style={dm.tabBody}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 20 }}
+          >
+            <View style={{ backgroundColor: T.CARD, borderRadius: 16, overflow: 'hidden', marginBottom: 8 }}>
+              {/* Origin row */}
+              <View style={[dm.stepRow, { paddingLeft: 8 }]}>
+                <View style={[dm.stepIcon, { backgroundColor: T.ITEM }]}>
+                  <Ionicons name={modeIcon[travelMode]} size={20} color="#4A90E2" />
+                </View>
                 <View style={dm.stepContent}>
                   <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>From {originLabel}</Text>
                   <Text style={[dm.stepInst, { color: T.TEXT_MUT }]} numberOfLines={2}>{originAddress || 'Getting location…'}</Text>
                 </View>
               </View>
-              <View style={[dm.lineDivider, { backgroundColor: '#FFFFFF' }]} />
+              <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER ?? '#FFFFFF22' }]} />
 
-              {steps.length > 0 ? steps.map((step, i) => (
-                <View key={i}>
-                  <View style={dm.stepRow}>
-                    <View style={dm.stepIconSimple}>
-                      <Ionicons
-                        name={
-                          step.instruction.toLowerCase().includes('right') && !step.instruction.toLowerCase().includes('keep')
-                            ? 'arrow-forward'
-                            : step.instruction.toLowerCase().includes('left')
-                            ? 'arrow-back'
-                            : 'arrow-up'
-                        }
-                        size={24}
-                        color={T.TEXT_PRI}
-                        style={{
-                          transform: [{
-                            rotate: step.instruction.toLowerCase().includes('right') && !step.instruction.toLowerCase().includes('keep')
-                              ? '45deg'
-                              : step.instruction.toLowerCase().includes('left')
-                              ? '-45deg'
-                              : '0deg',
-                          }],
-                        }}
-                      />
-                    </View>
-                    <View style={dm.stepContent}>
-                      <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>{step.dist}</Text>
-                      <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>{step.instruction}</Text>
-                    </View>
-                  </View>
-                  <View style={[dm.lineDivider, { backgroundColor: '#FFFFFF' }]} />
+              {/* Steps */}
+              {stepsLoading ? (
+                <View style={[dm.stepRow, { justifyContent: 'center', gap: 10 }]}>
+                  <ActivityIndicator size="small" color={T.ACCENT ?? '#1ABC93'} />
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 13 }}>Loading directions…</Text>
                 </View>
-              )) : (
+              ) : steps.length > 0 ? (
+                steps.map((step, i) => {
+                  const { name: iconName, rotate } = maneuverIcon(step.maneuver);
+                  const dm_ = step.distanceMeters;
+                  const distLabel = dm_ >= 1609
+                    ? `${(dm_ / 1609.34).toFixed(1)} mi`
+                    : `${Math.round(dm_ * 3.281)} ft`;
+                  return (
+                    <View key={i}>
+                      <View style={dm.stepRow}>
+                        <View style={dm.stepIconSimple}>
+                          <Ionicons
+                            name={iconName}
+                            size={24}
+                            color={T.TEXT_PRI}
+                            style={{ transform: [{ rotate }] }}
+                          />
+                        </View>
+                        <View style={dm.stepContent}>
+                          <Text style={[dm.stepDist, { color: T.TEXT_PRI }]}>{distLabel}</Text>
+                          <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>{step.htmlInstruction || 'Continue'}</Text>
+                        </View>
+                      </View>
+                      <View style={[dm.lineDivider, { backgroundColor: T.DIVIDER ?? '#FFFFFF22' }]} />
+                    </View>
+                  );
+                })
+              ) : (
                 <View style={dm.stepRow}>
                   <View style={dm.stepContent}>
-                    <Text style={{ color: T.TEXT_MUT, fontSize: 13 }}>Loading directions…</Text>
+                    <Text style={{ color: T.TEXT_MUT, fontSize: 13 }}>
+                      {originLat && originLng && destLat && destLng
+                        ? 'No directions available for this route.'
+                        : 'Set origin and destination to see directions.'}
+                    </Text>
                   </View>
                 </View>
               )}
 
+              {/* Destination row */}
               <View style={[dm.stepRow, { paddingLeft: 8 }]}>
                 <View style={[dm.stepIcon, { backgroundColor: T.isDark ? '#1ABC9322' : '#EDE8FF' }]}>
                   <Ionicons name="location" size={20} color={T.ACCENT} />
@@ -597,8 +686,8 @@ function RouteDetailsModal({
                   <Text style={[dm.stepInst, { color: T.TEXT_MUT }]}>Destination</Text>
                 </View>
               </View>
-          </View>
-        </ScrollView>
+            </View>
+          </ScrollView>
 
         </View>
       </View>
@@ -818,7 +907,7 @@ export default function DirectionsScreen() {
     // Top route card ends at approx: insets.top + 10 (top) + 110 (card height) + 12 (gap)
     const cardBottom = insets.top + 132;
     const safeMax = windowHeight - cardBottom - 8;
-    const miniSnap = 46 + insets.bottom;
+    const miniSnap = 75;
     return [miniSnap, Math.round(windowHeight * 0.50), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
@@ -882,12 +971,22 @@ export default function DirectionsScreen() {
 
   // ── Traffic incidents — only shown when zoomed in enough ─────────────────
   const centerCoords = originCoords ?? destCoords;
-  const { incidents, loading: trafficLoading } = useTrafficIncidents({
+  const { incidents: rawIncidents, loading: trafficLoading } = useTrafficIncidents({
     lat: centerCoords?.lat ?? null,
     lng: centerCoords?.lng ?? null,
     radiusKm: 8,
     enabled: showTraffic,
   });
+  // Deduplicate incidents to prevent React key collisions
+  const incidents = React.useMemo(() => {
+    const seen = new Set<string>();
+    return rawIncidents.filter(inc => {
+      const key = inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [rawIncidents]);
   const incidentsVisible = mapLatDelta < 0.08;
 
   // Only fetch GPS location if no origin coords were passed from destination page
@@ -942,66 +1041,49 @@ export default function DirectionsScreen() {
           : { kind: 'arrive', hour: pickerHour, minute: pickerMin };
 
     try {
-      // Backend /maps/route does not apply avoid modifiers to Google; when user sets Avoid we must use Routes API from the client.
-      const [backendRes, driveGoogleRes, walkAlts, bikeAlts] = await Promise.allSettled([
-        getBackendRoutes({
-          origin: from,
-          destination: to,
-          travel_mode: 'DRIVE',
-          departure_hour: departureHour,
-        }),
-        getMultipleRoutes({
-          origin: from,
-          destination: to,
-          travel_mode: 'DRIVE',
-          avoid: currentAvoidSet,
-          timing,
-        }),
+      const [
+        backendDriveRes,
+        backendWalkRes,
+        backendBikeRes,
+        driveGoogleRes,
+        walkGoogleRes,
+        bikeGoogleRes,
+      ] = await Promise.allSettled([
+        getBackendRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', departure_hour: departureHour }),
+        getBackendRoutes({ origin: from, destination: to, travel_mode: 'WALK', departure_hour: departureHour }),
+        getBackendRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', departure_hour: departureHour }),
+        getMultipleRoutes({ origin: from, destination: to, travel_mode: 'DRIVE', avoid: currentAvoidSet, timing }),
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'WALK', timing }),
         getMultipleRoutes({ origin: from, destination: to, travel_mode: 'BICYCLE', timing }),
       ]);
 
-      const googleDriveOk =
-        driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0;
+      if (__DEV__) {
+        if (backendDriveRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(DRIVE) failed:', backendDriveRes.reason);
+        } else if (backendDriveRes.value.routes.length === 0) {
+          console.warn('[directions] getBackendRoutes(DRIVE) returned no routes.');
+        } else {
+          const hasScore = backendDriveRes.value.routes.some(r => r.safety_score != null);
+          if (!hasScore) {
+            console.warn('[directions] Backend DRIVE routes have no safety_score — check server risk_map (GCS / intersection_scores.parquet).');
+          }
+        }
+      }
 
-      // DRIVE: prefer client Routes API when Avoid is on (tolls / highways / ferries).
+      // DRIVE: when Avoid is set use Google directly (backend doesn't apply avoid modifiers);
+      // otherwise prefer SafeWay backend (safety scores + A*), fall back to Google.
+      const googleDriveOk = driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0;
+
       if (hasAvoid && googleDriveOk) {
+        // Avoid filters active — use Google Routes API result directly (no safety scores in this path)
         const alts = driveGoogleRes.value;
         const primary = alts[0];
         nd.DRIVE = {
-          primary: {
-            coords: primary.coords,
-            distance: primary.distance,
-            durationSecs: primary.durationSecs,
-          },
+          primary: { coords: primary.coords, distance: primary.distance, durationSecs: primary.durationSecs },
           alternatives: alts,
         };
-      } else if (backendRes.status === 'fulfilled' && backendRes.value.routes.length > 0) {
-        const safetyRoutes = backendRes.value.routes;
-        const alts = safetyRoutes.map((r: SafetyRoute, i: number) => {
-          const durationSecs = parseInt((r.duration ?? '0s').replace('s', ''), 10);
-          return {
-            index: i,
-            coords: r.coordinates,
-            distance: r.distance_meters ?? 0,
-            durationSecs,
-            label: r.route_source === 'safeway' ? '🛡️ SafeWay Route' : i === 0 ? 'Fastest Route' : `Route ${i + 1}`,
-            routeLabels: [r.route_source],
-            safetyScore: r.safety_score,
-            safetyLabel: r.safety_label,
-            routeSource: r.route_source,
-            riskPerKm: r.risk_per_km,
-            nHighRisk: r.n_high_risk,
-            routeKm: r.route_km,
-            topRiskFactors: r.top_risk_factors,
-            timeBand: r.time_band,
-            segmentRisks: r.segment_risks,
-            aadtAvg: r.aadt_avg,
-            aadtMax: r.aadt_max,
-            timePenaltyPct: r.time_penalty_pct,
-            riskReductionPct: r.risk_reduction_pct,
-          };
-        });
+      } else if (backendDriveRes.status === 'fulfilled' && backendDriveRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendDriveRes.value.routes);
         const primary = alts[0];
         nd.DRIVE = {
           primary: {
@@ -1009,15 +1091,17 @@ export default function DirectionsScreen() {
             safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
             riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
             topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
-            segmentRisks: primary.segmentRisks, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
             timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
           },
           alternatives: alts,
         };
       }
 
-      // Fallback: if backend failed or returned nothing, use Google direct for DRIVE
-      if (!nd.DRIVE && googleDriveOk) {
+      if (!nd.DRIVE && driveGoogleRes.status === 'fulfilled' && driveGoogleRes.value.length > 0) {
+        if (__DEV__) {
+          console.warn('[directions] Using Google-only DRIVE routes (no safety scores). Fix backend reachability or empty routes.');
+        }
         const alts = driveGoogleRes.value;
         nd.DRIVE = {
           primary: { coords: alts[0].coords, distance: alts[0].distance, durationSecs: alts[0].durationSecs },
@@ -1025,7 +1109,6 @@ export default function DirectionsScreen() {
         };
       }
 
-      // WALK & BICYCLE from Google
       const toModeRoutes = (res: PromiseSettledResult<AlternativeRoute[]>): ModeRoutes | undefined => {
         if (res.status !== 'fulfilled' || !res.value.length) return undefined;
         const alts = res.value;
@@ -1034,13 +1117,77 @@ export default function DirectionsScreen() {
           alternatives: alts,
         };
       };
-      const walk = toModeRoutes(walkAlts); if (walk) nd.WALK = walk;
-      const bike = toModeRoutes(bikeAlts); if (bike) nd.BICYCLE = bike;
+
+      // WALK: backend scored routes first, else Google
+      if (backendWalkRes.status === 'fulfilled' && backendWalkRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendWalkRes.value.routes);
+        const primary = alts[0];
+        nd.WALK = {
+          primary: {
+            coords: primary.coords, distance: primary.distance, durationSecs: primary.durationSecs,
+            safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
+            riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
+            topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
+          },
+          alternatives: alts,
+        };
+      } else {
+        if (__DEV__ && backendWalkRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(WALK) failed:', backendWalkRes.reason);
+        }
+        const walk = toModeRoutes(walkGoogleRes);
+        if (walk) nd.WALK = walk;
+      }
+
+      // BICYCLE: backend scored routes first, else Google
+      if (backendBikeRes.status === 'fulfilled' && backendBikeRes.value.routes.length > 0) {
+        const alts = mapSafetyRoutesToAlternatives(backendBikeRes.value.routes);
+        const primary = alts[0];
+        nd.BICYCLE = {
+          primary: {
+            coords: primary.coords, distance: primary.distance, durationSecs: primary.durationSecs,
+            safetyScore: primary.safetyScore, safetyLabel: primary.safetyLabel, routeSource: primary.routeSource,
+            riskPerKm: primary.riskPerKm, nHighRisk: primary.nHighRisk, routeKm: primary.routeKm,
+            topRiskFactors: primary.topRiskFactors, timeBand: primary.timeBand,
+            segmentRisks: primary.segmentRisks, highRiskCoords: primary.highRiskCoords, aadtAvg: primary.aadtAvg, aadtMax: primary.aadtMax,
+            timePenaltyPct: primary.timePenaltyPct, riskReductionPct: primary.riskReductionPct,
+          },
+          alternatives: alts,
+        };
+      } else {
+        if (__DEV__ && backendBikeRes.status === 'rejected') {
+          console.warn('[directions] getBackendRoutes(BICYCLE) failed:', backendBikeRes.reason);
+        }
+        const bike = toModeRoutes(bikeGoogleRes);
+        if (bike) nd.BICYCLE = bike;
+      }
 
       if (nd.DRIVE) {
-        const ds = nd.DRIVE.primary.durationSecs;
-        nd.BUS       = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.4) }, alternatives: [] };
-        nd.RIDESHARE = { primary: { ...nd.DRIVE.primary, durationSecs: Math.round(ds * 1.1) }, alternatives: [] };
+        const avoidMult = 1 + (avoidSet.has('tolls') ? 0.05 : 0) + (avoidSet.has('highways') ? 0.15 : 0);
+        const busFactor = 1.4 * avoidMult;
+        const rideFactor = 1.1 * avoidMult;
+        const driveAlts = nd.DRIVE.alternatives?.length
+          ? nd.DRIVE.alternatives
+          : [primaryToAlternativeRow(nd.DRIVE.primary)];
+
+        const scaleAlts = (factor: number) =>
+          driveAlts.map((alt) => {
+            const durationSecs = Math.round(alt.durationSecs * factor);
+            return { ...alt, durationSecs, label: fmtSecs(durationSecs) };
+          });
+
+        const busAlts = scaleAlts(busFactor);
+        const rideAlts = scaleAlts(rideFactor);
+        nd.BUS = {
+          primary: { ...nd.DRIVE.primary, durationSecs: busAlts[0].durationSecs },
+          alternatives: busAlts,
+        };
+        nd.RIDESHARE = {
+          primary: { ...nd.DRIVE.primary, durationSecs: rideAlts[0].durationSecs },
+          alternatives: rideAlts,
+        };
       }
       setRouteByMode(nd);
     } catch (e) {
@@ -1126,7 +1273,7 @@ export default function DirectionsScreen() {
   const wrapperStyle = useAnimatedStyle(() => ({
     left:   FLOAT_SIDE,
     right:  FLOAT_SIDE,
-    bottom: FLOAT_BOTTOM,
+    bottom: insets.bottom * 0.5 + FLOAT_BOTTOM,
   }));
 
   // Float buttons fixed top-right (not animated from bottom)
@@ -1141,7 +1288,8 @@ export default function DirectionsScreen() {
         safetyScore: selectedAlt.safetyScore, safetyLabel: selectedAlt.safetyLabel, routeSource: selectedAlt.routeSource,
         riskPerKm: selectedAlt.riskPerKm, nHighRisk: selectedAlt.nHighRisk, routeKm: selectedAlt.routeKm,
         topRiskFactors: selectedAlt.topRiskFactors, timeBand: selectedAlt.timeBand,
-        segmentRisks: selectedAlt.segmentRisks, aadtAvg: selectedAlt.aadtAvg, aadtMax: selectedAlt.aadtMax,
+        segmentRisks: selectedAlt.segmentRisks, highRiskCoords: selectedAlt.highRiskCoords,
+        aadtAvg: selectedAlt.aadtAvg, aadtMax: selectedAlt.aadtMax,
         timePenaltyPct: selectedAlt.timePenaltyPct, riskReductionPct: selectedAlt.riskReductionPct,
       }
     : modeData?.primary ?? null;
@@ -1171,6 +1319,7 @@ export default function DirectionsScreen() {
         customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
         initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}
+        onRegionChange={(r) => setMapLatDelta(r.latitudeDelta)}
         onRegionChangeComplete={(r) => setMapLatDelta(r.latitudeDelta)}>
 
         {originCoords && (
@@ -1182,6 +1331,19 @@ export default function DirectionsScreen() {
         {alternatives.map((alt, i) => {
           if (!alt.coords?.length) return null;
           const isSelected = i === selectedRouteIndex;
+          const segs = alt.segmentRisks as any[] | undefined;
+          if (isSelected && segs?.length) {
+            return segs.map((seg: any, si: number) => (
+              <Polyline
+                key={`${travelMode}-alt-${i}-seg-${si}`}
+                coordinates={[seg.start, seg.end]}
+                strokeColor={seg.risk > 66 ? '#FF4444' : seg.risk > 33 ? '#FFA500' : '#1ABC93'}
+                strokeWidth={5}
+                tappable
+                onPress={() => setSelectedRouteIndex(i)}
+              />
+            ));
+          }
           return (
             <Polyline
               key={`${travelMode}-alt-${i}`}
@@ -1196,6 +1358,11 @@ export default function DirectionsScreen() {
         {alternatives.length === 0 && activeData?.coords?.length ? (
           <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
         ) : null}
+        {(alternatives[selectedRouteIndex]?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
+          <Marker key={`hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
+            <Text style={{ fontSize: 16 }}>⚠️</Text>
+          </Marker>
+        ))}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap points={crashPoints} opacity={0.72} radius={20}
             gradient={{ colors: ['#00E5FF', '#FFD600', '#FF1744'], startPoints: [0.1, 0.5, 1.0], colorMapSize: 256 }}
@@ -1203,17 +1370,19 @@ export default function DirectionsScreen() {
         )}
 
         {/* ── Live traffic incident bubbles — only visible when zoomed in ── */}
-        {showTraffic && incidentsVisible && incidents.map(inc => (
-          <Marker
-            key={inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`}
-            coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}
-            anchor={{ x: 0.5, y: 1.0 }}
-            tracksViewChanges={false}
-            onPress={() => setSelectedIncident(inc)}
-          >
-            <IncidentBubble incident={inc} />
-          </Marker>
-        ))}
+        {showTraffic && incidentsVisible && incidents.map((inc, idx) => {
+          const stableKey = inc.id
+            ? `inc-id-${inc.id}`
+            : `inc-pos-${inc.latitude.toFixed(6)}-${inc.longitude.toFixed(6)}-${inc.category}-${idx}`;
+          return (
+            <IncidentMarker
+              key={stableKey}
+              incident={inc}
+              latDelta={mapLatDelta}
+              onPress={() => setSelectedIncident(inc)}
+            />
+          );
+        })}
       </MapView>
 
       {/* ── Incident detail popup ── */}
@@ -1556,7 +1725,7 @@ export default function DirectionsScreen() {
       />
 
       {/* Outer: static float position. Inner: static overflow:hidden clip — never re-triggers */}
-      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom:FLOAT_BOTTOM, top:0 }}>
+      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom: (insets.bottom * 0.5 + FLOAT_BOTTOM), top:0 }}>
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow:'hidden', borderRadius:FLOAT_RADIUS }]}>
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
@@ -1637,7 +1806,7 @@ export default function DirectionsScreen() {
                 const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
                 const safetyColor = score == null ? '#7A8FA6'
                   : score < 33 ? '#1ABC93' : score < 66 ? '#FFA500' : '#FF4444';
-                // routeName kept for potential future use but not rendered — main label is fmtSecs(durationSecs)
+                // routeName used only for display — fmtSecs(durationSecs) is the primary label
 
                 return (
                   <Pressable
@@ -1653,7 +1822,9 @@ export default function DirectionsScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12, width: '100%' }}>
 
                   {/* Safety badge — green tint when safe, color-coded by score */}
-                    <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive]}>
+                    <View style={[styles.matchBadge, isSelected ? styles.matchBadgeActive : styles.matchBadgeInactive,
+                      !isSelected && safetyColor !== '#7A8FA6' ? { backgroundColor: safetyColor + '33' } : {}
+                    ]}>
                       {isSelected && isSafeWay ? (
                         <LinearGradient
                           colors={['#4FA8A0', '#71BB81']}
@@ -1689,12 +1860,17 @@ export default function DirectionsScreen() {
                         {/* Main label = travel time */}
                         <Text style={[styles.routeOptionTitle, { color: T.TEXT_PRI, fontSize: 22, fontWeight: '800' }]}>{fmtSecs(alt.durationSecs)}</Text>
                         {isSafeWay && (
-                          <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>SafeWay</Text>
+                          <View style={{ backgroundColor: '#1ABC9322', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="shield-checkmark" size={10} color="#1ABC93" />
+                            <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>Generated by SafeWay</Text>
                           </View>
                         )}
                       </View>
-                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>{fmtDist(alt.distance)}</Text>
+                      <Text style={[styles.routeOptionMeta, { color: T.TEXT_MUT }]}>
+                        {fmtDist(alt.distance)}
+                        {score != null ? `  •  Risk: ${Math.round(score)}` : ''}
+                        {alt.safetyLabel && alt.safetyLabel !== 'unknown' ? ` (${alt.safetyLabel})` : ''}
+                      </Text>
                       <Text style={[styles.routeOptionTraffic, { color: T.ACCENT }]}>
                         Arrive ~{arrivalFrom(alt.durationSecs)}
                         {alt.nHighRisk ? `  •  ${alt.nHighRisk} hot spots` : ''}

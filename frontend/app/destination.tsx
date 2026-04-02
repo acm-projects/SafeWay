@@ -64,7 +64,7 @@ const DARK_MAP_STYLE = [
 ];
 
 const FLOAT_SIDE   = 10;
-const FLOAT_BOTTOM = 14;
+const FLOAT_BOTTOM = 17;
 const FLOAT_RADIUS = 24;
 
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
@@ -116,7 +116,7 @@ export default function DestinationScreen() {
   const snapPoints = useMemo(() => {
     // Match directions: cap sheet so it never covers the top card + buttons
     const safeMax = windowHeight - (insets.top + 118) - 8;
-    const miniSnap = 70 + insets.bottom;
+    const miniSnap = 90;
     return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
@@ -260,7 +260,7 @@ export default function DestinationScreen() {
   const wrapperStyle = useAnimatedStyle(() => ({
     left:   FLOAT_SIDE,
     right:  FLOAT_SIDE,
-    bottom: FLOAT_BOTTOM,
+    bottom: insets.bottom * 0.5 + FLOAT_BOTTOM,
   }));
 
   const placeName = details?.name    ?? params.name    ?? 'Place';
@@ -585,7 +585,7 @@ export default function DestinationScreen() {
       </Modal>
 
       {/* Outer: static float position. Inner: static overflow:hidden clip — never re-triggers */}
-      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom:FLOAT_BOTTOM, top:0 }}>
+      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom: (insets.bottom * 0.5 + FLOAT_BOTTOM), top:0 }}>
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow:'hidden', borderRadius:FLOAT_RADIUS }]}>
       <BottomSheet
         ref={bottomSheetRef}

@@ -1,6 +1,5 @@
 import os
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -20,15 +19,7 @@ from supabase import Client, create_client
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-@asynccontextmanager
-async def lifespan(app):
-    """Load risk caches at startup so scores are ready before first request."""
-    from risk_cache import startup_load
-    startup_load()
-    yield
-
-
-app = FastAPI(title="SafeWay API", lifespan=lifespan)
+app = FastAPI(title="SafeWay API")
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +400,10 @@ def compute_route(payload: RouteRequest):
     _check_and_increment_api_limit()
     google_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not google_key:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Missing GOOGLE_MAPS_API_KEY")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Missing GOOGLE_MAPS_API_KEY",
+        )
 
     url = "https://routes.googleapis.com/directions/v2:computeRoutes"
     headers = {
@@ -428,7 +422,10 @@ def compute_route(payload: RouteRequest):
         },
         "destination": {
             "location": {
-                "latLng": {"latitude": payload.destination.lat, "longitude": payload.destination.lng}
+                "latLng": {
+                    "latitude": payload.destination.lat,
+                    "longitude": payload.destination.lng,
+                }
             }
         },
         "travelMode": payload.travel_mode,
@@ -446,20 +443,32 @@ def compute_route(payload: RouteRequest):
 
     raw_routes = response.json().get("routes", [])
     if not raw_routes:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No routes found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No routes found"
+        )
+
+    # ── Try to import safety scorer once; if it fails (missing deps on this
+    #    container revision) we still return routes with safety_score=null. ──
+    _score_fn = None
+    try:
+        from backend.risk_cache import score_coordinates as _score_fn  # type: ignore
+    except ImportError:
+        try:
+            from risk_cache import score_coordinates as _score_fn  # type: ignore
+        except Exception as e:
+            print(f"[route] risk_cache unavailable ({e}), returning unscoredroutes", flush=True)
 
     result_routes = []
-    try:
-        from risk_cache import score_coordinates
-        for route in raw_routes:
-            polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
-            coordinates = decode_polyline(polyline) if polyline else []
-            safety_score = None
-            safety_label = "unknown"
-            extra = {}
+    for route in raw_routes:
+        polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
+        coordinates = decode_polyline(polyline) if polyline else []
+        safety_score = None
+        safety_label = "unknown"
+        extra: dict = {}
+
+        if _score_fn is not None:
             try:
-                
-                safety = score_coordinates(
+                safety = _score_fn(
                     coordinates,
                     sample_every=5,
                     departure_hour=payload.departure_hour,
@@ -468,91 +477,58 @@ def compute_route(payload: RouteRequest):
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
                 extra = {
-                    "risk_per_km": safety.get("risk_per_km"),
-                    "total_exposure": safety.get("total_exposure"),
-                    "route_km": safety.get("route_km"),
-                    "n_high_risk": safety.get("n_high_risk", 0),
+                    "risk_per_km":      safety.get("risk_per_km"),
+                    "total_exposure":   safety.get("total_exposure"),
+                    "route_km":         safety.get("route_km"),
+                    "n_high_risk":      safety.get("n_high_risk", 0),
                     "top_risk_factors": safety.get("top_risk_factors", []),
-                    "time_band": safety.get("time_band"),
-                    "segment_risks": safety.get("segment_risks", []),
+                    "time_band":        safety.get("time_band"),
+                    "segment_risks":    safety.get("segment_risks", []),
+                    "high_risk_coords": safety.get("high_risk_coords", []),
+                    "aadt_avg":         safety.get("aadt_avg"),
+                    "aadt_max":         safety.get("aadt_max"),
                 }
             except Exception as score_err:
-                print(f"[route] score_coordinates failed for route: {score_err}", flush=True)
-            result_routes.append({
-                "distance_meters": route.get("distanceMeters"),
-                "duration": route.get("duration"),
-                "polyline": polyline,
-                "coordinates": coordinates,
-                "safety_score": safety_score,
-                "safety_label": safety_label,
-                "route_source": "google",
-                **extra,
-            })
-    except Exception as e:
-        print(f"[route] safety scoring skipped: {e}")
-        for route in raw_routes:
-            polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
-            coordinates = decode_polyline(polyline) if polyline else []
-            result_routes.append({
-                "distance_meters": route.get("distanceMeters"),
-                "duration": route.get("duration"),
-                "polyline": polyline,
-                "coordinates": coordinates,
-                "safety_score": None,
-                "safety_label": "unknown",
-                "route_source": "google",
-            })
+                print(f"[route] score_coordinates failed: {score_err}", flush=True)
 
-    # ── SafeWay A* safer route ──────────────────────────────────────────
+        result_routes.append({
+            "distance_meters": route.get("distanceMeters"),
+            "duration":        route.get("duration"),
+            "polyline":        polyline,
+            "coordinates":     coordinates,
+            "safety_score":    safety_score,
+            "safety_label":    safety_label,
+            "route_source":    "google",
+            **extra,
+        })
+
+    # ── SafeWay A* safer route ─────────────────────────────────────────────
+    # Wrapped so that any import / computation error never 500s the endpoint.
     try:
-        from risk_cache import get_prepared_graph, score_coordinates as sc
-        from model.route_scoring import find_safer_route, path_to_coordinates, encode_polyline, estimate_route_aadt
-        import osmnx as ox
+        try:
+            from backend.astar_route import compute_astar_route  # type: ignore
+        except ImportError:
+            from astar_route import compute_astar_route  # type: ignore
 
-        G = get_prepared_graph()
-        orig_node = ox.distance.nearest_nodes(G, X=payload.origin.lng, Y=payload.origin.lat)
-        dest_node = ox.distance.nearest_nodes(G, X=payload.destination.lng, Y=payload.destination.lat)
-
-        if orig_node != dest_node:
-            astar = find_safer_route(G, orig_node, dest_node, beta=0.5)
-            safe_coords = path_to_coordinates(G, astar["safe_path"])
-
-            if len(safe_coords) >= 2:
-                safe_polyline = encode_polyline(safe_coords)
-                safe_safety = sc(safe_coords, sample_every=3, departure_hour=payload.departure_hour)
-
-                # Duration as Google-format string (e.g. "600s")
-                safe_duration = f"{astar['safe_time_secs']}s"
-
-                aadt = estimate_route_aadt(G, astar["safe_path"])
-                result_routes.append({
-                    "distance_meters": astar["safe_distance_m"],
-                    "duration": safe_duration,
-                    "polyline": safe_polyline,
-                    "coordinates": safe_coords,
-                    "safety_score": safe_safety.get("score"),
-                    "safety_label": safe_safety.get("label", "unknown"),
-                    "route_source": "safeway",
-                    "risk_per_km": safe_safety.get("risk_per_km"),
-                    "total_exposure": safe_safety.get("total_exposure"),
-                    "route_km": safe_safety.get("route_km"),
-                    "n_high_risk": safe_safety.get("n_high_risk", 0),
-                    "top_risk_factors": safe_safety.get("top_risk_factors", []),
-                    "time_band": safe_safety.get("time_band"),
-                    "segment_risks": safe_safety.get("segment_risks", []),
-                    "time_penalty_pct": astar["time_penalty_pct"],
-                    "risk_reduction_pct": astar["risk_reduction_pct"],
-                    "aadt_avg": aadt.get("aadt_avg"),
-                    "aadt_max": aadt.get("aadt_max"),
-                })
-    except Exception as e:
-        print(f"[route] SafeWay A* route skipped: {e}", flush=True)
+        astar_result = compute_astar_route(
+            payload.origin.lat,
+            payload.origin.lng,
+            payload.destination.lat,
+            payload.destination.lng,
+            departure_hour=payload.departure_hour,
+        )
+        if astar_result:
+            result_routes.append(astar_result)
+    except Exception as astar_err:
+        print(f"[route] astar skipped: {astar_err}", flush=True)
 
     # Sort: SafeWay route first, then by safety score ascending (safest first)
-    result_routes.sort(key=lambda r: (
-        0 if r.get("route_source") == "safeway" else 1,
-        r.get("safety_score") if r.get("safety_score") is not None else 999,
-    ))
+    result_routes.sort(
+        key=lambda r: (
+            0 if r.get("route_source") == "safeway" else 1,
+            r.get("safety_score") if r.get("safety_score") is not None else 999,
+        )
+    )
 
     return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
@@ -572,6 +548,7 @@ def tomtom_usage():
         "remaining": max(0, TOMTOM_DAILY_LIMIT - _tomtom_call_count),
     }
 
+@app.get("/maps/usage-google")
 def api_usage():
     """Check how many Google API calls remain today."""
     global _api_call_count, _api_call_date
@@ -1119,10 +1096,12 @@ def get_traffic_incidents(
         if time.time() - cached_at < TRAFFIC_CACHE_TTL:
             return data
         
-    _check_and_increment_tomtom_limit()
     tomtom_key = os.getenv("TOMTOM_API_KEY")
     if not tomtom_key:
-        raise HTTPException(status_code=500, detail="Missing TOMTOM_API_KEY in backend .env")
+        # Return empty incidents gracefully instead of 500-ing the frontend
+        return {"incidents": [], "total": 0, "bbox": "", "cached": False}
+
+    _check_and_increment_tomtom_limit()
 
     # Calculate bounding box from center + radius
     lat_delta = radius_km / 111.0
@@ -1185,6 +1164,8 @@ def get_traffic_incidents(
     
         try:
             gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+            if gcs_key:
+                gcs_key = gcs_key.strip(' \t').strip("'\"")
             if gcs_key and os.path.isfile(gcs_key):
                 import gcsfs
                 import json as json_lib
@@ -1204,6 +1185,3 @@ def get_traffic_incidents(
 
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Traffic fetch failed: {e}")
-
-
-

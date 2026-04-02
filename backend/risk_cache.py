@@ -1,9 +1,10 @@
 """
-Risk map, SHAP factors, and time-of-day multipliers for route safety scoring.
-Loads from GCS (preferred, nightly-updated) or local files (fallback).
+Lazy-loaded risk map, SHAP factors, and time-of-day multipliers for route safety scoring.
+Loads from GCS intersection_scores.parquet (preferred) or Supabase (fallback).
 Phase E: Distance-weighted route scoring (risk-per-km, not mean).
 Phase F: Per-node SHAP top-3 risk factors, aggregated to route level.
 Phase G: Time-of-day multipliers applied at query time.
+Mode-aware: WALK / BICYCLE / DRIVE weight ped/bike/crime/lighting/speed differently.
 """
 from __future__ import annotations
 
@@ -24,44 +25,45 @@ _shap_map: Optional[dict[str, list[dict]]] = None
 _tod_map: Optional[dict[str, dict[str, float]]] = None
 _graph = None
 _prepared_graph = None  # Graph with risk scores + edge costs attached
-_cache_loaded_at: float = 0.0
+_cache_loaded_at: float = 0.0  # Unix timestamp when caches were last loaded
+
+CACHE_TTL_SECONDS = 6 * 3600  # 6 hours - auto-refresh after nightly retrain
+PAGE_SIZE = 1000
 
 
 def _get_gcs_fs():
     """Create a GCSFileSystem using local key file or Cloud Run default credentials."""
     import gcsfs
     gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+    # python-dotenv preserves surrounding quotes in values like:
+    #   GCS_CREDENTIALS_PATH='/path/to/file.json'
+    # Strip them so os.path.isfile() works correctly.
+    if gcs_key:
+        gcs_key = gcs_key.strip(' \t').strip("'\"")
     if gcs_key and os.path.isfile(gcs_key):
         return gcsfs.GCSFileSystem(token=gcs_key)
+    # On Cloud Run, use the attached service account (Application Default Credentials)
     try:
         return gcsfs.GCSFileSystem(token="cloud")
     except Exception:
-        return gcsfs.GCSFileSystem()
+        return gcsfs.GCSFileSystem()  # anonymous / ADC fallback
 
 
-def startup_load():
-    """Eagerly load all caches at API startup so scores are ready before first request."""
-    t0 = time.perf_counter()
-    print("[startup] loading risk caches...", flush=True)
-    rm = get_risk_map()
-    sm = get_shap_map()
-    tm = get_tod_map()
-    try:
-        pg = get_prepared_graph()
-        print(f"[startup] graph ready: {pg.number_of_nodes()} nodes, {pg.number_of_edges()} edges", flush=True)
-    except Exception as e:
-        print(f"[startup] graph load failed (A* routes unavailable): {e}", flush=True)
-    elapsed = time.perf_counter() - t0
-    print(f"[startup] caches loaded in {elapsed:.1f}s — risk_map={len(rm)}, shap={len(sm)}, tod={len(tm)}", flush=True)
+def _cache_is_stale() -> bool:
+    """Check if cache is older than CACHE_TTL_SECONDS."""
+    if _cache_loaded_at == 0.0:
+        return False  # Not loaded yet, let normal lazy-load handle it
+    return (time.time() - _cache_loaded_at) > CACHE_TTL_SECONDS
 
 
 def refresh_cache() -> dict:
-    """Force-reload all caches from GCS. Called by /admin/refresh-cache after nightly retrain."""
+    """Force-reload all caches from GCS. Called by /admin/refresh-cache or TTL expiry."""
     global _risk_map, _shap_map, _tod_map, _prepared_graph, _cache_loaded_at
     _risk_map = None
     _shap_map = None
     _tod_map = None
     _prepared_graph = None
+    # Trigger reload
     rm = get_risk_map()
     sm = get_shap_map()
     tm = get_tod_map()
@@ -79,58 +81,110 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-# ---------------------------------------------------------------------------
-# Loaders: GCS first → local fallback
-# ---------------------------------------------------------------------------
-
 def get_risk_map() -> dict[str, float]:
-    """Return dict of node_id -> predicted_risk (0-100). GCS first, local fallback."""
+    """Return cached dict of node_id -> predicted_risk (0-100)."""
     global _risk_map, _cache_loaded_at
-    if _risk_map is not None:
+    if _risk_map is not None and not _cache_is_stale():
         return _risk_map
+    if _cache_is_stale():
+        global _shap_map, _tod_map, _prepared_graph
+        print("[risk_cache] TTL expired, reloading all caches from source", flush=True)
+        _risk_map = None
+        _shap_map = None
+        _tod_map = None
+        _prepared_graph = None
 
-    # Try GCS first (freshest data from nightly pipeline)
-    try:
-        import pandas as pd
-        fs = _get_gcs_fs()
-        with fs.open("safeway-data/intersection_scores.parquet", "rb") as f:
-            scores = pd.read_parquet(f)
-        _risk_map = dict(zip(scores["node_id"].astype(str), scores["predicted_risk"].fillna(0).astype(float)))
-        _cache_loaded_at = time.time()
-        print(f"[risk_cache] loaded {len(_risk_map)} nodes from GCS", flush=True)
-        return _risk_map
-    except Exception as e:
-        print(f"[risk_cache] GCS risk_map load failed ({e}), trying local file", flush=True)
-
-    # Fallback: local file (bundled in Docker image)
+    # Try local file first (bundled in Docker image from training output)
     local_path = OUTPUT_DIR / "intersection_scores.parquet"
     if local_path.exists():
         try:
             import pandas as pd
             scores = pd.read_parquet(local_path)
-            _risk_map = dict(zip(scores["node_id"].astype(str), scores["predicted_risk"].fillna(0).astype(float)))
+            _risk_map = dict(
+                zip(scores["node_id"].astype(str), scores["predicted_risk"].fillna(0).astype(float))
+            )
             _cache_loaded_at = time.time()
             print(f"[risk_cache] loaded {len(_risk_map)} nodes from local file", flush=True)
             return _risk_map
         except Exception as e:
-            print(f"[risk_cache] local risk_map load failed ({e})", flush=True)
+            print(f"[risk_cache] local parquet load failed ({e}), trying GCS", flush=True)
 
-    print("[risk_cache] WARNING: no risk data loaded from any source", flush=True)
-    _risk_map = {}
+    # Try GCS (local key file or Cloud Run default credentials)
+    try:
+        import pandas as pd
+        fs = _get_gcs_fs()
+        with fs.open("safeway-data/intersection_scores.parquet", "rb") as f:
+            scores = pd.read_parquet(f)
+        _risk_map = dict(
+            zip(scores["node_id"].astype(str), scores["predicted_risk"].fillna(0).astype(float))
+        )
+        _cache_loaded_at = time.time()
+        print(f"[risk_cache] loaded {len(_risk_map)} nodes from GCS", flush=True)
+        return _risk_map
+    except Exception as e:
+        print(f"[risk_cache] GCS load failed ({e}), falling back to Supabase", flush=True)
+
+    # Fallback: Supabase
+    from supabase import create_client
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    if not url or not key:
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY")
+    client = create_client(url, key)
+
+    risk_map: dict[str, float] = {}
+    last_id = None
+    t0 = time.perf_counter()
+    while True:
+        q = (
+            client.table("intersection_safety")
+            .select("node_id,predicted_risk")
+            .order("node_id")
+            .limit(PAGE_SIZE)
+        )
+        if last_id is not None:
+            q = q.gt("node_id", last_id)
+        rows = q.execute().data or []
+        if not rows:
+            break
+        for r in rows:
+            risk_map[str(r["node_id"])] = float(r.get("predicted_risk") or 0)
+        last_id = rows[-1]["node_id"]
+        if len(rows) < PAGE_SIZE:
+            break
+    elapsed = time.perf_counter() - t0
+    print(f"[risk_cache] loaded {len(risk_map)} nodes from Supabase in {elapsed:.1f}s", flush=True)
+    _risk_map = risk_map
+    _cache_loaded_at = time.time()
     return _risk_map
 
 
 def get_shap_map() -> dict[str, list[dict]]:
-    """Return SHAP top-3 factors per node_id. GCS first, local fallback."""
+    """Return cached SHAP top-3 factors per node_id."""
     global _shap_map
-    if _shap_map is not None:
+    if _shap_map is not None and not _cache_is_stale():
+        return _shap_map
+    if _cache_is_stale():
+        print("[risk_cache] TTL expired, reloading shap_map from source", flush=True)
+        _shap_map = None
+
+    # Try local file first, then GCS
+    local_path = OUTPUT_DIR / "shap_top3.pkl"
+    if local_path.exists():
+        import joblib
+        _shap_map = joblib.load(local_path)
+        print(f"[risk_cache] loaded SHAP factors for {len(_shap_map)} nodes (local)", flush=True)
         return _shap_map
 
-    # Try GCS first
     try:
         import joblib
         fs = _get_gcs_fs()
@@ -138,64 +192,54 @@ def get_shap_map() -> dict[str, list[dict]]:
             _shap_map = joblib.load(f)
         print(f"[risk_cache] loaded SHAP factors for {len(_shap_map)} nodes (GCS)", flush=True)
         return _shap_map
-    except Exception as e:
-        print(f"[risk_cache] GCS shap_map load failed ({e}), trying local file", flush=True)
-
-    # Fallback: local file
-    local_path = OUTPUT_DIR / "shap_top3.pkl"
-    if local_path.exists():
-        try:
-            import joblib
-            _shap_map = joblib.load(local_path)
-            print(f"[risk_cache] loaded SHAP factors for {len(_shap_map)} nodes (local)", flush=True)
-            return _shap_map
-        except Exception as e:
-            print(f"[risk_cache] local shap_map load failed ({e})", flush=True)
+    except Exception:
+        pass
 
     _shap_map = {}
     return _shap_map
 
 
 def get_tod_map() -> dict[str, dict[str, float]]:
-    """Return time-of-day multipliers per node_id. GCS first, local fallback."""
+    """Return cached time-of-day multipliers per node_id."""
     global _tod_map
-    if _tod_map is not None:
+    if _tod_map is not None and not _cache_is_stale():
         return _tod_map
+    if _cache_is_stale():
+        print("[risk_cache] TTL expired, reloading tod_map from source", flush=True)
+        _tod_map = None
 
-    def _parse_tod_df(tod_df):
-        result = {}
+    local_path = OUTPUT_DIR / "hourly_risk_factors.parquet"
+    if local_path.exists():
+        import pandas as pd
+        tod_df = pd.read_parquet(local_path)
+        _tod_map = {}
         for _, row in tod_df.iterrows():
-            result[str(row["node_id"])] = {
+            _tod_map[str(row["node_id"])] = {
                 "night": float(row.get("night_multiplier", 1.0)),
                 "morning": float(row.get("morning_multiplier", 1.0)),
                 "midday": float(row.get("midday_multiplier", 1.0)),
                 "evening": float(row.get("evening_multiplier", 1.0)),
             }
-        return result
+        print(f"[risk_cache] loaded time-of-day multipliers for {len(_tod_map)} nodes", flush=True)
+        return _tod_map
 
-    # Try GCS first
     try:
         import pandas as pd
         fs = _get_gcs_fs()
         with fs.open("safeway-data/hourly_risk_factors.parquet", "rb") as f:
             tod_df = pd.read_parquet(f)
-        _tod_map = _parse_tod_df(tod_df)
+        _tod_map = {}
+        for _, row in tod_df.iterrows():
+            _tod_map[str(row["node_id"])] = {
+                "night": float(row.get("night_multiplier", 1.0)),
+                "morning": float(row.get("morning_multiplier", 1.0)),
+                "midday": float(row.get("midday_multiplier", 1.0)),
+                "evening": float(row.get("evening_multiplier", 1.0)),
+            }
         print(f"[risk_cache] loaded time-of-day multipliers for {len(_tod_map)} nodes (GCS)", flush=True)
         return _tod_map
-    except Exception as e:
-        print(f"[risk_cache] GCS tod_map load failed ({e}), trying local file", flush=True)
-
-    # Fallback: local file
-    local_path = OUTPUT_DIR / "hourly_risk_factors.parquet"
-    if local_path.exists():
-        try:
-            import pandas as pd
-            tod_df = pd.read_parquet(local_path)
-            _tod_map = _parse_tod_df(tod_df)
-            print(f"[risk_cache] loaded time-of-day multipliers for {len(_tod_map)} nodes (local)", flush=True)
-            return _tod_map
-        except Exception as e:
-            print(f"[risk_cache] local tod_map load failed ({e})", flush=True)
+    except Exception:
+        pass
 
     _tod_map = {}
     return _tod_map
@@ -211,20 +255,26 @@ def _hour_to_band(hour: int) -> str:
     return "evening"
 
 
-# ---------------------------------------------------------------------------
-# Graph loading: OSMnx directly
-# ---------------------------------------------------------------------------
-
 def get_graph():
-    """Return cached OSMnx graph G (downloaded from OSM on first call)."""
+    """Return cached OSMnx graph G."""
     global _graph
     if _graph is not None:
         return _graph
+
+    # Try local cached GraphML first (bundled in Docker image)
+    local_graphml = OUTPUT_DIR / "chicago_drive.graphml"
+    if local_graphml.exists():
+        import osmnx as ox
+        _graph = ox.load_graphml(local_graphml)
+        print(f"[risk_cache] loaded graph from local file ({_graph.number_of_nodes()} nodes)", flush=True)
+        return _graph
+
+    # Fallback: download from OSM (slow, for local dev without cached file)
+    print("[risk_cache] no local GraphML, downloading from OSM...", flush=True)
     import sys
     backend_dir = str(Path(__file__).resolve().parent)
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
-    print("[risk_cache] downloading Chicago street network from OSM...", flush=True)
     from model.data.intersections import get_chicago_intersections
     _, _graph = get_chicago_intersections()
     return _graph
@@ -248,14 +298,16 @@ def get_prepared_graph():
     attach_risk_to_graph(G, risk_map)
     compute_edge_costs(G, alpha=1.0, beta=0.5)
     _prepared_graph = G
-    print(f"[risk_cache] prepared graph with {G.number_of_nodes()} nodes, {G.number_of_edges()} edges", flush=True)
+    print(
+        f"[risk_cache] prepared graph with {G.number_of_nodes()} nodes, {G.number_of_edges()} edges",
+        flush=True,
+    )
     return _prepared_graph
 
 
 # ---------------------------------------------------------------------------
-# Route scoring
-# ---------------------------------------------------------------------------
 # Mode-specific risk weights
+# ---------------------------------------------------------------------------
 MODE_WEIGHTS = {
     "DRIVE": {
         "base_risk": 1.0,
@@ -267,19 +319,19 @@ MODE_WEIGHTS = {
     },
     "WALK": {
         "base_risk": 1.0,
-        "ped_multiplier": 3.0,      # pedestrian crashes matter much more
+        "ped_multiplier": 3.0,       # pedestrian crashes matter much more
         "bike_multiplier": 0.5,
-        "crime_multiplier": 2.0,    # crime matters much more for walkers
-        "lighting_multiplier": 2.0, # lighting matters much more at night
-        "speed_multiplier": 1.5,    # high speed roads are dangerous for walkers
+        "crime_multiplier": 2.0,     # crime matters much more for walkers
+        "lighting_multiplier": 2.0,  # lighting matters much more at night
+        "speed_multiplier": 1.5,     # high-speed roads are dangerous for walkers
     },
     "BICYCLE": {
         "base_risk": 1.0,
         "ped_multiplier": 0.5,
-        "bike_multiplier": 3.0,     # bike crashes matter much more
+        "bike_multiplier": 3.0,      # bike crashes matter much more
         "crime_multiplier": 1.0,
         "lighting_multiplier": 1.5,
-        "speed_multiplier": 2.0,    # high speed roads are very dangerous for cyclists
+        "speed_multiplier": 2.0,     # high-speed roads are very dangerous for cyclists
     },
     "TWO_WHEELER": {
         "base_risk": 1.0,
@@ -291,18 +343,16 @@ MODE_WEIGHTS = {
     },
 }
 
-
-def get_node_risk_for_mode(node_id: str, risk_map: dict, travel_mode: str = "DRIVE") -> float:
-    """
-    Get risk score for a node adjusted for travel mode.
-    Uses base predicted_risk from model and applies mode-specific multipliers.
-    """
-    base_risk = risk_map.get(node_id, 0.0)
-    weights = MODE_WEIGHTS.get(travel_mode, MODE_WEIGHTS["DRIVE"])
-    # Apply base multiplier — for now use base risk directly
-    # Future: pull per-node ped/bike/crime proportions and weight them
-    adjusted = base_risk * weights["base_risk"]
-    return min(100.0, adjusted)
+# Road-class to AADT proxy (vehicles/day)
+_ROAD_CLASS = {
+    "residential": 1, "living_street": 1, "unclassified": 1,
+    "tertiary": 2, "tertiary_link": 2,
+    "secondary": 3, "secondary_link": 3,
+    "primary": 4, "primary_link": 4,
+    "trunk": 5, "trunk_link": 5,
+    "motorway": 6, "motorway_link": 6,
+}
+_AADT_PROXY = {1: 1_000, 2: 5_000, 3: 15_000, 4: 25_000, 5: 40_000, 6: 60_000}
 
 
 def score_coordinates(
@@ -317,14 +367,16 @@ def score_coordinates(
     Phase G: Apply time-of-day multipliers.
     Mode-aware: applies different risk weights for WALK, BICYCLE, DRIVE.
 
-    Returns:
-      score: risk-per-km (0-100, percentile-normalized), comparable across routes
-      total_exposure: absolute cumulative risk x distance
-      route_km: total route distance
-      n_high_risk: count of nodes with risk > 66th percentile
-      top_risk_factors: aggregated SHAP factors across route (Phase F)
-      time_band: which time band was applied (Phase G)
-      travel_mode: mode used for scoring
+    Args:
+        coordinates:    List of {"latitude": float, "longitude": float} dicts.
+        sample_every:   Sample every Nth point to reduce OSMnx lookup cost.
+        departure_hour: 0-23 hour for time-of-day band (None = use current UTC hour).
+        travel_mode:    "DRIVE" | "WALK" | "BICYCLE" | "TWO_WHEELER"
+
+    Returns dict with keys:
+        score, label, risk_sum, n_scored, total_exposure, route_km,
+        risk_per_km, n_high_risk, top_risk_factors, time_band,
+        segment_risks, high_risk_coords, aadt_avg, aadt_max, travel_mode
     """
     import osmnx as ox
     from datetime import datetime, timezone
@@ -335,9 +387,20 @@ def score_coordinates(
     G = get_graph()
 
     empty = {
-        "score": None, "label": "unknown", "risk_sum": 0, "n_scored": 0,
-        "total_exposure": 0, "route_km": 0, "n_high_risk": 0,
-        "risk_per_km": None, "top_risk_factors": [], "time_band": None,
+        "score": None,
+        "label": "unknown",
+        "risk_sum": 0,
+        "n_scored": 0,
+        "total_exposure": 0,
+        "route_km": 0,
+        "n_high_risk": 0,
+        "risk_per_km": None,
+        "top_risk_factors": [],
+        "time_band": None,
+        "segment_risks": [],
+        "high_risk_coords": [],
+        "aadt_avg": None,
+        "aadt_max": None,
         "travel_mode": travel_mode,
     }
 
@@ -356,145 +419,32 @@ def score_coordinates(
     except Exception:
         return empty
 
-    # Determine time band
+    # ── Phase G: Determine time band ─────────────────────────────────────────
     if departure_hour is None:
         departure_hour = datetime.now(timezone.utc).hour
     time_band = _hour_to_band(departure_hour)
 
-    # Mode weights
+    # ── Mode weights ──────────────────────────────────────────────────────────
     weights = MODE_WEIGHTS.get(travel_mode, MODE_WEIGHTS["DRIVE"])
 
-    # Apply time-of-day multiplier and mode weights to each node's risk
-    risks = []
+    # ── Per-node risk with ToD multiplier + mode weights ──────────────────────
+    risks: list[float] = []
     for nid in nearest:
         nid_str = str(nid)
         base_risk = risk_map.get(nid_str, 0.0)
         tod_mult = tod_map.get(nid_str, {}).get(time_band, 1.0)
 
-        # For walking/cycling, boost lighting multiplier at night
+        # Extra lighting penalty for walkers/cyclists at night
         if travel_mode in ("WALK", "BICYCLE") and time_band == "night":
             tod_mult *= weights["lighting_multiplier"]
 
-        # Apply mode base weight
-        adjusted_risk = base_risk * tod_mult * weights["base_risk"]
-        risks.append(min(100.0, adjusted_risk))
+        adjusted = base_risk * tod_mult * weights["base_risk"]
+        risks.append(min(100.0, adjusted))
 
     if not risks:
         return empty
 
-    # Phase E: Distance-weighted scoring
-    total_risk_km = 0.0
-    total_km = 0.0
-    for i in range(len(sampled) - 1):
-        seg_km = _haversine_km(lats[i], lngs[i], lats[i + 1], lngs[i + 1])
-        seg_risk = (risks[i] + risks[i + 1]) / 2.0
-        total_risk_km += seg_risk * seg_km
-        total_km += seg_km
-
-    if total_km < 0.001:
-        total_km = 0.001
-        total_risk_km = risks[0] * total_km
-
-    risk_per_km = total_risk_km / total_km
-    score = round(min(100.0, risk_per_km), 2)
-    n_high_risk = sum(1 for r in risks if r > 66)
-
-    if score < 33:
-        label = "low"
-    elif score < 66:
-        label = "medium"
-    else:
-        label = "high"
-
-    # Phase F: Aggregate SHAP factors across route nodes
-    factor_counts: dict[str, dict] = {}
-    for nid in nearest:
-        factors = shap_map.get(str(nid), [])
-        for f in factors:
-            key = f["label"]
-            if key not in factor_counts:
-                factor_counts[key] = {"label": key, "feature": f["feature"], "count": 0, "total_shap": 0.0}
-            factor_counts[key]["count"] += 1
-            factor_counts[key]["total_shap"] += abs(f.get("shap", 0))
-
-    top_factors = sorted(factor_counts.values(), key=lambda x: x["count"], reverse=True)[:5]
-    top_risk_factors = [
-        {"label": f["label"], "count": f["count"], "pct": round(100 * f["count"] / len(nearest), 1)}
-        for f in top_factors
-    ]
-
-    return {
-        "score": score,
-        "label": label,
-        "risk_sum": round(sum(risks), 2),
-        "n_scored": len(risks),
-        "total_exposure": round(total_risk_km, 2),
-        "route_km": round(total_km, 2),
-        "risk_per_km": round(risk_per_km, 2),
-        "n_high_risk": n_high_risk,
-        "top_risk_factors": top_risk_factors,
-        "time_band": time_band,
-        "travel_mode": travel_mode,
-    }
-    """
-    Phase E: Distance-weighted route scoring.
-    Phase F: Aggregate SHAP risk factors across route.
-    Phase G: Apply time-of-day multipliers.
-
-    Returns:
-      score: risk-per-km (0-100, percentile-normalized), comparable across routes
-      total_exposure: absolute cumulative risk x distance
-      route_km: total route distance
-      n_high_risk: count of nodes with risk > 66th percentile
-      top_risk_factors: aggregated SHAP factors across route (Phase F)
-      time_band: which time band was applied (Phase G)
-    """
-    import osmnx as ox
-    from datetime import datetime, timezone
-
-    risk_map = get_risk_map()
-    shap_map = get_shap_map()
-    tod_map = get_tod_map()
-    G = get_graph()
-
-    empty = {
-        "score": None, "label": "unknown", "risk_sum": 0, "n_scored": 0,
-        "total_exposure": 0, "route_km": 0, "n_high_risk": 0,
-        "risk_per_km": None, "top_risk_factors": [], "time_band": None,
-    }
-
-    if not coordinates or not risk_map:
-        return empty
-
-    sampled = coordinates[::sample_every] if sample_every > 1 else coordinates
-    if not sampled:
-        return empty
-
-    lats = [p["latitude"] for p in sampled]
-    lngs = [p["longitude"] for p in sampled]
-
-    try:
-        nearest = ox.distance.nearest_nodes(G, X=lngs, Y=lats)
-    except Exception:
-        return empty
-
-    # Determine time band
-    if departure_hour is None:
-        departure_hour = datetime.now(timezone.utc).hour
-    time_band = _hour_to_band(departure_hour)
-
-    # Apply time-of-day multiplier to each node's risk
-    risks = []
-    for nid in nearest:
-        nid_str = str(nid)
-        base_risk = risk_map.get(nid_str, 0.0)
-        tod_mult = tod_map.get(nid_str, {}).get(time_band, 1.0)
-        risks.append(min(100.0, base_risk * tod_mult))
-
-    if not risks:
-        return empty
-
-    # Phase E: Distance-weighted scoring
+    # ── Phase E: Distance-weighted scoring ───────────────────────────────────
     total_risk_km = 0.0
     total_km = 0.0
     for i in range(len(sampled) - 1):
@@ -519,40 +469,81 @@ def score_coordinates(
     else:
         label = "high"
 
-    # Phase F: Aggregate SHAP factors across route nodes
+    # ── Phase F: Aggregate SHAP factors across route nodes ───────────────────
     factor_counts: dict[str, dict] = {}
     for nid in nearest:
         factors = shap_map.get(str(nid), [])
         for f in factors:
             key = f["label"]
             if key not in factor_counts:
-                factor_counts[key] = {"label": key, "feature": f["feature"], "count": 0, "total_shap": 0.0}
+                factor_counts[key] = {
+                    "label": key,
+                    "feature": f.get("feature", key),
+                    "count": 0,
+                    "total_shap": 0.0,
+                }
             factor_counts[key]["count"] += 1
             factor_counts[key]["total_shap"] += abs(f.get("shap", 0))
 
     top_factors = sorted(factor_counts.values(), key=lambda x: x["count"], reverse=True)[:5]
-    top_risk_factors = [{"label": f["label"], "count": f["count"], "pct": round(100 * f["count"] / len(nearest), 1)} for f in top_factors]
+    n_nodes = max(len(nearest), 1)
+    top_risk_factors = [
+        {
+            "label": f["label"],
+            "count": f["count"],
+            "pct": round(100 * f["count"] / n_nodes, 1),
+        }
+        for f in top_factors
+    ]
 
-    # Segment-level risk data for polyline coloring
+    # ── Segment-level risk for polyline colouring ────────────────────────────
     segment_risks = []
     for i in range(len(sampled) - 1):
         seg_risk = (risks[i] + risks[i + 1]) / 2.0
         segment_risks.append({
             "start": {"latitude": lats[i], "longitude": lngs[i]},
-            "end": {"latitude": lats[i + 1], "longitude": lngs[i + 1]},
-            "risk": round(seg_risk, 1),
+            "end":   {"latitude": lats[i + 1], "longitude": lngs[i + 1]},
+            "risk":  round(seg_risk, 1),
         })
 
+    # ── High-risk hotspot coords for markers ──────────────────────────────
+    high_risk_coords = []
+    for nid, r in zip(nearest, risks):
+        if r > 66:
+            try:
+                high_risk_coords.append({
+                    "latitude":  G.nodes[nid]["y"],
+                    "longitude": G.nodes[nid]["x"],
+                })
+            except Exception:
+                pass
+
+    # ── AADT proxy from OSM edge highway types ───────────────────────────────
+    aadt_values: list[int] = []
+    for nid in nearest:
+        for _, _, ed in list(G.edges(nid, data=True))[:2]:
+            hw = ed.get("highway", "residential")
+            if isinstance(hw, list):
+                hw = hw[0] if hw else "residential"
+            aadt_values.append(_AADT_PROXY.get(_ROAD_CLASS.get(hw, 1), 1_000))
+
+    aadt_avg = round(sum(aadt_values) / len(aadt_values)) if aadt_values else None
+    aadt_max = max(aadt_values) if aadt_values else None
+
     return {
-        "score": score,
-        "label": label,
-        "risk_sum": round(sum(risks), 2),
-        "n_scored": len(risks),
-        "total_exposure": round(total_risk_km, 2),
-        "route_km": round(total_km, 2),
-        "risk_per_km": round(risk_per_km, 2),
-        "n_high_risk": n_high_risk,
+        "score":            score,
+        "label":            label,
+        "risk_sum":         round(sum(risks), 2),
+        "n_scored":         len(risks),
+        "total_exposure":   round(total_risk_km, 2),
+        "route_km":         round(total_km, 2),
+        "risk_per_km":      round(risk_per_km, 2),
+        "n_high_risk":      n_high_risk,
         "top_risk_factors": top_risk_factors,
-        "time_band": time_band,
-        "segment_risks": segment_risks,
+        "time_band":        time_band,
+        "segment_risks":    segment_risks,
+        "high_risk_coords": high_risk_coords,
+        "aadt_avg":         aadt_avg,
+        "aadt_max":         aadt_max,
+        "travel_mode":      travel_mode,
     }
