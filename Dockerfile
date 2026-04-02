@@ -16,4 +16,5 @@ COPY backend/ ./backend/
 
 # Cloud Run expects port 8080
 ENV PORT=8080
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Run from backend/ so sibling imports (risk_cache, model.*) resolve correctly
+CMD ["sh", "-c", "cd /app/backend && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]

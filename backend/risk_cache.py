@@ -29,6 +29,43 @@ _cache_loaded_at: float = 0.0  # Unix timestamp when caches were last loaded
 CACHE_TTL_SECONDS = 6 * 3600  # 6 hours — auto-refresh after nightly retrain
 PAGE_SIZE = 1000
 
+# Mode-specific risk multipliers — walkers/cyclists penalise certain factors more
+MODE_WEIGHTS: dict[str, dict[str, float]] = {
+    "DRIVE": {
+        "base_risk": 1.0,
+        "ped_multiplier": 1.0,
+        "bike_multiplier": 1.0,
+        "crime_multiplier": 0.5,
+        "lighting_multiplier": 1.0,
+        "speed_multiplier": 1.0,
+    },
+    "WALK": {
+        "base_risk": 1.0,
+        "ped_multiplier": 3.0,       # pedestrian crashes 3× more dangerous for walkers
+        "bike_multiplier": 0.5,
+        "crime_multiplier": 2.0,     # crime 2× more important for walkers
+        "lighting_multiplier": 2.0,  # lighting matters much more at night
+        "speed_multiplier": 1.5,     # high-speed roads more dangerous for walkers
+    },
+    "BICYCLE": {
+        "base_risk": 1.0,
+        "ped_multiplier": 0.5,
+        "bike_multiplier": 3.0,      # bike crashes 3× more dangerous for cyclists
+        "crime_multiplier": 1.0,
+        "lighting_multiplier": 1.5,
+        "speed_multiplier": 2.0,     # high-speed roads very dangerous for cyclists
+    },
+    "TWO_WHEELER": {
+        "base_risk": 1.0,
+        "ped_multiplier": 1.0,
+        "bike_multiplier": 2.0,
+        "crime_multiplier": 0.5,
+        "lighting_multiplier": 1.5,
+        "speed_multiplier": 1.5,
+    },
+}
+_DEFAULT_MODE = "DRIVE"
+
 
 def _get_gcs_fs():
     """Create a GCSFileSystem using local key file or Cloud Run default credentials."""
@@ -286,6 +323,7 @@ def score_coordinates(
     coordinates: list[dict],
     sample_every: int = 5,
     departure_hour: int | None = None,
+    travel_mode: str = "DRIVE",
 ) -> dict:
     """
     Phase E: Distance-weighted route scoring.
@@ -334,13 +372,19 @@ def score_coordinates(
         departure_hour = datetime.now(timezone.utc).hour
     time_band = _hour_to_band(departure_hour)
 
-    # Apply time-of-day multiplier to each node's risk
+    # Mode weights for travel_mode
+    weights = MODE_WEIGHTS.get(travel_mode.upper(), MODE_WEIGHTS[_DEFAULT_MODE])
+
+    # Apply time-of-day multiplier and mode weights to each node's risk
     risks = []
     for nid in nearest:
         nid_str = str(nid)
         base_risk = risk_map.get(nid_str, 0.0)
         tod_mult = tod_map.get(nid_str, {}).get(time_band, 1.0)
-        risks.append(min(100.0, base_risk * tod_mult))
+        # Boost lighting multiplier for pedestrians/cyclists at night
+        if travel_mode.upper() in ("WALK", "BICYCLE") and time_band == "night":
+            tod_mult *= weights["lighting_multiplier"]
+        risks.append(min(100.0, base_risk * tod_mult * weights["base_risk"]))
 
     if not risks:
         return empty
@@ -361,7 +405,6 @@ def score_coordinates(
 
     risk_per_km = total_risk_km / total_km
     score = round(min(100.0, risk_per_km), 2)
-    n_high_risk = sum(1 for r in risks if r > 66)
 
     if score < 33:
         label = "low"
@@ -370,9 +413,22 @@ def score_coordinates(
     else:
         label = "high"
 
-    # Phase F: Aggregate SHAP factors across route nodes
+    # Deduplicate nearest nodes — dense sampling maps multiple nearby coords to the
+    # same graph node, which would inflate hotspot counts and SHAP aggregations.
+    seen_nodes: set = set()
+    unique_nearest: list = []
+    unique_risks: list = []
+    for nid, r in zip(nearest, risks):
+        if nid not in seen_nodes:
+            seen_nodes.add(nid)
+            unique_nearest.append(nid)
+            unique_risks.append(r)
+
+    n_high_risk = sum(1 for r in unique_risks if r > 66)
+
+    # Phase F: Aggregate SHAP factors across unique route nodes
     factor_counts: dict[str, dict] = {}
-    for nid in nearest:
+    for nid in unique_nearest:
         factors = shap_map.get(str(nid), [])
         for f in factors:
             key = f["label"]
@@ -381,10 +437,11 @@ def score_coordinates(
             factor_counts[key]["count"] += 1
             factor_counts[key]["total_shap"] += abs(f.get("shap", 0))
 
+    n_unique = max(len(unique_nearest), 1)
     top_factors = sorted(factor_counts.values(), key=lambda x: x["count"], reverse=True)[:5]
-    top_risk_factors = [{"label": f["label"], "count": f["count"], "pct": round(100 * f["count"] / len(nearest), 1)} for f in top_factors]
+    top_risk_factors = [{"label": f["label"], "count": f["count"], "pct": round(100 * f["count"] / n_unique, 1)} for f in top_factors]
 
-    # Segment-level risk data for polyline coloring
+    # Segment-level risk data for polyline coloring (uses all sampled points for smooth gradient)
     segment_risks = []
     for i in range(len(sampled) - 1):
         seg_risk = (risks[i] + risks[i + 1]) / 2.0
@@ -394,19 +451,22 @@ def score_coordinates(
             "risk": round(seg_risk, 1),
         })
 
-    # Coordinates of high-risk nodes for ⚠️ map markers
+    # Coordinates of unique high-risk nodes for ⚠️ map markers
     high_risk_coords = []
-    for nid, r in zip(nearest, risks):
-        if r > 66:
+    for nid, r in zip(unique_nearest, unique_risks):
+        if r > 80:
             try:
+                node_factors = [f["label"] for f in shap_map.get(str(nid), [])[:3]]
                 high_risk_coords.append({
                     "latitude": G.nodes[nid]["y"],
                     "longitude": G.nodes[nid]["x"],
+                    "risk": round(r, 1),
+                    "factors": node_factors,
                 })
             except Exception:
                 pass
 
-    # AADT estimate from edge highway types at sampled nodes
+    # AADT estimate from edge highway types at unique sampled nodes
     _ROAD_CLASS = {
         "residential": 1, "living_street": 1, "unclassified": 1,
         "tertiary": 2, "tertiary_link": 2,
@@ -417,7 +477,7 @@ def score_coordinates(
     }
     _AADT_PROXY = {1: 1_000, 2: 5_000, 3: 15_000, 4: 25_000, 5: 40_000, 6: 60_000}
     aadt_values = []
-    for nid in nearest:
+    for nid in unique_nearest:
         for _, _, ed in list(G.edges(nid, data=True))[:2]:
             hw = ed.get("highway", "residential")
             if isinstance(hw, list):

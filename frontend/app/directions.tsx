@@ -14,7 +14,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Heatmap, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Callout, Heatmap, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -78,7 +78,7 @@ interface ModeRouteData {
   topRiskFactors?: { factor: string; weight: number }[] | { label: string; count: number; pct: number }[];
   timeBand?: string;
   segmentRisks?: number[];
-  highRiskCoords?: Array<{ latitude: number; longitude: number }>;
+  highRiskCoords?: Array<{ latitude: number; longitude: number; risk?: number; factors?: string[] }>;
   aadtAvg?: number;
   aadtMax?: number;
   timePenaltyPct?: number;
@@ -96,7 +96,7 @@ interface ModeRoutes {
     topRiskFactors?: any[];
     timeBand?: string;
     segmentRisks?: number[];
-    highRiskCoords?: Array<{ latitude: number; longitude: number }>;
+    highRiskCoords?: Array<{ latitude: number; longitude: number; risk?: number; factors?: string[] }>;
     aadtAvg?: number;
     aadtMax?: number;
     timePenaltyPct?: number;
@@ -250,6 +250,7 @@ function RouteDetailsModal({
 }) {
   const [tab, setTab] = useState<'details' | 'insights'>('details');
   const [infoKey, setInfoKey] = useState<string | null>(null);
+  const [showHotspotsModal, setShowHotspotsModal] = useState(false);
   const { height: screenH } = useWindowDimensions();
   const { T } = useTheme();
   const CARD_HEIGHT = screenH * 0.72;
@@ -445,8 +446,25 @@ function RouteDetailsModal({
                         : <Polyline coordinates={activeData.coords} strokeColor={activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'} strokeWidth={4} />
                     ) : null}
                     {(activeData?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
-                      <Marker key={`modal-hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
-                        <Text style={{ fontSize: 14 }}>⚠️</Text>
+                      <Marker key={`modal-hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#FF4444', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '900', lineHeight: 14 }}>!</Text>
+                        </View>
+                        <Callout tooltip>
+                          <View style={{ backgroundColor: '#1E2A38', borderRadius: 10, padding: 10, minWidth: 160, maxWidth: 220, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6, elevation: 6 }}>
+                            <Text style={{ color: '#FF6B6B', fontWeight: '800', fontSize: 13, marginBottom: 4 }}>⚠ High-Risk Intersection</Text>
+                            <Text style={{ color: '#fff', fontSize: 12, marginBottom: 2 }}>Risk score: <Text style={{ fontWeight: '700', color: '#FF4444' }}>{coord.risk ?? '–'}/100</Text></Text>
+                            {coord.factors?.length > 0 && (
+                              <>
+                                <Text style={{ color: '#7A8FA6', fontSize: 11, marginTop: 4, marginBottom: 2 }}>Contributing factors:</Text>
+                                {coord.factors.map((f: string, fi: number) => (
+                                  <Text key={fi} style={{ color: '#CBD5E0', fontSize: 11 }}>• {f}</Text>
+                                ))}
+                              </>
+                            )}
+                            <Text style={{ color: '#4A6580', fontSize: 10, marginTop: 6 }}>{coord.latitude.toFixed(5)}, {coord.longitude.toFixed(5)}</Text>
+                          </View>
+                        </Callout>
                       </Marker>
                     ))}
                   </MapView>
@@ -484,13 +502,16 @@ function RouteDetailsModal({
                     {activeData ? `Arrive ~${arrivalFrom(activeData.durationSecs)}` : ''}
                   </Text>
                 </View>
-                <View style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+                <Pressable
+                  style={[dm.statCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}
+                  onPress={() => (activeData?.nHighRisk ?? 0) > 0 && setShowHotspotsModal(true)}
+                >
                   <Text style={[dm.statLabel, { color: T.TEXT_MUT }]}>⚠️  Hot Spots</Text>
                   <Text style={[dm.statValue, { color: T.TEXT_PRI }]}>{activeData?.nHighRisk ?? 0}</Text>
                   <Text style={[dm.statDelta, { color: (activeData?.nHighRisk ?? 0) > 3 ? '#FF6B6B' : T.ACCENT }]}>
-                    {(activeData?.nHighRisk ?? 0) === 0 ? '✅ Clear route' : (activeData?.nHighRisk ?? 0) > 3 ? '⚠ Use caution' : 'Manageable'}
+                    {(activeData?.nHighRisk ?? 0) === 0 ? '✅ Clear route' : (activeData?.nHighRisk ?? 0) > 3 ? '⚠ Tap to view' : 'Tap to view'}
                   </Text>
-                </View>
+                </Pressable>
               </View>
 
               {/* ── AADT Card ── */}
@@ -588,6 +609,48 @@ function RouteDetailsModal({
               </View>
               <ScrollView style={{ maxHeight: 320 }}>
                 <Text style={{ color: T.TEXT_MUT, fontSize: 13, lineHeight: 20 }}>{INFO_CONTENT[infoKey].body}</Text>
+              </ScrollView>
+            </View>
+          </Pressable>
+        </Modal>
+      )}
+
+      {/* ── Hot Spots List Modal ── */}
+      {showHotspotsModal && (
+        <Modal visible animationType="slide" transparent onRequestClose={() => setShowHotspotsModal(false)}>
+          <Pressable style={dm.infoBackdrop} onPress={() => setShowHotspotsModal(false)}>
+            <View style={[dm.infoCard, { backgroundColor: T.BG, maxHeight: '70%' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <Text style={{ color: T.TEXT_PRI, fontSize: 16, fontWeight: '800' }}>
+                  ⚠️  High-Risk Intersections ({(activeData?.highRiskCoords as any[] ?? []).length})
+                </Text>
+                <Pressable onPress={() => setShowHotspotsModal(false)} hitSlop={10}>
+                  <Ionicons name="close-circle" size={22} color={T.TEXT_MUT} />
+                </Pressable>
+              </View>
+              <Text style={{ color: T.TEXT_MUT, fontSize: 12, marginBottom: 12 }}>
+                Intersections along this route where the ML model predicts elevated crash risk (score {'>'} 66/100). Tap a marker on the map to see its location.
+              </Text>
+              <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+                {(activeData?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
+                  <View
+                    key={`hs-row-${i}`}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: T.DIVIDER, gap: 12 }}
+                  >
+                    <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF4444', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '900', lineHeight: 14 }}>!</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: T.TEXT_PRI, fontSize: 13, fontWeight: '600' }}>
+                        Hot Spot #{i + 1}
+                      </Text>
+                      <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginTop: 2, fontFamily: 'monospace' }}>
+                        {coord.latitude.toFixed(5)}, {coord.longitude.toFixed(5)}
+                      </Text>
+                    </View>
+                    <Text style={{ color: '#FF6B6B', fontSize: 11, fontWeight: '700' }}>HIGH RISK</Text>
+                  </View>
+                ))}
               </ScrollView>
             </View>
           </Pressable>
@@ -1067,8 +1130,25 @@ export default function DirectionsScreen() {
           <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
         ) : null}
         {(alternatives[selectedRouteIndex]?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
-          <Marker key={`hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
-            <Text style={{ fontSize: 16 }}>⚠️</Text>
+          <Marker key={`hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#FF4444', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '900', lineHeight: 14 }}>!</Text>
+            </View>
+            <Callout tooltip>
+              <View style={{ backgroundColor: '#1E2A38', borderRadius: 10, padding: 10, minWidth: 160, maxWidth: 220, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6, elevation: 6 }}>
+                <Text style={{ color: '#FF6B6B', fontWeight: '800', fontSize: 13, marginBottom: 4 }}>⚠ High-Risk Intersection</Text>
+                <Text style={{ color: '#fff', fontSize: 12, marginBottom: 2 }}>Risk score: <Text style={{ fontWeight: '700', color: '#FF4444' }}>{coord.risk ?? '–'}/100</Text></Text>
+                {coord.factors?.length > 0 && (
+                  <>
+                    <Text style={{ color: '#7A8FA6', fontSize: 11, marginTop: 4, marginBottom: 2 }}>Contributing factors:</Text>
+                    {coord.factors.map((f: string, fi: number) => (
+                      <Text key={fi} style={{ color: '#CBD5E0', fontSize: 11 }}>• {f}</Text>
+                    ))}
+                  </>
+                )}
+                <Text style={{ color: '#4A6580', fontSize: 10, marginTop: 6 }}>{coord.latitude.toFixed(5)}, {coord.longitude.toFixed(5)}</Text>
+              </View>
+            </Callout>
           </Marker>
         ))}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
@@ -1555,7 +1635,13 @@ export default function DirectionsScreen() {
                         const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
                         const from = stopsSwapped ? destCoords : originCoords;
                         const to   = stopsSwapped ? originCoords : destCoords;
-                        Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                        // Subsample up to 8 waypoints from the selected route so Google Maps follows the same path
+                        const routeCoords = alt.coords ?? [];
+                        const inner = routeCoords.slice(1, -1);
+                        const step = inner.length > 8 ? Math.floor(inner.length / 8) : 1;
+                        const wpts = inner.filter((_: RoutePoint, idx: number) => idx % step === 0).slice(0, 8);
+                        const waypointsParam = wpts.length > 0 ? `&waypoints=${encodeURIComponent(wpts.map((p: RoutePoint) => `${p.latitude},${p.longitude}`).join('|'))}` : '';
+                        Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}${waypointsParam}&travelmode=${modeMap[travelMode]}`);
                       }}
                     >
                       {isSelected && (
@@ -1593,7 +1679,12 @@ export default function DirectionsScreen() {
                     const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
                     const from = stopsSwapped ? destCoords : originCoords;
                     const to   = stopsSwapped ? originCoords : destCoords;
-                    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+                    const routeCoords = activeData?.coords ?? [];
+                    const inner = routeCoords.slice(1, -1);
+                    const step = inner.length > 8 ? Math.floor(inner.length / 8) : 1;
+                    const wpts = inner.filter((_: RoutePoint, idx: number) => idx % step === 0).slice(0, 8);
+                    const waypointsParam = wpts.length > 0 ? `&waypoints=${encodeURIComponent(wpts.map((p: RoutePoint) => `${p.latitude},${p.longitude}`).join('|'))}` : '';
+                    Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}${waypointsParam}&travelmode=${modeMap[travelMode]}`);
                   }}>
                     <LinearGradient colors={['#0A9E6E', '#1ABC93', '#44D9B8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFillObject} />
                     <Text style={styles.startBtnText}>Start</Text>

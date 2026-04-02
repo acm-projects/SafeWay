@@ -31,8 +31,8 @@ def attach_risk_to_graph(G, node_id_to_risk: dict, median_risk: float = 0.0) -> 
 
 def compute_edge_costs(G, alpha: float = 1.0, beta: float = 0.5) -> None:
     """
-    For each edge: travel_time from length/speed_kph; edge_risk = avg endpoint risk;
-    safe_cost = alpha * travel_time_sec + beta * edge_risk.
+    For each edge: travel_time from length/speed_kph; edge_risk = avg endpoint risk.
+    (safe_cost is no longer set here — it is computed on demand in find_safer_route.)
     """
     for u, v, d in G.edges(data=True):
         length_m = d.get("length") or 0
@@ -41,77 +41,73 @@ def compute_edge_costs(G, alpha: float = 1.0, beta: float = 0.5) -> None:
             speed_kph = 40
         travel_time = length_m / (speed_kph / 3.6)  # seconds approx
         d["travel_time"] = travel_time
-        # Edge risk = average of endpoint node risks
         ru = G.nodes[u].get("risk", 0.0)
         rv = G.nodes[v].get("risk", 0.0)
-        er = (float(ru) + float(rv)) / 2
-        d["edge_risk"] = er
-        d["safe_cost"] = alpha * travel_time + beta * er
+        d["edge_risk"] = (float(ru) + float(rv)) / 2
 
 
-def _get_edge_data(G, u, v):
-    """Get edge data from a MultiDiGraph, handling the nested dict structure."""
-    ed = G[u][v]
-    if isinstance(ed, dict) and 0 in ed:
-        return ed[0]
-    return ed
-
-
-def find_safer_route(G, origin, dest, beta: float = 0.5):
+def find_safer_route(G, origin, dest, risk_weight: float = 3.0):
     """
-    A* on safe_cost; compare to shortest travel_time path.
-    origin, dest: OSM node ids (int or str).
-    Returns safe_path, fast_path, and comparison metrics.
+    A* safety-optimized routing.
+
+    Cost model: safe_cost = travel_time * (1 + risk_weight * avg_node_risk / 100)
+
+    risk_weight=0  -> pure fastest route (identical to Dijkstra on travel_time)
+    risk_weight=3  -> a risk-100 intersection costs 4x a risk-0 intersection of the
+                      same length. A* will accept detours up to 3x slower to avoid
+                      high-risk intersections.
+
+    Multiplicative penalty: exposure time at a dangerous intersection scales the
+    cost proportionally, so a 60-second segment on a risk-80 road is penalised far
+    more than a 10-second segment at the same risk level.
     """
-    o = int(origin) if str(origin).isdigit() else origin
-    dnode = int(dest) if str(dest).isdigit() else dest
+    o, d = int(origin), int(dest)
 
-    # Ensure safe_cost is computed with desired beta
-    for u, v, d in G.edges(data=True):
-        tt = d.get("travel_time", 0)
-        er = d.get("edge_risk", 0)
-        d["safe_cost"] = tt + beta * er
+    # Stamp safe_cost onto every edge in the cached graph
+    for u, v, edge_data in G.edges(data=True):
+        tt = edge_data.get("travel_time", 60.0)
+        risk_u = float(G.nodes[u].get("risk", 0.0))
+        risk_v = float(G.nodes[v].get("risk", 0.0))
+        avg_risk = (risk_u + risk_v) / 2.0
+        edge_data["safe_cost"] = tt * (1.0 + risk_weight * avg_risk / 100.0)
 
-    def heuristic(u, v):
-        y1, x1 = G.nodes[u].get("y"), G.nodes[u].get("x")
-        y2, x2 = G.nodes[v].get("y"), G.nodes[v].get("x")
-        if None in (y1, x1, y2, x2):
-            return 0.0
-        return haversine_m(y1, x1, y2, x2) / 10.0  # scale to comparable cost
+    def heuristic(u, _v_ignored):
+        # Admissible lower bound: straight-line distance at max network speed (80 kph)
+        y1 = G.nodes[u].get("y", 0)
+        x1 = G.nodes[u].get("x", 0)
+        y2 = G.nodes[d].get("y", 0)
+        x2 = G.nodes[d].get("x", 0)
+        return haversine_m(y1, x1, y2, x2) / (80.0 / 3.6)  # m / (m/s) = seconds
 
-    safe_path = nx.astar_path(G, o, dnode, weight="safe_cost", heuristic=lambda u, v: heuristic(u, dnode))
-    fast_path = nx.shortest_path(G, o, dnode, weight="travel_time")
+    safe_path = nx.astar_path(G, o, d, weight="safe_cost", heuristic=heuristic)
+    fast_path = nx.shortest_path(G, o, d, weight="travel_time")
 
-    def path_time(path):
-        t = 0.0
+    def path_stats(path):
+        total_time = total_dist = 0.0
         for i in range(len(path) - 1):
-            d = _get_edge_data(G, path[i], path[i + 1])
-            t += d.get("travel_time", 0) if isinstance(d, dict) else 0
-        return t
+            edges_uv = G[path[i]][path[i + 1]]  # MultiDiGraph: {edge_key: edge_data}
+            key = min(edges_uv)                  # lowest key = primary parallel edge
+            e = edges_uv[key]
+            total_time += e.get("travel_time", 0.0)
+            total_dist += e.get("length", 0.0)
+        return total_time, total_dist
 
-    def path_distance_m(path):
-        dist = 0.0
-        for i in range(len(path) - 1):
-            d = _get_edge_data(G, path[i], path[i + 1])
-            dist += d.get("length", 0) if isinstance(d, dict) else 0
-        return dist
+    safe_time, safe_dist = path_stats(safe_path)
+    fast_time, fast_dist = path_stats(fast_path)
 
-    def path_risk(path):
-        return sum(G.nodes[n].get("risk", 0) for n in path)
+    safe_risk = sum(G.nodes[n].get("risk", 0.0) for n in safe_path)
+    fast_risk = sum(G.nodes[n].get("risk", 0.0) for n in fast_path)
 
-    st = path_time(safe_path)
-    ft = path_time(fast_path)
-    sr = path_risk(safe_path)
-    fr = path_risk(fast_path)
-    time_penalty_pct = round(100 * (st - ft) / ft, 1) if ft > 0 else 0
-    risk_reduction_pct = round(100 * (fr - sr) / fr, 1) if fr > 0 else 0
+    time_penalty_pct = round(100 * (safe_time - fast_time) / fast_time, 1) if fast_time > 0 else 0.0
+    risk_reduction_pct = round(100 * (fast_risk - safe_risk) / fast_risk, 1) if fast_risk > 0 else 0.0
+
     return {
         "safe_path": safe_path,
         "fast_path": fast_path,
-        "safe_time_secs": round(st),
-        "fast_time_secs": round(ft),
-        "safe_distance_m": round(path_distance_m(safe_path)),
-        "fast_distance_m": round(path_distance_m(fast_path)),
+        "safe_time_secs": round(safe_time),
+        "fast_time_secs": round(fast_time),
+        "safe_distance_m": round(safe_dist),
+        "fast_distance_m": round(fast_dist),
         "time_penalty_pct": time_penalty_pct,
         "risk_reduction_pct": risk_reduction_pct,
     }
@@ -181,9 +177,9 @@ def estimate_route_aadt(G, path: list) -> dict:
         return {"aadt_avg": None, "aadt_max": None}
     aadt_values = []
     for i in range(len(path) - 1):
-        ed = _get_edge_data(G, path[i], path[i + 1])
-        if not isinstance(ed, dict):
-            continue
+        edges_uv = G[path[i]][path[i + 1]]
+        key = min(edges_uv)
+        ed = edges_uv[key]
         hw = ed.get("highway", "residential")
         if isinstance(hw, list):
             hw = hw[0] if hw else "residential"

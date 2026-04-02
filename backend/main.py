@@ -431,6 +431,7 @@ def compute_route(payload: RouteRequest):
                     coordinates,
                     sample_every=5,
                     departure_hour=payload.departure_hour,
+                    travel_mode=payload.travel_mode,
                 )
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
@@ -479,6 +480,7 @@ def compute_route(payload: RouteRequest):
         payload.origin.lat, payload.origin.lng,
         payload.destination.lat, payload.destination.lng,
         departure_hour=payload.departure_hour,
+        travel_mode=payload.travel_mode,
     )
     if astar_result:
         result_routes.append(astar_result)

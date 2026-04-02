@@ -226,7 +226,7 @@ export type SafetyRoute = {
   top_risk_factors?: { factor: string; weight: number }[];
   time_band?: string;
   segment_risks?: any[];
-  high_risk_coords?: Array<{ latitude: number; longitude: number }>;
+  high_risk_coords?: Array<{ latitude: number; longitude: number; risk?: number; factors?: string[] }>;
   time_penalty_pct?: number;
   risk_reduction_pct?: number;
   aadt_avg?: number;
