@@ -770,3 +770,4 @@ const s = StyleSheet.create({
   infoBubble: { backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FFFFFF18', maxWidth: 260 },
   infoBubbleText: { color: '#C8D6E5', fontSize: 12, lineHeight: 17 },
 });
+export default RouteInsightsPage;
