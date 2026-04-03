@@ -278,16 +278,33 @@ def get_graph():
     if _graph is not None:
         return _graph
 
-    # Try local cached GraphML first (bundled in Docker image)
+    import osmnx as ox
+
+    # 1. Try local cached GraphML (present in local dev, absent in Docker — gitignored)
     local_graphml = OUTPUT_DIR / "chicago_drive.graphml"
     if local_graphml.exists():
-        import osmnx as ox
         _graph = ox.load_graphml(local_graphml)
         print(f"[risk_cache] loaded graph from local file ({_graph.number_of_nodes()} nodes)", flush=True)
         return _graph
 
-    # Fallback: download from OSM (slow, for local dev without cached file)
-    print("[risk_cache] no local GraphML, downloading from OSM...", flush=True)
+    # 2. Try GCS (uploaded once; persists across Cloud Run revisions)
+    try:
+        import tempfile
+        fs = _get_gcs_fs()
+        print("[risk_cache] downloading chicago_drive.graphml from GCS...", flush=True)
+        with tempfile.NamedTemporaryFile(suffix=".graphml", delete=False) as tmp:
+            with fs.open("safeway-data/chicago_drive.graphml", "rb") as f:
+                tmp.write(f.read())
+            tmp_path = tmp.name
+        _graph = ox.load_graphml(tmp_path)
+        os.unlink(tmp_path)
+        print(f"[risk_cache] loaded graph from GCS ({_graph.number_of_nodes()} nodes)", flush=True)
+        return _graph
+    except Exception as e:
+        print(f"[risk_cache] GCS graph load failed: {e}", flush=True)
+
+    # 3. Last resort: download from OSM (very slow, dev-only)
+    print("[risk_cache] falling back to OSM download (slow)...", flush=True)
     import sys
     backend_dir = str(Path(__file__).resolve().parent)
     if backend_dir not in sys.path:
