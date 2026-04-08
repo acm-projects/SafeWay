@@ -9,56 +9,89 @@ import {
   Text,
   View,
 } from 'react-native';
+import Svg, { Polygon, Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
 
-// ─── Per-category visual config ───────────────────────────────────────────────
+// ─── Per-category config ──────────────────────────────────────────────────────
 type IncidentStyle = {
-  emoji: string;
   color: string;
-  bg: string;
+  darkBg: string;
+  symbol: string;
   label: string;
   detail: string;
+  pulse: boolean;
 };
 
-const INCIDENT_STYLES: Record<number, IncidentStyle> = {
-  0:  { emoji: '❓', color: '#94A3B8', bg: '#1E293B', label: 'Unknown',              detail: 'An unclassified incident has been reported in this area.' },
-  1:  { emoji: '💥', color: '#F87171', bg: '#2D1515', label: 'Accident',             detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
-  2:  { emoji: '🌫️', color: '#CBD5E1', bg: '#1C2033', label: 'Fog',                 detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
-  3:  { emoji: '⚠️', color: '#FBBF24', bg: '#2D2010', label: 'Hazard',              detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
-  4:  { emoji: '🌧️', color: '#60A5FA', bg: '#111D2D', label: 'Rain',                detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
-  5:  { emoji: '🧊', color: '#BAE6FD', bg: '#0D1E2D', label: 'Ice',                 detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
-  6:  { emoji: '🚦', color: '#FB923C', bg: '#2D1A08', label: 'Traffic Jam',         detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
-  7:  { emoji: '🚧', color: '#F59E0B', bg: '#2D2000', label: 'Lane Closed',         detail: 'One or more lanes are closed. Merge early and watch for workers.' },
-  8:  { emoji: '🚫', color: '#EF4444', bg: '#2D0D0D', label: 'Road Closed',         detail: 'This road is fully closed. You must use an alternate route.' },
-  9:  { emoji: '🛠️', color: '#A78BFA', bg: '#1E1430', label: 'Road Works',          detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
-  10: { emoji: '💨', color: '#7DD3FC', bg: '#0D1E2D', label: 'Wind',                detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
-  11: { emoji: '🌊', color: '#38BDF8', bg: '#0A1E2D', label: 'Flooding',            detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
-  14: { emoji: '🚗', color: '#C084FC', bg: '#1E102D', label: 'Broken Down Vehicle', detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
+const S: Record<number, IncidentStyle> = {
+  0:  { color: '#64748B', darkBg: '#0F1623', symbol: '?',  label: 'Unknown',             pulse: false, detail: 'An unclassified incident has been reported in this area.' },
+  1:  { color: '#FF4D6A', darkBg: '#2A0A10', symbol: '✕',  label: 'Accident',             pulse: true,  detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
+  2:  { color: '#A8C4D4', darkBg: '#101B22', symbol: '◌',  label: 'Fog',                  pulse: false, detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
+  3:  { color: '#FFB830', darkBg: '#221800', symbol: '!',  label: 'Hazard',               pulse: true,  detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
+  4:  { color: '#4DA6FF', darkBg: '#08162A', symbol: '≈',  label: 'Rain',                 pulse: false, detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
+  5:  { color: '#B8E4F9', darkBg: '#081520', symbol: '*',  label: 'Ice',                  pulse: true,  detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
+  6:  { color: '#FF7A30', darkBg: '#221008', symbol: '▲',  label: 'Traffic Jam',          pulse: true,  detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
+  7:  { color: '#FFCC44', darkBg: '#221900', symbol: '║',  label: 'Lane Closed',          pulse: false, detail: 'One or more lanes are closed. Merge early and watch for workers.' },
+  8:  { color: '#FF3333', darkBg: '#2A0808', symbol: '⊘',  label: 'Road Closed',          pulse: true,  detail: 'This road is fully closed. You must use an alternate route.' },
+  9:  { color: '#9B72F7', darkBg: '#130A2A', symbol: '⚙',  label: 'Road Works',           pulse: false, detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
+  10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '≋',  label: 'Wind',                 pulse: false, detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
+  11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  label: 'Flooding',             pulse: true,  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
+  14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  label: 'Broken Down Vehicle',  pulse: false, detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
 };
 
-function getStyle(category: number): IncidentStyle {
-  return INCIDENT_STYLES[category] ?? INCIDENT_STYLES[0];
+function getStyle(cat: number): IncidentStyle {
+  return S[cat] ?? S[0];
 }
 
-// ─── Size calculation based on zoom ──────────────────────────────────────────
-// latDelta:  0.005 = very zoomed in  →  full size (32px)
-//            0.02  = street level    →  medium (22px)
-//            0.06  = neighbourhood   →  small (14px)
-//            0.08+ = hidden entirely
-const MAX_DELTA = 0.08;  // hide above this
-const MIN_DELTA = 0.005; // full size below this
-const SIZE_MAX  = 32;
-const SIZE_MIN  = 12;
+// ─── Sizing ───────────────────────────────────────────────────────────────────
+const MAX_DELTA = 0.08;
+const MIN_DELTA = 0.005;
+const SIZE_MAX  = 38;
+const SIZE_MIN  = 14;
 
-function bubbleSize(latDelta: number): number {
+function markerSize(latDelta: number): number {
   if (latDelta >= MAX_DELTA) return 0;
   if (latDelta <= MIN_DELTA) return SIZE_MAX;
-  // linear interpolation between full and min size
-  const t = (latDelta - MIN_DELTA) / (MAX_DELTA - MIN_DELTA); // 0→1
+  const t = (latDelta - MIN_DELTA) / (MAX_DELTA - MIN_DELTA);
   return Math.round(SIZE_MAX - t * (SIZE_MAX - SIZE_MIN));
 }
 
-// ─── Incident Bubble ──────────────────────────────────────────────────────────
+// ─── Animated pulse ring ──────────────────────────────────────────────────────
+function PulseRing({ color, size }: { color: string; size: number }) {
+  const scale   = useRef(new Animated.Value(1)).current;
+  const opacity = useRef(new Animated.Value(0.65)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.parallel([
+        Animated.sequence([
+          Animated.timing(scale,   { toValue: 2.0, duration: 1500, useNativeDriver: true }),
+          Animated.timing(scale,   { toValue: 1.0, duration: 0,    useNativeDriver: true }),
+        ]),
+        Animated.sequence([
+          Animated.timing(opacity, { toValue: 0,    duration: 1500, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0.65, duration: 0,    useNativeDriver: true }),
+        ]),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        width: size, height: size,
+        borderRadius: size / 2,
+        borderWidth: 1.5,
+        borderColor: color,
+        transform: [{ scale }],
+        opacity,
+      }}
+    />
+  );
+}
+
+// ─── Incident bubble — diamond SVG shape ─────────────────────────────────────
 export function IncidentBubble({
   incident,
   latDelta = 0.02,
@@ -67,61 +100,104 @@ export function IncidentBubble({
   latDelta?: number;
 }) {
   const s    = getStyle(incident.category);
-  const size = bubbleSize(latDelta);
+  const size = markerSize(latDelta);
   if (size === 0) return null;
 
-  const ringSize   = size + 6;
-  const fontSize   = Math.max(8, size * 0.55);
-  const borderW    = size > 22 ? 2 : 1.5;
+  const showPulse = s.pulse && size >= 20;
+  const canvas    = size + 12;   // SVG canvas with room for drop-shadow offset
+  const half      = canvas / 2;
+  const pad       = 5;
+  const symbolPx  = Math.max(8, Math.round(size * 0.38));
+
+  // Diamond: top · right · bottom-tip · left
+  // Bottom tip is pulled 4px lower than a pure diamond to act as a map pin
+  const pts = [
+    `${half},${pad}`,
+    `${canvas - pad},${half - 1}`,
+    `${half},${canvas - pad + 4}`,
+    `${pad},${half - 1}`,
+  ].join(' ');
+
+  // Inset inner highlight ring
+  const iPts = [
+    `${half},${pad + 3}`,
+    `${canvas - pad - 3},${half - 1}`,
+    `${half},${canvas - pad + 1}`,
+    `${pad + 3},${half - 1}`,
+  ].join(' ');
+
+  const gradId = `rg${incident.category ?? 0}`;
 
   return (
-    <View style={{ width: ringSize, height: ringSize, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Outer ring */}
-      <View style={{
-        position: 'absolute',
-        width: ringSize, height: ringSize,
-        borderRadius: ringSize / 2,
-        borderWidth: 1,
-        borderColor: s.color + '99',
-        backgroundColor: s.color + '18',
-      }} />
-      {/* Main circle */}
-      <View style={{
-        width: size, height: size,
-        borderRadius: size / 2,
-        borderWidth: borderW,
-        borderColor: s.color,
-        backgroundColor: s.bg,
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.45,
-        shadowRadius: 3,
-        elevation: 5,
-      }}>
-        <Text style={{ fontSize, lineHeight: fontSize + 2 }}>{s.emoji}</Text>
-        {/* Gloss */}
-        {size >= 20 && (
-          <View style={{
-            position: 'absolute',
-            top: Math.round(size * 0.12),
-            right: Math.round(size * 0.14),
-            width: Math.round(size * 0.2),
-            height: Math.round(size * 0.2),
-            borderRadius: Math.round(size * 0.1),
-            backgroundColor: 'rgba(255,255,255,0.35)',
-          }} />
+    <View style={{ width: canvas, height: canvas + 4, alignItems: 'center', justifyContent: 'center' }}>
+      {showPulse && <PulseRing color={s.color} size={size} />}
+
+      <Svg width={canvas} height={canvas + 4} style={{ position: 'absolute', top: 0, left: 0 }}>
+        <Defs>
+          <RadialGradient id={gradId} cx="50%" cy="36%" r="62%">
+            <Stop offset="0%"   stopColor={s.color}  stopOpacity="0.25" />
+            <Stop offset="100%" stopColor={s.darkBg} stopOpacity="1.0"  />
+          </RadialGradient>
+        </Defs>
+
+        {/* Drop shadow — offset filled polygon */}
+        <Polygon
+          points={pts}
+          fill="rgba(0,0,0,0.32)"
+          x={1.5}
+          y={2.5}
+        />
+
+        {/* Main diamond */}
+        <Polygon
+          points={pts}
+          fill={`url(#${gradId})`}
+          stroke={s.color}
+          strokeWidth={size >= 24 ? 1.8 : 1.2}
+        />
+
+        {/* Inner bevel ring */}
+        <Polygon
+          points={iPts}
+          fill="none"
+          stroke={s.color}
+          strokeWidth={0.7}
+          strokeOpacity={0.30}
+        />
+
+        {/* Gloss highlight */}
+        {size >= 22 && (
+          <Circle
+            cx={half + size * 0.14}
+            cy={half - size * 0.15}
+            r={size * 0.09}
+            fill="rgba(255,255,255,0.22)"
+          />
         )}
-      </View>
+      </Svg>
+
+      {/* Symbol — sits above the SVG layer */}
+      <Text
+        style={{
+          position:   'absolute',
+          color:       s.color,
+          fontSize:    symbolPx,
+          fontWeight:  '800',
+          lineHeight:  symbolPx + 1,
+          textAlign:   'center',
+          // Pull up slightly: the pin tip shifts visual center downward
+          marginTop:  -Math.round(size * 0.10),
+          includeFontPadding: false,
+        }}
+        allowFontScaling={false}
+      >
+        {s.symbol}
+      </Text>
     </View>
   );
 }
 
-// ─── IncidentMarker wrapper ───────────────────────────────────────────────────
-// Passes latDelta down so bubble scales with zoom.
-// tracksViewChanges starts true briefly so RN Maps measures the view,
-// then freezes to false to prevent map jank.
+// ─── IncidentMarker — live zoom-tracking ─────────────────────────────────────
 export function IncidentMarker({
   incident,
   latDelta = 0.02,
@@ -132,41 +208,29 @@ export function IncidentMarker({
   onPress: () => void;
 }) {
   const [tracks, setTracks] = useState(true);
-  const freezeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const freezeTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevDeltaRef = useRef(latDelta);
 
   useEffect(() => {
-    // If latDelta changed at all, enable tracking immediately
     if (prevDeltaRef.current !== latDelta) {
       prevDeltaRef.current = latDelta;
-
-      // Enable tracking so the marker resizes right now, during the gesture
       setTracks(true);
-
-      // Cancel any pending freeze
       if (freezeTimer.current) clearTimeout(freezeTimer.current);
-
-      // Freeze only after zooming has been stable for 300ms
-      freezeTimer.current = setTimeout(() => {
-        setTracks(false);
-      }, 300);
+      freezeTimer.current = setTimeout(() => setTracks(false), 300);
     }
-
-    return () => {
-      if (freezeTimer.current) clearTimeout(freezeTimer.current);
-    };
+    return () => { if (freezeTimer.current) clearTimeout(freezeTimer.current); };
   }, [latDelta]);
 
-  // Initial freeze after mount
   useEffect(() => {
     const id = setTimeout(() => setTracks(false), 500);
     return () => clearTimeout(id);
   }, []);
 
+  // anchor.y = 0.90 so the bottom tip of the diamond pin points to the location
   return (
     <Marker
       coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
-      anchor={{ x: 0.5, y: 0.5 }}
+      anchor={{ x: 0.5, y: 0.90 }}
       tracksViewChanges={tracks}
       onPress={onPress}
     >
@@ -183,22 +247,22 @@ export function IncidentDetailPopup({
   incident: TrafficIncident | null;
   onClose: () => void;
 }) {
-  const slideY     = useRef(new Animated.Value(340)).current;
-  const opacity    = useRef(new Animated.Value(0)).current;
-  const sheetScale = useRef(new Animated.Value(0.96)).current;
+  const slideY  = useRef(new Animated.Value(380)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const sc      = useRef(new Animated.Value(0.96)).current;
 
   useEffect(() => {
     if (incident) {
       Animated.parallel([
-        Animated.spring(slideY,     { toValue: 0,    useNativeDriver: true, damping: 18, stiffness: 220 }),
-        Animated.spring(sheetScale, { toValue: 1.0,  useNativeDriver: true, damping: 18, stiffness: 220 }),
-        Animated.timing(opacity,    { toValue: 1,    duration: 180,         useNativeDriver: true }),
+        Animated.spring(slideY,  { toValue: 0,    useNativeDriver: true, damping: 22, stiffness: 260 }),
+        Animated.spring(sc,      { toValue: 1.0,  useNativeDriver: true, damping: 22, stiffness: 260 }),
+        Animated.timing(opacity, { toValue: 1,    duration: 150,         useNativeDriver: true }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(slideY,     { toValue: 340, duration: 220, useNativeDriver: true }),
-        Animated.timing(sheetScale, { toValue: 0.96, duration: 200, useNativeDriver: true }),
-        Animated.timing(opacity,    { toValue: 0,    duration: 180, useNativeDriver: true }),
+        Animated.timing(slideY,  { toValue: 380, duration: 200, useNativeDriver: true }),
+        Animated.timing(sc,      { toValue: 0.96, duration: 180, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0,    duration: 150, useNativeDriver: true }),
       ]).start();
     }
   }, [!!incident]);
@@ -213,47 +277,89 @@ export function IncidentDetailPopup({
       : `${incident.delay_seconds}s delay`
     : null;
 
-  const road = incident.road?.length ? incident.road.join(', ') : null;
+  const road = incident.road?.length ? incident.road.join(' · ') : null;
+
+  // Popup icon — same diamond, 52px canvas
+  const D = 52;
+  const dh = D / 2;
+  const dp = 5;
+  const iconPts = [
+    `${dh},${dp}`,
+    `${D - dp},${dh - 1}`,
+    `${dh},${D - dp + 4}`,
+    `${dp},${dh - 1}`,
+  ].join(' ');
+  const iIconPts = [
+    `${dh},${dp + 3}`,
+    `${D - dp - 3},${dh - 1}`,
+    `${dh},${D - dp + 1}`,
+    `${dp + 3},${dh - 1}`,
+  ].join(' ');
 
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
       <Pressable style={pop.backdrop} onPress={onClose}>
-        <Animated.View
-          style={[
-            pop.sheet,
-            { opacity, transform: [{ translateY: slideY }, { scale: sheetScale }] },
-          ]}
-        >
-          <View style={[pop.accentBar, { backgroundColor: s.color }]} />
+        <Animated.View style={[pop.sheet, { opacity, transform: [{ translateY: slideY }, { scale: sc }] }]}>
+
+          {/* Accent bar */}
+          <View style={[pop.topBar, { backgroundColor: s.color }]} />
+
+          {/* Handle */}
           <View style={pop.handle} />
 
+          {/* Header */}
           <View style={pop.header}>
-            <View style={[pop.iconCircle, { backgroundColor: s.bg, borderColor: s.color }]}>
-              <Text style={pop.iconEmoji}>{s.emoji}</Text>
-              <View style={pop.iconShine} />
+
+            {/* Diamond icon */}
+            <View style={pop.iconWrap}>
+              <View style={[pop.iconGlow, { backgroundColor: s.color + '14', borderColor: s.color + '2E' }]} />
+              <Svg width={D} height={D + 4} style={{ position: 'absolute' }}>
+                <Defs>
+                  <RadialGradient id="rgpop" cx="50%" cy="36%" r="62%">
+                    <Stop offset="0%"   stopColor={s.color}  stopOpacity="0.30" />
+                    <Stop offset="100%" stopColor={s.darkBg} stopOpacity="1.0"  />
+                  </RadialGradient>
+                </Defs>
+                <Polygon points={iconPts} fill="url(#rgpop)" stroke={s.color} strokeWidth={1.8} />
+                <Polygon points={iIconPts} fill="none" stroke={s.color} strokeWidth={0.7} strokeOpacity={0.28} />
+                <Circle cx={dh + 5} cy={dh - 7} r={4} fill="rgba(255,255,255,0.20)" />
+              </Svg>
+              <Text style={[pop.iconSymbol, { color: s.color }]}>{s.symbol}</Text>
             </View>
+
+            {/* Title */}
             <View style={{ flex: 1 }}>
               <View style={pop.titleRow}>
                 <Text style={pop.typeText}>{s.label}</Text>
-                <View style={[pop.liveBadge, { backgroundColor: s.color + '28', borderColor: s.color + '60' }]}>
+                <View style={[pop.liveBadge, { backgroundColor: s.color + '1E', borderColor: s.color + '4E' }]}>
                   <View style={[pop.liveDot, { backgroundColor: s.color }]} />
                   <Text style={[pop.liveBadgeText, { color: s.color }]}>LIVE</Text>
                 </View>
               </View>
-              {road && <Text style={pop.roadText} numberOfLines={1}>📍 {road}</Text>}
+              {road && <Text style={pop.roadText} numberOfLines={1}>{road}</Text>}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                {/* Tiny diamond bullet */}
+                <Svg width={7} height={7}>
+                  <Polygon points="3.5,0 7,3.5 3.5,7 0,3.5" fill={s.color} />
+                </Svg>
+                <Text style={[pop.severityText, { color: s.color }]}>
+                  {s.pulse ? 'HIGH SEVERITY' : 'ADVISORY'}
+                </Text>
+              </View>
             </View>
-            <Pressable style={pop.closeBtn} onPress={onClose} hitSlop={10}>
+
+            <Pressable style={pop.closeBtn} onPress={onClose} hitSlop={12}>
               <Text style={pop.closeBtnText}>✕</Text>
             </Pressable>
           </View>
 
-          <View style={[pop.divider, { backgroundColor: s.color + '30' }]} />
+          <View style={[pop.divider, { backgroundColor: s.color + '22' }]} />
 
-          <ScrollView style={{ maxHeight: 180 }} showsVerticalScrollIndicator={false}>
+          <ScrollView style={{ maxHeight: 185 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
             <Text style={pop.detailText}>{s.detail}</Text>
             {!!incident.description && (
-              <View style={[pop.reportedBox, { borderLeftColor: s.color, backgroundColor: s.color + '10' }]}>
-                <Text style={pop.reportedLabel}>REPORTED</Text>
+              <View style={[pop.reportedBox, { borderLeftColor: s.color, backgroundColor: s.color + '0D' }]}>
+                <Text style={[pop.reportedLabel, { color: s.color + 'A0' }]}>REPORTED</Text>
                 <Text style={pop.reportedText}>{incident.description}</Text>
               </View>
             )}
@@ -261,46 +367,182 @@ export function IncidentDetailPopup({
 
           <View style={pop.footer}>
             {delayLabel && (
-              <View style={[pop.chip, { backgroundColor: '#FF475722', borderColor: '#FF475755' }]}>
-                <Text style={[pop.chipText, { color: '#FF6B7A' }]}>⏱ {delayLabel}</Text>
+              <View style={[pop.chip, { backgroundColor: '#FF475716', borderColor: '#FF475745' }]}>
+                <Text style={[pop.chipText, { color: '#FF8A94' }]}>⏱  {delayLabel}</Text>
               </View>
             )}
-            <View style={[pop.chip, { backgroundColor: s.color + '18', borderColor: s.color + '44' }]}>
-              <Text style={[pop.chipText, { color: s.color }]}>🔴 Live incident</Text>
+            <View style={[pop.chip, { backgroundColor: s.color + '14', borderColor: s.color + '38' }]}>
+              <Text style={[pop.chipText, { color: s.color }]}>◈  Active</Text>
             </View>
-            <View style={[pop.chip, { backgroundColor: '#FFFFFF08', borderColor: '#FFFFFF15' }]}>
-              <Text style={[pop.chipText, { color: '#64748B' }]}>Auto-refreshes</Text>
+            <View style={[pop.chip, { backgroundColor: '#FFFFFF06', borderColor: '#FFFFFF10' }]}>
+              <Text style={[pop.chipText, { color: '#475569' }]}>↺  Auto-refresh</Text>
             </View>
           </View>
+
         </Animated.View>
       </Pressable>
     </Modal>
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const pop = StyleSheet.create({
-  backdrop:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.52)', justifyContent: 'flex-end' },
-  sheet:         { backgroundColor: '#0D1326', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingTop: 0, paddingBottom: 44, borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#FFFFFF12', shadowColor: '#000', shadowOffset: { width: 0, height: -10 }, shadowOpacity: 0.6, shadowRadius: 28, elevation: 28, overflow: 'hidden' },
-  accentBar:     { height: 4, borderTopLeftRadius: 30, borderTopRightRadius: 30, opacity: 0.9 },
-  handle:        { width: 40, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF22', alignSelf: 'center', marginTop: 12, marginBottom: 20 },
-  header:        { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 16 },
-  iconCircle:    { width: 62, height: 62, borderRadius: 31, borderWidth: 2.5, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
-  iconEmoji:     { fontSize: 28 },
-  iconShine:     { position: 'absolute', top: 8, right: 10, width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.28)' },
-  titleRow:      { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  typeText:      { fontSize: 20, fontWeight: '800', color: '#F1F5F9', letterSpacing: -0.3 },
-  liveBadge:     { borderRadius: 6, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  liveDot:       { width: 6, height: 6, borderRadius: 3 },
-  liveBadgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  roadText:      { fontSize: 13, color: '#64748B', fontWeight: '500' },
-  closeBtn:      { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF10', justifyContent: 'center', alignItems: 'center', alignSelf: 'flex-start' },
-  closeBtnText:  { color: '#94A3B8', fontSize: 13, fontWeight: '700' },
-  divider:       { height: 1, marginBottom: 16 },
-  detailText:    { fontSize: 15, color: '#CBD5E1', lineHeight: 23, marginBottom: 14 },
-  reportedBox:   { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 8, borderRadius: 6, marginBottom: 14 },
-  reportedLabel: { fontSize: 10, fontWeight: '800', color: '#475569', letterSpacing: 1, marginBottom: 4 },
-  reportedText:  { fontSize: 14, color: '#94A3B8', lineHeight: 20 },
-  footer:        { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
-  chip:          { borderRadius: 20, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 6 },
-  chipText:      { fontSize: 12, fontWeight: '600' },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(2,3,22,0.60)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#07091E',
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingHorizontal: 20,
+    paddingTop: 0,
+    paddingBottom: 46,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -14 },
+    shadowOpacity: 0.72,
+    shadowRadius: 36,
+    elevation: 36,
+    overflow: 'hidden',
+  },
+  topBar: {
+    height: 4,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    opacity: 0.95,
+  },
+  handle: {
+    width: 36, height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignSelf: 'center',
+    marginTop: 14,
+    marginBottom: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 16,
+  },
+  iconWrap: {
+    width: 58, height: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconGlow: {
+    position: 'absolute',
+    width: 58, height: 58,
+    borderRadius: 29,
+    borderWidth: 1,
+  },
+  iconSymbol: {
+    position: 'absolute',
+    fontSize: 19,
+    fontWeight: '800',
+    includeFontPadding: false,
+    marginTop: -6,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 3,
+    flexWrap: 'wrap',
+  },
+  typeText: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#EEF2FF',
+    letterSpacing: -0.3,
+  },
+  liveBadge: {
+    borderRadius: 5,
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  liveDot: {
+    width: 5, height: 5,
+    borderRadius: 2.5,
+  },
+  liveBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  roadText: {
+    fontSize: 12,
+    color: '#4B5E72',
+    fontWeight: '500',
+    marginBottom: 1,
+  },
+  severityText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+  },
+  closeBtn: {
+    width: 28, height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+  },
+  closeBtnText: {
+    color: '#4B5E72',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  divider: { height: 1, marginBottom: 14 },
+  detailText: {
+    fontSize: 15,
+    color: '#7A8FA6',
+    lineHeight: 24,
+    marginBottom: 14,
+  },
+  reportedBox: {
+    borderLeftWidth: 2.5,
+    paddingLeft: 12,
+    paddingVertical: 8,
+    borderRadius: 3,
+    marginBottom: 14,
+  },
+  reportedLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.4,
+    marginBottom: 3,
+  },
+  reportedText: {
+    fontSize: 13,
+    color: '#7A8FA6',
+    lineHeight: 20,
+  },
+  footer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 16,
+  },
+  chip: {
+    borderRadius: 18,
+    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+  },
+  chipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
 });
