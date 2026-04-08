@@ -1,3 +1,4 @@
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -844,6 +845,79 @@ def get_news(
         return {"articles": final_articles}
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Live Traffic Incidents (TomTom API)
+# ---------------------------------------------------------------------------
+INCIDENT_CATEGORIES = {
+    0: "Unknown", 1: "Accident", 2: "Fog", 3: "Dangerous Conditions",
+    4: "Rain", 5: "Ice", 6: "Jam", 7: "Lane Closed", 8: "Road Closed",
+    9: "Road Works", 10: "Wind", 11: "Flooding", 14: "Broken Down Vehicle",
+}
+_traffic_cache: dict = {}
+TRAFFIC_CACHE_TTL = 120  # 2 minutes
+
+
+@app.get("/traffic/incidents")
+def get_traffic_incidents(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    radius_km: float = Query(default=5.0, ge=0.5, le=50.0),
+):
+    """Get live traffic incidents near a location using TomTom API. Cached 2 min."""
+    cache_key = f"{round(lat, 2)}:{round(lng, 2)}:{radius_km}"
+    if cache_key in _traffic_cache:
+        cached_at, data = _traffic_cache[cache_key]
+        if time.time() - cached_at < TRAFFIC_CACHE_TTL:
+            return data
+
+    tomtom_key = os.getenv("TOMTOM_API_KEY")
+    if not tomtom_key:
+        return {"incidents": [], "total": 0, "cached": False}
+
+    lat_delta = radius_km / 111.0
+    lng_delta = radius_km / (111.0 * abs(math.cos(math.radians(lat))))
+    bbox = f"{lng - lng_delta},{lat - lat_delta},{lng + lng_delta},{lat + lat_delta}"
+
+    url = "https://api.tomtom.com/traffic/services/5/incidentDetails"
+    params = {"key": tomtom_key, "bbox": bbox, "language": "en-GB", "timeValidityFilter": "present"}
+
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code >= 400:
+            return {"incidents": [], "total": 0, "cached": False}
+
+        raw_incidents = response.json().get("incidents", [])
+        incidents = []
+        for incident in raw_incidents:
+            props = incident.get("properties", {})
+            geometry = incident.get("geometry", {})
+            coords = geometry.get("coordinates", [])
+            category = props.get("iconCategory", 0)
+            if coords:
+                if geometry.get("type") == "Point":
+                    inc_lng, inc_lat = coords[0], coords[1]
+                else:
+                    mid = len(coords) // 2
+                    inc_lng, inc_lat = coords[mid][0], coords[mid][1]
+            else:
+                continue
+            incidents.append({
+                "id": props.get("id", ""),
+                "category": category,
+                "type": INCIDENT_CATEGORIES.get(category, "Unknown"),
+                "latitude": inc_lat,
+                "longitude": inc_lng,
+                "description": props.get("events", [{}])[0].get("description", "") if props.get("events") else "",
+                "delay_seconds": props.get("delay", 0),
+            })
+
+        result = {"incidents": incidents, "total": len(incidents), "cached": False}
+        _traffic_cache[cache_key] = (time.time(), {**result, "cached": True})
+        return result
+    except requests.RequestException:
+        return {"incidents": [], "total": 0, "cached": False}
 
 
 # ---------------------------------------------------------------------------

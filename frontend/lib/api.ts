@@ -460,6 +460,47 @@ export async function createEmergencyContact(
   });
 }
 
+export type NewsArticle = {
+  title: string;
+  description: string | null;
+  url: string;
+  image: string | null;
+  publishedAt: string | null;
+  source: string | null;
+};
+
+export async function fetchSafetyNews(location: string, category = 'traffic'): Promise<NewsArticle[]> {
+  try {
+    const res = await request<{ articles: NewsArticle[] }>(
+      `/news?category=${encodeURIComponent(category)}&location=${encodeURIComponent(location)}`
+    );
+    return res.articles ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export type TrafficIncident = {
+  id: string;
+  category: number;
+  type: string;
+  latitude: number;
+  longitude: number;
+  description: string;
+  delay_seconds: number;
+};
+
+export async function fetchTrafficIncidents(lat: number, lng: number, radiusKm = 5): Promise<TrafficIncident[]> {
+  try {
+    const res = await request<{ incidents: TrafficIncident[] }>(
+      `/traffic/incidents?lat=${lat}&lng=${lng}&radius_km=${radiusKm}`
+    );
+    return res.incidents ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function updateUserSettings(
   jwt: string,
   payload: Record<string, any>,

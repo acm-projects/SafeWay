@@ -37,3 +37,4 @@ jobs:
             ADMIN_SECRET=${{ secrets.ADMIN_SECRET }}
             NEWSDATA_API_KEY=${{ secrets.NEWSDATA_API_KEY }}
             DATABASE_URL=${{ secrets.DATABASE_URL }}
+            TOMTOM_API_KEY=${{ secrets.TOMTOM_API_KEY }}

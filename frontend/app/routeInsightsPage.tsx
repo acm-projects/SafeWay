@@ -22,8 +22,9 @@
  *    Always a formula from AADT — never a separate backend field.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Linking,
   Modal,
   PanResponder,
   Pressable,
@@ -36,6 +37,7 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/providers/theme-context';
+import { fetchSafetyNews, type NewsArticle } from '@/lib/api';
 
 // ─── Types (mirrored from directions.tsx) ────────────────────────────────────
 export interface ModeRouteData {
@@ -312,6 +314,12 @@ export function RouteInsightsPage({
 
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
+  const [newsArticles, setNewsArticles] = useState<NewsArticle[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    fetchSafetyNews('Chicago', 'traffic').then(setNewsArticles).catch(() => {});
+  }, [visible]);
 
   // ── Derived values ──────────────────────────────────────────────────────────
   const avgSpeedMph = activeData
@@ -728,6 +736,34 @@ export function RouteInsightsPage({
                 </View>
               </View>
             </View>
+
+            {/* ── Nearby News ── */}
+            {newsArticles.length > 0 && (
+              <View style={[s.statCardWide, { backgroundColor: T.CARD }]}>
+                <Text style={[s.statLabel, { color: T.TEXT_MUT, marginBottom: 12 }]}>📰  NEARBY NEWS</Text>
+                {newsArticles.slice(0, 5).map((article, i) => (
+                  <Pressable
+                    key={i}
+                    onPress={() => article.url && Linking.openURL(article.url)}
+                    style={{ marginBottom: i < 4 ? 12 : 0, borderBottomWidth: i < 4 ? 1 : 0, borderBottomColor: '#FFFFFF12', paddingBottom: i < 4 ? 12 : 0 }}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600', lineHeight: 18, marginBottom: 2 }} numberOfLines={2}>
+                      {article.title}
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 2 }}>
+                      {article.source && (
+                        <Text style={{ color: '#4A90E2', fontSize: 11, fontWeight: '600' }}>{article.source}</Text>
+                      )}
+                      {article.publishedAt && (
+                        <Text style={{ color: '#7A8FA6', fontSize: 11 }}>
+                          {new Date(article.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </Text>
+                      )}
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
 
           </ScrollView>
         </View>

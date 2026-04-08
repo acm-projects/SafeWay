@@ -33,8 +33,8 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { LinearGradient } from 'expo-linear-gradient';
 
-import { getRoute, getMultipleRoutes, searchPlaces } from '@/lib/api';
-import type { AlternativeRoute, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
+import { getRoute, getMultipleRoutes, searchPlaces, fetchTrafficIncidents } from '@/lib/api';
+import type { AlternativeRoute, PlaceSearchResult, RoutePoint, RouteTimingInput, TrafficIncident } from '@/lib/api';
 import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
@@ -948,6 +948,7 @@ export default function DirectionsScreen() {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
+  const [trafficIncidents, setTrafficIncidents] = useState<TrafficIncident[]>([]);
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
 
@@ -1175,6 +1176,10 @@ export default function DirectionsScreen() {
         };
       }
       setRouteByMode(nd);
+      // Fetch live traffic incidents around the midpoint of the route
+      const midLat = (from.lat + to.lat) / 2;
+      const midLng = (from.lng + to.lng) / 2;
+      fetchTrafficIncidents(midLat, midLng, 5).then(setTrafficIncidents).catch(() => {});
     } catch (e) {
       Alert.alert('Route error', e instanceof Error ? e.message : 'Could not fetch route.');
     } finally {
@@ -1358,6 +1363,22 @@ export default function DirectionsScreen() {
                   </>
                 )}
                 <Text style={{ color: '#4A6580', fontSize: 10, marginTop: 6 }}>{coord.latitude.toFixed(5)}, {coord.longitude.toFixed(5)}</Text>
+              </View>
+            </Callout>
+          </Marker>
+        ))}
+        {trafficIncidents.map((inc, i) => (
+          <Marker key={`inc-${i}`} coordinate={{ latitude: inc.latitude, longitude: inc.longitude }} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={{ width: 22, height: 22, borderRadius: 4, backgroundColor: '#FF8C00', borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '900', lineHeight: 14 }}>▲</Text>
+            </View>
+            <Callout tooltip>
+              <View style={{ backgroundColor: '#1E2A38', borderRadius: 10, padding: 10, minWidth: 150, maxWidth: 220, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 6, elevation: 6 }}>
+                <Text style={{ color: '#FFA500', fontWeight: '800', fontSize: 13, marginBottom: 4 }}>🚧 {inc.type}</Text>
+                {inc.description ? <Text style={{ color: '#fff', fontSize: 12 }}>{inc.description}</Text> : null}
+                {inc.delay_seconds > 0 && (
+                  <Text style={{ color: '#7A8FA6', fontSize: 11, marginTop: 4 }}>Delay: ~{Math.round(inc.delay_seconds / 60)} min</Text>
+                )}
               </View>
             </Callout>
           </Marker>
