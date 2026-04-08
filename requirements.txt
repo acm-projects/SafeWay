@@ -80,3 +80,4 @@ networkx>=3.0
 optuna>=3.5.0
 catboost>=1.2.0
 shap>=0.44.0
+h3>=3.7.0

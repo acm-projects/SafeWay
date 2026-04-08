@@ -510,6 +510,68 @@ def api_usage():
     }
 
 
+# ---------------------------------------------------------------------------
+# Crash hex-grid endpoint (H3 binning)
+# ---------------------------------------------------------------------------
+_CRASH_FILTER_SQL: dict[str, str] = {
+    "fatal":  "AND (is_fatal = TRUE OR injury_type ILIKE '%fatal%')",
+    "ped":    "AND is_pedestrian = TRUE",
+    "bike":   "AND is_bicycle = TRUE",
+    "hit":    "AND is_hit_and_run = TRUE",
+    "injury": "AND (is_fatal = FALSE OR is_fatal IS NULL)",
+}
+_hex_cache: dict[str, tuple[float, list]] = {}
+HEX_CACHE_TTL = 600  # 10 minutes
+
+
+@app.get("/crashes/hex")
+def get_crash_hexes(
+    filter: str = Query(default="all"),
+    resolution: int = Query(default=8, ge=5, le=12),
+):
+    """Bin crash coordinates into H3 hexagons and return coloured hex data."""
+    cache_key = f"{filter}:{resolution}"
+    if cache_key in _hex_cache:
+        cached_at, data = _hex_cache[cache_key]
+        if time.time() - cached_at < HEX_CACHE_TTL:
+            return {"hexes": data, "total": len(data), "cached": True}
+
+    try:
+        import h3 as h3lib
+    except ImportError:
+        return {"hexes": [], "total": 0, "error": "h3 library not installed"}
+
+    extra_sql = _CRASH_FILTER_SQL.get(filter, "")
+    sql = f"""
+        SELECT latitude, longitude
+        FROM public.enriched_crashes
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        {extra_sql}
+    """
+
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    hex_counts: dict[str, int] = {}
+    for lat, lng in rows:
+        hex_id = h3lib.latlng_to_cell(float(lat), float(lng), resolution)
+        hex_counts[hex_id] = hex_counts.get(hex_id, 0) + 1
+
+    result = []
+    for hex_id, count in hex_counts.items():
+        boundary = h3lib.cell_to_boundary(hex_id)
+        corners = [{"latitude": lat, "longitude": lng} for lat, lng in boundary]
+        result.append({"hexId": hex_id, "count": count, "corners": corners})
+
+    _hex_cache[cache_key] = (time.time(), result)
+    return {"hexes": result, "total": len(result), "cached": False}
+
+
 @app.get("/weather")
 def get_weather(lat: float = Query(...), lng: float = Query(...)):
     """Get current weather using Open-Meteo API (free, no API key needed)."""

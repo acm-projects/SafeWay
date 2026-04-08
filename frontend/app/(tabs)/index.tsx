@@ -42,6 +42,8 @@ import { useTheme } from '@/providers/theme-context';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import StreetViewModal from '@/components/StreetViewModal';
+import HeatmapLegend from '@/app/HeatmapLegend';
+import HexHeatmap from '@/app/HexHeatmap';
 
 const DARK_MAP_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
@@ -435,7 +437,7 @@ export default function HomeScreen() {
   const { points: crashPoints, loading: crashLoading } = useCrashHeatmap({
     filter: heatmapFilter === 'off' ? 'all' : heatmapFilter,
     enabled: heatmapFilter !== 'off',
-    limit: 10_000,
+    limit: 100_000,
   });
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
@@ -708,6 +710,14 @@ export default function HomeScreen() {
             gradient={{ colors: ['#00E5FF', '#FFD600', '#FF1744'], startPoints: [0.1, 0.5, 1.0], colorMapSize: 256 }}
           />
         )}
+        {heatmapFilter !== 'off' && (
+          <HexHeatmap
+            points={crashPoints}
+            region={currentRegion}
+            filter={heatmapFilter}
+          />
+        )}
+        <HeatmapLegend visible={heatmapFilter !== 'off'} />
       </MapView>
 
       {/* Street View coverage WebView — only mounted while dragging so it never blocks map touches.
