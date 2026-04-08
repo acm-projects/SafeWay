@@ -364,8 +364,6 @@ def compute_route(payload: RouteRequest):
         from risk_cache import score_coordinates
         from model.generic_scorer import score_coordinates_generic
 
-        
-
         # Check if route is within Chicago bounds
         CHICAGO_BOUNDS = {
             "min_lat": 41.63, "max_lat": 42.05,
@@ -1069,4 +1067,86 @@ def get_traffic_incidents(
         raise HTTPException(status_code=502, detail=f"Traffic fetch failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Safety POIs — Nearby police stations, hospitals, fire stations
+# ---------------------------------------------------------------------------
 
+SAFETY_POI_TYPES = {
+    "police": "police",
+    "hospital": "hospital",
+    "fire_station": "fire_station",
+    "pharmacy": "pharmacy",
+}
+
+
+@app.get("/safety/nearby")
+def get_nearby_safety_pois(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    poi_type: str = Query(default="police", description="Type: police, hospital, fire_station, pharmacy"),
+    limit: int = Query(default=5, ge=1, le=10),
+):
+    """
+    Find nearby safety POIs (police stations, hospitals, fire stations).
+    Uses Google Places API.
+    """
+    _check_and_increment_api_limit()
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    place_type = SAFETY_POI_TYPES.get(poi_type, "police")
+
+    url = "https://places.googleapis.com/v1/places:searchNearby"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": google_key,
+        "X-Goog-FieldMask": (
+            "places.id,places.displayName,places.formattedAddress,"
+            "places.location,places.googleMapsUri,places.regularOpeningHours,"
+            "places.nationalPhoneNumber,places.rating"
+        ),
+    }
+    body = {
+        "includedTypes": [place_type],
+        "maxResultCount": limit,
+        "locationRestriction": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": 5000.0,
+            }
+        },
+    }
+
+    response = requests.post(url, headers=headers, json=body, timeout=20)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Places API error: {response.text}",
+        )
+
+    raw_places = response.json().get("places", [])
+    places = []
+    for place in raw_places:
+        location = place.get("location") or {}
+        display_name = place.get("displayName") or {}
+        opening_hours = place.get("regularOpeningHours") or {}
+        places.append({
+            "place_id": place.get("id"),
+            "name": display_name.get("text"),
+            "address": place.get("formattedAddress"),
+            "lat": location.get("latitude"),
+            "lng": location.get("longitude"),
+            "phone": place.get("nationalPhoneNumber"),
+            "rating": place.get("rating"),
+            "google_maps_uri": place.get("googleMapsUri"),
+            "open_now": opening_hours.get("openNow"),
+            "type": poi_type,
+        })
+
+    return {
+        "results": places,
+        "total": len(places),
+        "poi_type": poi_type,
+        "search_location": {"lat": lat, "lng": lng},
+    }
