@@ -59,6 +59,30 @@ const DARK_MAP_STYLE = [
   { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
 ];
 
+// ─── Time-aware safety UI ─────────────────────────────────────────────────────
+type SafetyLevel = 'safe' | 'moderate' | 'caution';
+
+function getSafetyLevel(): SafetyLevel {
+  const h = new Date().getHours();
+  if (h >= 6 && h < 20) return 'safe';
+  if (h >= 20 && h < 22) return 'moderate';
+  return 'caution';
+}
+
+const SAFETY_CONFIG = {
+  safe:     { color: '#1ABC93', label: 'Good Conditions',  icon: 'checkmark-circle-outline' },
+  moderate: { color: '#F0A500', label: 'Stay Alert',       icon: 'alert-circle-outline'     },
+  caution:  { color: '#F0A500', label: 'Drive Carefully',  icon: 'warning-outline'          },
+} as const;
+
+function getTimeGreeting(): string {
+  const h = new Date().getHours();
+  if (h >= 5  && h < 12) return 'Good morning';
+  if (h >= 12 && h < 17) return 'Good afternoon';
+  if (h >= 17 && h < 21) return 'Good evening';
+  return 'Good night';
+}
+
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
   { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
   { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
@@ -979,6 +1003,19 @@ export default function HomeScreen() {
               </Text>
             </View>
           )}
+
+          {/* Safety level + greeting indicator */}
+          {(() => {
+            const sl = getSafetyLevel();
+            const sc = SAFETY_CONFIG[sl];
+            return (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14, paddingHorizontal: 4 }}>
+                <Ionicons name={sc.icon as any} size={16} color={sc.color} />
+                <Text style={{ color: sc.color, fontSize: 12, fontWeight: '700' }}>{sc.label}</Text>
+                <Text style={{ color: T.TEXT_MUT, fontSize: 12, marginLeft: 'auto' }}>{getTimeGreeting()}</Text>
+              </View>
+            );
+          })()}
 
           {/* BOOKMARKED LOCATIONS — always rendered, never gated by sheetIndex */}
           <>

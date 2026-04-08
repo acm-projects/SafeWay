@@ -2,6 +2,16 @@ import Constants from 'expo-constants';
 
 const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://10.0.2.2:8000';
 
+function _resolveBaseUrl(raw: string): string {
+  const local = /^(127\.|10\.0\.2\.2|192\.168\.|10\.)/;
+  try {
+    const u = new URL(raw);
+    if (local.test(u.hostname)) return raw.replace(/^https:\/\//, 'http://');
+  } catch {}
+  return raw;
+}
+const resolvedApiBaseUrl = _resolveBaseUrl(apiBaseUrl);
+
 // `EXPO_PUBLIC_*` vars are inlined at build time. When running via `npx expo start`
 // with a local .env they work directly. As a fallback we also read from
 // Constants.expoConfig.extra (set in app.config.ts) so the key is available in
@@ -61,7 +71,7 @@ export type RouteResponse = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(`${resolvedApiBaseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
