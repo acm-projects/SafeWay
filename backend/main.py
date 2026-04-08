@@ -1,4 +1,3 @@
-import math
 import os
 import time
 from datetime import datetime, timezone
@@ -6,8 +5,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+
 import psycopg2
 import requests
+import math 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,6 @@ from supabase import Client, create_client
 
 # Load .env from backend directory
 load_dotenv(Path(__file__).resolve().parent / ".env")
-
 
 app = FastAPI(title="SafeWay API")
 
@@ -28,6 +28,26 @@ DAILY_API_LIMIT = 200  # hard cap — keeps us well under 50
 
 _api_call_count = 0
 _api_call_date = datetime.now(timezone.utc).date()
+
+# TomTom daily rate limiter
+TOMTOM_DAILY_LIMIT = 200  # keep well under 2500 free tier limit
+_tomtom_call_count = 0
+_tomtom_call_date = datetime.now(timezone.utc).date()
+
+
+def _check_and_increment_tomtom_limit():
+    """Increment TomTom daily counter. Raises HTTP 429 if limit hit."""
+    global _tomtom_call_count, _tomtom_call_date
+    today = datetime.now(timezone.utc).date()
+    if today != _tomtom_call_date:
+        _tomtom_call_count = 0
+        _tomtom_call_date = today
+    if _tomtom_call_count >= TOMTOM_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily TomTom API limit reached ({TOMTOM_DAILY_LIMIT} calls). Resets at midnight UTC.",
+        )
+    _tomtom_call_count += 1
 
 
 def _check_and_increment_api_limit():
@@ -295,85 +315,6 @@ def search_places(query: str = Query(min_length=2), limit: int = Query(default=5
     return {"results": places}
 
 
-@app.get("/maps/place/{place_id}")
-def get_place_details(place_id: str):
-    """Proxy Google Places API v1 details — keeps API key server-side."""
-    _check_and_increment_api_limit()
-    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if not google_key:
-        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
-
-    fields = (
-        "id,displayName,formattedAddress,location,"
-        "rating,userRatingCount,websiteUri,nationalPhoneNumber,"
-        "regularOpeningHours,currentOpeningHours,photos,types,"
-        "googleMapsUri,editorialSummary"
-    )
-    response = requests.get(
-        f"https://places.googleapis.com/v1/places/{place_id}",
-        headers={
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": google_key,
-            "X-Goog-FieldMask": fields,
-        },
-        params={"languageCode": "en"},
-        timeout=20,
-    )
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail="Place details fetch failed")
-
-    p = response.json()
-    oh = p.get("currentOpeningHours") or p.get("regularOpeningHours") or {}
-    opening_hours = None
-    if oh.get("weekdayDescriptions"):
-        opening_hours = "\n".join(oh["weekdayDescriptions"])
-    elif oh.get("openNow") is not None:
-        opening_hours = "Open now" if oh["openNow"] else "Closed"
-
-    photo_refs = [ph.get("name") for ph in (p.get("photos") or [])[:6] if ph.get("name")]
-
-    return {
-        "place_id": p.get("id") or place_id,
-        "name": (p.get("displayName") or {}).get("text", ""),
-        "address": p.get("formattedAddress", ""),
-        "lat": (p.get("location") or {}).get("latitude", 0),
-        "lng": (p.get("location") or {}).get("longitude", 0),
-        "rating": p.get("rating"),
-        "user_ratings_total": p.get("userRatingCount"),
-        "website": p.get("websiteUri"),
-        "phone": p.get("nationalPhoneNumber"),
-        "opening_hours": opening_hours,
-        "photo_urls": photo_refs,
-        "types": p.get("types"),
-        "google_maps_uri": p.get("googleMapsUri"),
-        "editorial_summary": (p.get("editorialSummary") or {}).get("text"),
-    }
-
-
-@app.get("/maps/place-photo")
-def get_place_photo(ref: str = Query(..., description="Photo resource name from Places API")):
-    """Proxy Google Places photo — streams image bytes so API key stays server-side."""
-    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if not google_key:
-        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
-
-    photo_url = f"https://places.googleapis.com/v1/{ref}/media"
-    response = requests.get(
-        photo_url,
-        params={"maxHeightPx": 800, "maxWidthPx": 800, "key": google_key},
-        timeout=20,
-        stream=True,
-    )
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail="Photo fetch failed")
-
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        response.iter_content(chunk_size=8192),
-        media_type=response.headers.get("content-type", "image/jpeg"),
-    )
-
-
 @app.post("/maps/route")
 def compute_route(payload: RouteRequest):
     _check_and_increment_api_limit()
@@ -421,6 +362,24 @@ def compute_route(payload: RouteRequest):
     result_routes = []
     try:
         from risk_cache import score_coordinates
+        from model.generic_scorer import score_coordinates_generic
+
+        
+
+        # Check if route is within Chicago bounds
+        CHICAGO_BOUNDS = {
+            "min_lat": 41.63, "max_lat": 42.05,
+            "min_lng": -87.94, "max_lng": -87.52,
+        }
+
+        def is_in_chicago(lat: float, lng: float) -> bool:
+            return (
+                CHICAGO_BOUNDS["min_lat"] <= lat <= CHICAGO_BOUNDS["max_lat"] and
+                CHICAGO_BOUNDS["min_lng"] <= lng <= CHICAGO_BOUNDS["max_lng"]
+            )
+
+        use_chicago_model = is_in_chicago(payload.origin.lat, payload.origin.lng)
+
         for route in raw_routes:
             polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
             coordinates = decode_polyline(polyline) if polyline else []
@@ -428,12 +387,19 @@ def compute_route(payload: RouteRequest):
             safety_label = "unknown"
             extra = {}
             try:
-                safety = score_coordinates(
-                    coordinates,
-                    sample_every=5,
-                    departure_hour=payload.departure_hour,
-                    travel_mode=payload.travel_mode,
-                )
+                if use_chicago_model:
+                    safety = score_coordinates(
+                        coordinates,
+                        sample_every=5,
+                        departure_hour=payload.departure_hour,
+                        travel_mode=payload.travel_mode,
+                    )
+                else:
+                    safety = score_coordinates_generic(
+                        coordinates,
+                        sample_every=5,
+                        travel_mode=payload.travel_mode,
+                    )
                 safety_score = safety.get("score")
                 safety_label = safety.get("label", "unknown")
                 extra = {
@@ -443,13 +409,10 @@ def compute_route(payload: RouteRequest):
                     "n_high_risk": safety.get("n_high_risk", 0),
                     "top_risk_factors": safety.get("top_risk_factors", []),
                     "time_band": safety.get("time_band"),
-                    "segment_risks": safety.get("segment_risks", []),
-                    "high_risk_coords": safety.get("high_risk_coords", []),
-                    "aadt_avg": safety.get("aadt_avg"),
-                    "aadt_max": safety.get("aadt_max"),
                 }
-            except Exception as score_err:
-                print(f"[route] score_coordinates failed for route: {score_err}", flush=True)
+            except Exception as scoring_err:
+                print(f"[route] scoring error: {scoring_err}")
+
             result_routes.append({
                 "distance_meters": route.get("distanceMeters"),
                 "duration": route.get("duration"),
@@ -457,7 +420,6 @@ def compute_route(payload: RouteRequest):
                 "coordinates": coordinates,
                 "safety_score": safety_score,
                 "safety_label": safety_label,
-                "route_source": "google",
                 **extra,
             })
     except Exception as e:
@@ -472,30 +434,25 @@ def compute_route(payload: RouteRequest):
                 "coordinates": coordinates,
                 "safety_score": None,
                 "safety_label": "unknown",
-                "route_source": "google",
             })
-
-    # ── SafeWay A* safer route ──────────────────────────────────────────
-    from astar_route import compute_astar_route
-    astar_result = compute_astar_route(
-        payload.origin.lat, payload.origin.lng,
-        payload.destination.lat, payload.destination.lng,
-        departure_hour=payload.departure_hour,
-        travel_mode=payload.travel_mode,
-    )
-    if astar_result:
-        result_routes.append(astar_result)
-
-    # Sort: SafeWay route first, then by safety score ascending (safest first)
-    result_routes.sort(key=lambda r: (
-        0 if r.get("route_source") == "safeway" else 1,
-        r.get("safety_score") if r.get("safety_score") is not None else 999,
-    ))
-
     return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
 
 @app.get("/maps/usage")
+@app.get("/traffic/usage")
+def tomtom_usage():
+    """Check how many TomTom API calls remain today."""
+    global _tomtom_call_count, _tomtom_call_date
+    today = datetime.now(timezone.utc).date()
+    if today != _tomtom_call_date:
+        _tomtom_call_count = 0
+        _tomtom_call_date = today
+    return {
+        "used": _tomtom_call_count,
+        "limit": TOMTOM_DAILY_LIMIT,
+        "remaining": max(0, TOMTOM_DAILY_LIMIT - _tomtom_call_count),
+    }
+
 def api_usage():
     """Check how many Google API calls remain today."""
     global _api_call_count, _api_call_date
@@ -508,68 +465,6 @@ def api_usage():
         "limit": DAILY_API_LIMIT,
         "remaining": max(0, DAILY_API_LIMIT - _api_call_count),
     }
-
-
-# ---------------------------------------------------------------------------
-# Crash hex-grid endpoint (H3 binning)
-# ---------------------------------------------------------------------------
-_CRASH_FILTER_SQL: dict[str, str] = {
-    "fatal":  "AND (is_fatal = TRUE OR injury_type ILIKE '%fatal%')",
-    "ped":    "AND is_pedestrian = TRUE",
-    "bike":   "AND is_bicycle = TRUE",
-    "hit":    "AND is_hit_and_run = TRUE",
-    "injury": "AND (is_fatal = FALSE OR is_fatal IS NULL)",
-}
-_hex_cache: dict[str, tuple[float, list]] = {}
-HEX_CACHE_TTL = 600  # 10 minutes
-
-
-@app.get("/crashes/hex")
-def get_crash_hexes(
-    filter: str = Query(default="all"),
-    resolution: int = Query(default=8, ge=5, le=12),
-):
-    """Bin crash coordinates into H3 hexagons and return coloured hex data."""
-    cache_key = f"{filter}:{resolution}"
-    if cache_key in _hex_cache:
-        cached_at, data = _hex_cache[cache_key]
-        if time.time() - cached_at < HEX_CACHE_TTL:
-            return {"hexes": data, "total": len(data), "cached": True}
-
-    try:
-        import h3 as h3lib
-    except ImportError:
-        return {"hexes": [], "total": 0, "error": "h3 library not installed"}
-
-    extra_sql = _CRASH_FILTER_SQL.get(filter, "")
-    sql = f"""
-        SELECT latitude, longitude
-        FROM public.enriched_crashes
-        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-        {extra_sql}
-    """
-
-    conn = get_db_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            rows = cur.fetchall()
-    finally:
-        conn.close()
-
-    hex_counts: dict[str, int] = {}
-    for lat, lng in rows:
-        hex_id = h3lib.latlng_to_cell(float(lat), float(lng), resolution)
-        hex_counts[hex_id] = hex_counts.get(hex_id, 0) + 1
-
-    result = []
-    for hex_id, count in hex_counts.items():
-        boundary = h3lib.cell_to_boundary(hex_id)
-        corners = [{"latitude": lat, "longitude": lng} for lat, lng in boundary]
-        result.append({"hexId": hex_id, "count": count, "corners": corners})
-
-    _hex_cache[cache_key] = (time.time(), result)
-    return {"hexes": result, "total": len(result), "cached": False}
 
 
 @app.get("/weather")
@@ -909,14 +804,164 @@ def get_news(
         raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")
 
 
+
+# ---------------------------------------------------------------------------
+# Safe Route — returns Google fastest route + OSM safer alternative
+# ---------------------------------------------------------------------------
+class SafeRouteRequest(BaseModel):
+    origin: LatLng
+    destination: LatLng
+    travel_mode: Literal["DRIVE", "WALK", "BICYCLE", "TWO_WHEELER"] = "DRIVE"
+    departure_hour: int | None = None
+    beta: float = 0.5  # safety weight: higher = prioritize safety more
+
+
+@app.post("/maps/safe-route")
+def compute_safe_route(payload: SafeRouteRequest):
+    """
+    Returns two routes:
+    1. Google fastest route (scored for safety)
+    2. Safer OSM alternative (uses danger scores to avoid risky intersections)
+    """
+    _check_and_increment_api_limit()
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    # Step 1: Get Google fastest route
+    url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": google_key,
+        "X-Goog-FieldMask": (
+            "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline"
+        ),
+    }
+    body = {
+        "origin": {"location": {"latLng": {"latitude": payload.origin.lat, "longitude": payload.origin.lng}}},
+        "destination": {"location": {"latLng": {"latitude": payload.destination.lat, "longitude": payload.destination.lng}}},
+        "travelMode": payload.travel_mode,
+    }
+
+    response = requests.post(url, headers=headers, json=body, timeout=25)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=f"Routes API error: {response.text}")
+
+    raw_routes = response.json().get("routes", [])
+    if not raw_routes:
+        raise HTTPException(status_code=404, detail="No routes found")
+
+    # Score Google route
+    google_route = raw_routes[0]
+    polyline = (google_route.get("polyline") or {}).get("encodedPolyline", "")
+    google_coords = decode_polyline(polyline) if polyline else []
+    google_safety = {}
+    try:
+        from risk_cache import score_coordinates
+        google_safety = score_coordinates(google_coords, sample_every=5, departure_hour=payload.departure_hour, travel_mode=payload.travel_mode)
+    except Exception as e:
+        print(f"[safe-route] Google scoring failed: {e}")
+
+    # Step 2: Find safer OSM alternative
+    safer_route = None
+    try:
+        import osmnx as ox
+        from risk_cache import get_graph, get_risk_map
+        from model.route_scoring import attach_risk_to_graph, find_safer_route
+
+        G = get_graph()
+        risk_map = get_risk_map()
+        attach_risk_to_graph(G, risk_map)
+
+        # Find nearest OSM nodes to origin and destination
+        origin_node = ox.distance.nearest_nodes(G, X=payload.origin.lng, Y=payload.origin.lat)
+        dest_node = ox.distance.nearest_nodes(G, X=payload.destination.lng, Y=payload.destination.lat)
+
+        result = find_safer_route(G, origin_node, dest_node, beta=payload.beta)
+
+        # Convert safe path nodes to coordinates
+        safe_coords = [
+            {"latitude": G.nodes[n]["y"], "longitude": G.nodes[n]["x"]}
+            for n in result["safe_path"]
+            if "y" in G.nodes[n] and "x" in G.nodes[n]
+        ]
+
+        # Score the safer route
+        safer_safety = {}
+        try:
+            safer_safety = score_coordinates(safe_coords, sample_every=5, departure_hour=payload.departure_hour, travel_mode=payload.travel_mode)
+        except Exception:
+            pass
+
+        safer_route = {
+            "coordinates": safe_coords,
+            "polyline": None,
+            "distance_meters": None,
+            "duration": None,
+            "safety_score": safer_safety.get("score"),
+            "safety_label": safer_safety.get("label", "unknown"),
+            "risk_per_km": safer_safety.get("risk_per_km"),
+            "total_exposure": safer_safety.get("total_exposure"),
+            "route_km": safer_safety.get("route_km"),
+            "n_high_risk": safer_safety.get("n_high_risk", 0),
+            "top_risk_factors": safer_safety.get("top_risk_factors", []),
+            "time_band": safer_safety.get("time_band"),
+            "time_penalty_pct": round(result.get("time_penalty_pct", 0), 1),
+            "risk_reduction_pct": round(result.get("risk_reduction_pct", 0), 1),
+        }
+
+    except Exception as e:
+        print(f"[safe-route] OSM safer route failed: {e}")
+
+    return {
+        "google_fastest": {
+            "coordinates": google_coords,
+            "polyline": polyline,
+            "distance_meters": google_route.get("distanceMeters"),
+            "duration": google_route.get("duration"),
+            "safety_score": google_safety.get("score"),
+            "safety_label": google_safety.get("label", "unknown"),
+            "risk_per_km": google_safety.get("risk_per_km"),
+            "total_exposure": google_safety.get("total_exposure"),
+            "route_km": google_safety.get("route_km"),
+            "n_high_risk": google_safety.get("n_high_risk", 0),
+            "top_risk_factors": google_safety.get("top_risk_factors", []),
+            "time_band": google_safety.get("time_band"),
+        },
+        "safer_alternative": safer_route,
+        "comparison": {
+            "time_penalty_pct": safer_route.get("time_penalty_pct") if safer_route else None,
+            "risk_reduction_pct": safer_route.get("risk_reduction_pct") if safer_route else None,
+            "recommendation": (
+                f"{abs(safer_route['risk_reduction_pct'])}% less total risk exposure"
+                if safer_route and safer_route.get("risk_reduction_pct") is not None
+                else "Safer alternative unavailable"
+            ),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Live Traffic Incidents (TomTom API)
 # ---------------------------------------------------------------------------
+
+# TomTom incident category mapping
 INCIDENT_CATEGORIES = {
-    0: "Unknown", 1: "Accident", 2: "Fog", 3: "Dangerous Conditions",
-    4: "Rain", 5: "Ice", 6: "Jam", 7: "Lane Closed", 8: "Road Closed",
-    9: "Road Works", 10: "Wind", 11: "Flooding", 14: "Broken Down Vehicle",
+    0: "Unknown",
+    1: "Accident",
+    2: "Fog",
+    3: "Dangerous Conditions",
+    4: "Rain",
+    5: "Ice",
+    6: "Jam",
+    7: "Lane Closed",
+    8: "Road Closed",
+    9: "Road Works",
+    10: "Wind",
+    11: "Flooding",
+    14: "Broken Down Vehicle",
 }
+
 _traffic_cache: dict = {}
 TRAFFIC_CACHE_TTL = 120  # 2 minutes
 
@@ -927,44 +972,59 @@ def get_traffic_incidents(
     lng: float = Query(...),
     radius_km: float = Query(default=5.0, ge=0.5, le=50.0),
 ):
-    """Get live traffic incidents near a location using TomTom API. Cached 2 min."""
+    """
+    Get live traffic incidents near a location using TomTom API.
+    Results are cached for 2 minutes to avoid excessive API calls.
+    """
     cache_key = f"{round(lat, 2)}:{round(lng, 2)}:{radius_km}"
     if cache_key in _traffic_cache:
         cached_at, data = _traffic_cache[cache_key]
         if time.time() - cached_at < TRAFFIC_CACHE_TTL:
             return data
-
+        
+    _check_and_increment_tomtom_limit()
     tomtom_key = os.getenv("TOMTOM_API_KEY")
     if not tomtom_key:
-        return {"incidents": [], "total": 0, "cached": False}
+        raise HTTPException(status_code=500, detail="Missing TOMTOM_API_KEY in backend .env")
 
+    # Calculate bounding box from center + radius
     lat_delta = radius_km / 111.0
     lng_delta = radius_km / (111.0 * abs(math.cos(math.radians(lat))))
     bbox = f"{lng - lng_delta},{lat - lat_delta},{lng + lng_delta},{lat + lat_delta}"
 
-    url = "https://api.tomtom.com/traffic/services/5/incidentDetails"
-    params = {"key": tomtom_key, "bbox": bbox, "language": "en-GB", "timeValidityFilter": "present"}
+    url = f"https://api.tomtom.com/traffic/services/5/incidentDetails"
+    params = {
+        "key": tomtom_key,
+        "bbox": bbox,
+        "language": "en-GB",
+        "timeValidityFilter": "present",
+    }
 
     try:
         response = requests.get(url, params=params, timeout=15)
         if response.status_code >= 400:
-            return {"incidents": [], "total": 0, "cached": False}
+            raise HTTPException(status_code=response.status_code, detail=f"TomTom API error: {response.text}")
 
         raw_incidents = response.json().get("incidents", [])
+
         incidents = []
         for incident in raw_incidents:
             props = incident.get("properties", {})
             geometry = incident.get("geometry", {})
             coords = geometry.get("coordinates", [])
             category = props.get("iconCategory", 0)
+
+            # Get center point of incident
             if coords:
                 if geometry.get("type") == "Point":
                     inc_lng, inc_lat = coords[0], coords[1]
                 else:
+                    # For LineString take midpoint
                     mid = len(coords) // 2
                     inc_lng, inc_lat = coords[mid][0], coords[mid][1]
             else:
                 continue
+
             incidents.append({
                 "id": props.get("id", ""),
                 "category": category,
@@ -973,30 +1033,40 @@ def get_traffic_incidents(
                 "longitude": inc_lng,
                 "description": props.get("events", [{}])[0].get("description", "") if props.get("events") else "",
                 "delay_seconds": props.get("delay", 0),
+                "road": props.get("roadNumbers", []),
             })
 
-        result = {"incidents": incidents, "total": len(incidents), "cached": False}
-        _traffic_cache[cache_key] = (time.time(), {**result, "cached": True})
+        result = {
+            "incidents": incidents,
+            "total": len(incidents),
+            "bbox": bbox,
+            "cached": False,
+        }
+        _traffic_cache[cache_key] = (time.time(), {**result, "cached": False})
+
+        # Store incidents in Supabase asynchronously
+    
+        try:
+            gcs_key = os.getenv("GCS_CREDENTIALS_PATH")
+            if gcs_key and os.path.isfile(gcs_key):
+                import gcsfs
+                import json as json_lib
+                fs = gcsfs.GCSFileSystem(token=gcs_key)
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                gcs_path = f"safeway-data/traffic_incidents/incidents_{timestamp}.json"
+                with fs.open(gcs_path, "w") as f:
+                    json_lib.dump({
+                        "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        "bbox": bbox,
+                        "incidents": incidents,
+                    }, f)
+                print(f"[traffic] Stored {len(incidents)} incidents to GCS: {gcs_path}")
+        except Exception as e:
+            print(f"[traffic] GCS store failed: {e}")
         return result
-    except requests.RequestException:
-        return {"incidents": [], "total": 0, "cached": False}
+
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Traffic fetch failed: {e}")
 
 
-# ---------------------------------------------------------------------------
-# Admin: cache management
-# ---------------------------------------------------------------------------
-@app.post("/admin/refresh-cache")
-def admin_refresh_cache(authorization: str = Header(None)):
-    """Force-reload risk/SHAP/time-of-day caches from GCS.
 
-    Called by nightly GitHub Actions after model retraining, or manually.
-    Protected by ADMIN_SECRET env var when set.
-    """
-    admin_secret = os.getenv("ADMIN_SECRET")
-    if admin_secret:
-        expected = f"Bearer {admin_secret}"
-        if not authorization or authorization != expected:
-            raise HTTPException(status_code=403, detail="Forbidden")
-    from risk_cache import refresh_cache
-    result = refresh_cache()
-    return result

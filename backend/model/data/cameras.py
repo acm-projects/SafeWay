@@ -132,3 +132,10 @@ if __name__ == "__main__":
         print(f"Saved to {output_path}")
         print(f"Shape: {df.shape}")
         print(df["camera_type"].value_counts())
+<<<<<<< HEAD
+=======
+
+
+        
+        
+>>>>>>> hamza/generic-city-scoring
