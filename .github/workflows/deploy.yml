@@ -29,7 +29,7 @@ jobs:
           service: safeway-api
           region: us-central1
           source: .
-          flags: --clear-base-image --memory 1Gi
+          flags: --clear-base-image --memory 2Gi --cpu 2 --concurrency 4
           env_vars: |
             SUPABASE_URL=${{ secrets.SUPABASE_URL }}
             SUPABASE_PUBLISHABLE_KEY=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
