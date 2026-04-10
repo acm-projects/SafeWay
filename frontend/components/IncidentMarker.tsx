@@ -19,83 +19,172 @@ type IncidentStyle = {
   color: string;
   darkBg: string;
   symbol: string;
+  emoji: string;
   label: string;
   detail: string;
-  pulse: boolean;
   shape: IncidentShape;
 };
 
 const S: Record<number, IncidentStyle> = {
-  0:  { color: '#64748B', darkBg: '#0F1623', symbol: '?',  label: 'Unknown',             pulse: false, shape: 'square',   detail: 'An unclassified incident has been reported in this area.' },
-  1:  { color: '#FF4D6A', darkBg: '#2A0A10', symbol: '✕',  label: 'Accident',             pulse: true,  shape: 'diamond',  detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
-  2:  { color: '#A8C4D4', darkBg: '#101B22', symbol: '◌',  label: 'Fog',                  pulse: false, shape: 'circle',   detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
-  3:  { color: '#FFB830', darkBg: '#221800', symbol: '!',  label: 'Hazard',               pulse: true,  shape: 'triangle', detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
-  4:  { color: '#4DA6FF', darkBg: '#08162A', symbol: '≈',  label: 'Rain',                 pulse: false, shape: 'circle',   detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
-  5:  { color: '#B8E4F9', darkBg: '#081520', symbol: '*',  label: 'Ice',                  pulse: true,  shape: 'hexagon',  detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
-  6:  { color: '#FF7A30', darkBg: '#221008', symbol: '▲',  label: 'Traffic Jam',          pulse: true,  shape: 'triangle', detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
-  7:  { color: '#FFCC44', darkBg: '#221900', symbol: '║',  label: 'Lane Closed',          pulse: false, shape: 'square',   detail: 'One or more lanes are closed. Merge early and watch for workers.' },
-  8:  { color: '#FF3333', darkBg: '#2A0808', symbol: '⊘',  label: 'Road Closed',          pulse: true,  shape: 'shield',   detail: 'This road is fully closed. You must use an alternate route.' },
-  9:  { color: '#9B72F7', darkBg: '#130A2A', symbol: '⚙',  label: 'Road Works',           pulse: false, shape: 'square',   detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
-  10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '≋',  label: 'Wind',                 pulse: false, shape: 'circle',   detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
-  11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  label: 'Flooding',             pulse: true,  shape: 'hexagon',  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
-  14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  label: 'Broken Down Vehicle',  pulse: false, shape: 'diamond',  detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
+  0:  { color: '#64748B', darkBg: '#0F1623', symbol: '?',  emoji: '❔', label: 'Unknown',             shape: 'square',   detail: 'An unclassified incident has been reported in this area.' },
+  1:  { color: '#FF4D6A', darkBg: '#2A0A10', symbol: '✕',  emoji: '💥', label: 'Accident',             shape: 'diamond',  detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
+  2:  { color: '#A8C4D4', darkBg: '#101B22', symbol: '◌',  emoji: '🌫️', label: 'Fog',                  shape: 'circle',   detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
+  3:  { color: '#FFB830', darkBg: '#221800', symbol: '!',  emoji: '⚠️', label: 'Hazard',               shape: 'triangle', detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
+  4:  { color: '#4DA6FF', darkBg: '#08162A', symbol: '≈',  emoji: '🌧️', label: 'Rain',                 shape: 'circle',   detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
+  5:  { color: '#B8E4F9', darkBg: '#081520', symbol: '*',  emoji: '❄️', label: 'Ice',                  shape: 'hexagon',  detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
+  6:  { color: '#FF7A30', darkBg: '#221008', symbol: '▲',  emoji: '🚗', label: 'Traffic Jam',          shape: 'triangle', detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
+  7:  { color: '#FFCC44', darkBg: '#221900', symbol: '║',  emoji: '🚧', label: 'Lane Closed',          shape: 'square',   detail: 'One or more lanes are closed. Merge early and watch for workers.' },
+  8:  { color: '#FF3333', darkBg: '#2A0808', symbol: '⊘',  emoji: '⛔', label: 'Road Closed',          shape: 'shield',   detail: 'This road is fully closed. You must use an alternate route.' },
+  9:  { color: '#9B72F7', darkBg: '#130A2A', symbol: '⚙',  emoji: '🛠️', label: 'Road Works',           shape: 'square',   detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
+  10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '~',  emoji: '💨', label: 'Wind',                 shape: 'circle',   detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
+  11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  emoji: '💧', label: 'Flooding',             shape: 'hexagon',  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
+  14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  emoji: '🚙', label: 'Broken Down Vehicle',  shape: 'diamond',  detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
 };
 
 function getStyle(cat: number): IncidentStyle {
   return S[cat] ?? S[0];
 }
 
-// ─── Sizing ───────────────────────────────────────────────────────────────────
-const MAX_DELTA = 0.08;
-const MIN_DELTA = 0.005;
-const SIZE_MAX  = 38;
-const SIZE_MIN  = 14;
+// ─── Sizing: compact when zoomed out, capped when zoomed in (never invisible) ─
+const MAX_DELTA = 0.45;
+const MIN_DELTA = 0.003;
+const SIZE_MAX = 26;
+const SIZE_MIN = 14;
+/** Smallest sticker size when very zoomed out — still tappable */
+const SIZE_FAR = 20;
 
 function markerSize(latDelta: number): number {
-  if (latDelta >= MAX_DELTA) return 0;
+  if (latDelta >= MAX_DELTA) return SIZE_FAR;
   if (latDelta <= MIN_DELTA) return SIZE_MAX;
   const t = (latDelta - MIN_DELTA) / (MAX_DELTA - MIN_DELTA);
   return Math.round(SIZE_MAX - t * (SIZE_MAX - SIZE_MIN));
 }
 
-// ─── Animated pulse ring ──────────────────────────────────────────────────────
-function PulseRing({ color, size }: { color: string; size: number }) {
-  const scale   = useRef(new Animated.Value(1)).current;
-  const opacity = useRef(new Animated.Value(0.65)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.parallel([
-        Animated.sequence([
-          Animated.timing(scale,   { toValue: 2.0, duration: 1500, useNativeDriver: true }),
-          Animated.timing(scale,   { toValue: 1.0, duration: 0,    useNativeDriver: true }),
-        ]),
-        Animated.sequence([
-          Animated.timing(opacity, { toValue: 0,    duration: 1500, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0.65, duration: 0,    useNativeDriver: true }),
-        ]),
-      ])
-    ).start();
-  }, []);
-
+/** Sticker-style traffic jam icon (static, no animation) */
+function TrafficJamSticker({ size }: { size: number }) {
+  const vb = 48;
   return (
-    <Animated.View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        width: size, height: size,
-        borderRadius: size / 2,
-        borderWidth: 1.5,
-        borderColor: color,
-        transform: [{ scale }],
-        opacity,
-      }}
-    />
+    <Svg width={size} height={size} viewBox={`0 0 ${vb} ${vb}`}>
+      <Circle cx={24} cy={24} r={20} fill="#E57373" stroke="#FFFFFF" strokeWidth={3} />
+      {/* three simple cars, back to front */}
+      <Path
+        d="M10 32 L14 28 L22 28 L24 30 L24 34 L10 34 Z"
+        fill="#F9A825"
+        stroke="#1a1a1a"
+        strokeWidth={1.2}
+        strokeLinejoin="round"
+      />
+      <Circle cx={17} cy={33} r={1.6} fill="#FFF" />
+      <Path
+        d="M14 29 L18 25 L28 25 L30 27 L30 32 L14 32 Z"
+        fill="#FF7043"
+        stroke="#1a1a1a"
+        strokeWidth={1.2}
+        strokeLinejoin="round"
+      />
+      <Circle cx={22} cy={30.5} r={1.6} fill="#FFF" />
+      <Path
+        d="M18 26 L22 22 L34 22 L36 24 L36 30 L18 30 Z"
+        fill="#E53935"
+        stroke="#1a1a1a"
+        strokeWidth={1.2}
+        strokeLinejoin="round"
+      />
+      <Circle cx={28} cy={28} r={1.6} fill="#FFF" />
+    </Svg>
   );
 }
 
-// ─── Shape renderers ─────────────────────────────────────────────────────────
+// ─── Map marker bubble (emoji / sticker, no pulse) ───────────────────────────
+export function IncidentBubble({
+  incident,
+  latDelta = 0.02,
+}: {
+  incident: TrafficIncident;
+  latDelta?: number;
+}) {
+  const st = getStyle(incident.category);
+  const size = markerSize(latDelta);
+  if (size === 0) return null;
 
+  const pad = 2;
+  const outer = size + pad * 2;
+
+  if (incident.category === 6) {
+    return (
+      <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+        <TrafficJamSticker size={size} />
+      </View>
+    );
+  }
+
+  const fontSize = Math.max(11, Math.round(size * 0.42));
+
+  return (
+    <View
+      style={{
+        width: outer,
+        height: outer,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+      }}
+    >
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: st.color,
+          borderWidth: 3,
+          borderColor: '#FFFFFF',
+          alignItems: 'center',
+          justifyContent: 'center',
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.35,
+          shadowRadius: 3,
+          elevation: 4,
+        }}
+      >
+        <Text style={{ fontSize, lineHeight: fontSize + 1 }} allowFontScaling={false}>
+          {st.emoji}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ─── IncidentMarker ──────────────────────────────────────────────────────────
+export function IncidentMarker({
+  incident,
+  latDelta = 0.02,
+  onPress,
+  zIndex = 800,
+}: {
+  incident: TrafficIncident;
+  latDelta?: number;
+  onPress: () => void;
+  /** Keep incidents above route polylines / heatmap on Google Maps. */
+  zIndex?: number;
+}) {
+  const st = getStyle(incident.category);
+  const anchorY = st.shape === 'diamond' || st.shape === 'triangle' || st.shape === 'shield' ? 0.88 : 0.5;
+
+  return (
+    <Marker
+      coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
+      anchor={{ x: 0.5, y: anchorY }}
+      tracksViewChanges={false}
+      zIndex={zIndex}
+      onPress={onPress}
+    >
+      <IncidentBubble incident={incident} latDelta={latDelta} />
+    </Marker>
+  );
+}
+
+// ─── Shape renderers (detail popup) ─────────────────────────────────────────
 function DiamondShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
   const half = canvas / 2;
   const pad = 6;
@@ -187,123 +276,12 @@ function ShieldShape({ canvas, s: style, size, gradId }: { canvas: number; s: In
   const h = canvas - pad * 2;
   const cx = canvas / 2;
   const top = pad;
-  // Shield: rounded top corners, pointed bottom
   const d = `M ${pad + 4} ${top} H ${pad + w - 4} Q ${pad + w} ${top} ${pad + w} ${top + 4} V ${top + h * 0.55} Q ${pad + w} ${top + h * 0.85} ${cx} ${top + h} Q ${pad} ${top + h * 0.85} ${pad} ${top + h * 0.55} V ${top + 4} Q ${pad} ${top} ${pad + 4} ${top} Z`;
   return (
     <>
       <Path d={d} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
       {size >= 22 && <Circle cx={cx + size * 0.10} cy={canvas / 2 - size * 0.10} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
     </>
-  );
-}
-
-// ─── Incident bubble — shape varies by incident type ────────────────────────
-export function IncidentBubble({
-  incident,
-  latDelta = 0.02,
-}: {
-  incident: TrafficIncident;
-  latDelta?: number;
-}) {
-  const st   = getStyle(incident.category);
-  const size = markerSize(latDelta);
-  if (size === 0) return null;
-
-  const showPulse = st.pulse && size >= 20;
-  // EDGE_PAD: enough room for strokeWidth (2) + bevel ring (3) + safe margin.
-  // All shape geometry is drawn inside [EDGE_PAD, canvas-EDGE_PAD] so nothing
-  // ever touches the SVG boundary and gets clipped.
-  const EDGE_PAD = 8;
-  const canvas   = size + EDGE_PAD * 2;
-  const symbolPx = Math.max(8, Math.round(size * 0.38));
-  const gradId   = `rg${incident.category ?? 0}`;
-
-  const shapeProps = { canvas, s: st, size, gradId };
-
-  return (
-    // overflow:'visible' prevents the RN Marker container from clipping the SVG
-    // at View boundaries when the marker is near a screen edge.
-    <View style={{ width: canvas, height: canvas, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
-      {showPulse && <PulseRing color={st.color} size={size} />}
-
-      {/* No overflow prop on Svg — not a valid SVGProps key (causes TS2322) */}
-      <Svg width={canvas} height={canvas} style={{ position: 'absolute', top: 0, left: 0 }}>
-        <Defs>
-          <RadialGradient id={gradId} cx="50%" cy="36%" r="62%">
-            <Stop offset="0%"   stopColor={st.color}  stopOpacity="0.25" />
-            <Stop offset="100%" stopColor={st.darkBg} stopOpacity="1.0"  />
-          </RadialGradient>
-        </Defs>
-
-        {st.shape === 'diamond'  && <DiamondShape  {...shapeProps} />}
-        {st.shape === 'circle'   && <CircleShape   {...shapeProps} />}
-        {st.shape === 'triangle' && <TriangleShape {...shapeProps} />}
-        {st.shape === 'square'   && <SquareShape   {...shapeProps} />}
-        {st.shape === 'hexagon'  && <HexagonShape  {...shapeProps} />}
-        {st.shape === 'shield'   && <ShieldShape   {...shapeProps} />}
-      </Svg>
-
-      {/* Symbol — centred over the shape */}
-      <Text
-        style={{
-          position:   'absolute',
-          color:       st.color,
-          fontSize:    symbolPx,
-          fontWeight:  '800',
-          lineHeight:  symbolPx + 1,
-          textAlign:   'center',
-          includeFontPadding: false,
-        }}
-        allowFontScaling={false}
-      >
-        {st.symbol}
-      </Text>
-    </View>
-  );
-}
-
-// ─── IncidentMarker — live zoom-tracking ─────────────────────────────────────
-export function IncidentMarker({
-  incident,
-  latDelta = 0.02,
-  onPress,
-}: {
-  incident: TrafficIncident;
-  latDelta?: number;
-  onPress: () => void;
-}) {
-  const [tracks, setTracks] = useState(true);
-  const freezeTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevDeltaRef = useRef(latDelta);
-
-  useEffect(() => {
-    if (prevDeltaRef.current !== latDelta) {
-      prevDeltaRef.current = latDelta;
-      setTracks(true);
-      if (freezeTimer.current) clearTimeout(freezeTimer.current);
-      freezeTimer.current = setTimeout(() => setTracks(false), 300);
-    }
-    return () => { if (freezeTimer.current) clearTimeout(freezeTimer.current); };
-  }, [latDelta]);
-
-  useEffect(() => {
-    const id = setTimeout(() => setTracks(false), 500);
-    return () => clearTimeout(id);
-  }, []);
-
-  const st = getStyle(incident.category);
-  // anchor.y for triangle/shield: 1.0 (tip points down); others: 0.5 (centered)
-  const anchorY = (st.shape === 'diamond' || st.shape === 'triangle' || st.shape === 'shield') ? 0.90 : 0.5;
-
-  return (
-    <Marker
-      coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
-      anchor={{ x: 0.5, y: anchorY }}
-      tracksViewChanges={tracks}
-      onPress={onPress}
-    >
-      <IncidentBubble incident={incident} latDelta={latDelta} />
-    </Marker>
   );
 }
 
@@ -347,12 +325,8 @@ export function IncidentDetailPopup({
 
   const road = incident.road?.length ? incident.road.join(' · ') : null;
 
-  // Popup icon — 52px canvas, same shape as marker
   const D = 56;
-  const dh = D / 2;
-  const dp = 6;
   const gradIdPop = `rgpop_${incident.category ?? 0}`;
-
   const iconShapeProps = { canvas: D, s: st, size: D - 16, gradId: gradIdPop };
 
   return (
@@ -360,16 +334,12 @@ export function IncidentDetailPopup({
       <Pressable style={pop.backdrop} onPress={onClose}>
         <Animated.View style={[pop.sheet, { opacity, transform: [{ translateY: slideY }, { scale: sc }] }]}>
 
-          {/* Accent bar */}
           <View style={[pop.topBar, { backgroundColor: st.color }]} />
 
-          {/* Handle */}
           <View style={pop.handle} />
 
-          {/* Header */}
           <View style={pop.header}>
 
-            {/* Shape icon */}
             <View style={pop.iconWrap}>
               <View style={[pop.iconGlow, { backgroundColor: st.color + '14', borderColor: st.color + '2E' }]} />
               <Svg width={D} height={D + 4} style={{ position: 'absolute' }}>
@@ -389,7 +359,6 @@ export function IncidentDetailPopup({
               <Text style={[pop.iconSymbol, { color: st.color }]}>{st.symbol}</Text>
             </View>
 
-            {/* Title */}
             <View style={{ flex: 1 }}>
               <View style={pop.titleRow}>
                 <Text style={pop.typeText}>{st.label}</Text>
@@ -400,10 +369,9 @@ export function IncidentDetailPopup({
               </View>
               {road && <Text style={pop.roadText} numberOfLines={1}>{road}</Text>}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
-                {/* Shape label badge */}
                 <View style={{ width: 8, height: 8, borderRadius: st.shape === 'circle' ? 4 : 2, backgroundColor: st.color, transform: st.shape === 'diamond' ? [{ rotate: '45deg' }] : [] }} />
                 <Text style={[pop.severityText, { color: st.color }]}>
-                  {st.pulse ? 'HIGH SEVERITY' : 'ADVISORY'}
+                  ADVISORY
                 </Text>
               </View>
             </View>

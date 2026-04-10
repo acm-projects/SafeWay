@@ -38,13 +38,16 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { getRoute, getMultipleRoutes, searchPlaces, getRouteDirections } from '@/lib/api';
 import type { AlternativeRoute, DirectionStep, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
-import { RouteInsightsPage } from '../components/RouteInsightsPage';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
+import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
+import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
+import { setRouteInsightsPayload } from '@/lib/routeInsightsPayload';
+import MapPegmanStreetView from '@/components/MapPegmanStreetView';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
 import { useTrafficIncidents } from '@/hooks/useTrafficIncidents';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
-import { IncidentBubble, IncidentDetailPopup, IncidentMarker } from '@/components/IncidentMarker';
+import { IncidentDetailPopup, IncidentMarker } from '@/components/IncidentMarker';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -67,20 +70,6 @@ const SHEET_BG    = NAVY_GLASS;
 const CARD_BG     = NAVY_CARD;
 const ITEM_BG     = NAVY_ITEM;
 const GREEN       = SEAFOAM;
-
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#212a37' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
 
 type TravelMode = 'WALK' | 'DRIVE' | 'BICYCLE' | 'BUS' | 'RIDESHARE';
 interface ModeRouteData {
@@ -196,19 +185,20 @@ function getTimeContext(): { label: string; icon: string } {
   return                         { label: 'Good night',     icon: 'moon-outline'         };
 }
 
-// ─── Bottom sheet glass background ───────────────────────────────────────────
+// ─── Bottom sheet background (matches map chrome) ───────────────────────────
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
+  const { T } = useTheme();
   return (
     <Animated.View
       pointerEvents="none"
       style={[
         StyleSheet.absoluteFillObject,
         {
-          backgroundColor: bg ?? SHEET_BG,
+          backgroundColor: bg ?? T.BG,
           borderWidth: 1,
           borderColor: GLASS_BORDER,
-          shadowColor: SEAFOAM,
-          shadowOpacity: 0.06,
+          shadowColor: '#000000',
+          shadowOpacity: 0.08,
           shadowRadius: 20,
           shadowOffset: { width: 0, height: -4 },
         },
@@ -223,6 +213,44 @@ function fmtSecs(s: number): string {
   const m = Math.round(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const lat1 = (a.lat * Math.PI) / 180;
+  const lat2 = (b.lat * Math.PI) / 180;
+  const x =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+
+/** Min distance (km) from a point to any sampled point along the route polyline. */
+function minDistanceKmToPolyline(
+  lat: number,
+  lng: number,
+  coords: Array<{ latitude: number; longitude: number }>,
+): number {
+  if (coords.length < 2) return Infinity;
+  let minD = Infinity;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const a = coords[i]!;
+    const b = coords[i + 1]!;
+    for (let k = 0; k <= 10; k++) {
+      const t = k / 10;
+      const clat = a.latitude + t * (b.latitude - a.latitude);
+      const clng = a.longitude + t * (b.longitude - a.longitude);
+      minD = Math.min(minD, haversineKm({ lat, lng }, { lat: clat, lng: clng }));
+    }
+  }
+  return minD;
+}
+
+/** Only map markers when zoomed in past this latitudeDelta (smaller = more zoomed). */
+const INCIDENT_MAP_MAX_LAT_DELTA = 0.12;
+const ROUTE_INCIDENT_BUFFER_KM = 1.75;
+const MAX_ROUTE_INCIDENT_MARKERS = 80;
 
 function mapSafetyRoutesToAlternatives(safetyRoutes: SafetyRoute[]): RouteAltRow[] {
   return safetyRoutes.map((r: SafetyRoute, i: number) => {
@@ -1091,7 +1119,7 @@ export default function DirectionsScreen() {
     return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
-  const [sheetIndex, setSheetIndex] = useState(1);
+  const [sheetIndex, setSheetIndex] = useState(0);
   const handleSheetChange = useCallback((i: number) => setSheetIndex(i), []);
 
   const timeCtx = getTimeContext();
@@ -1162,10 +1190,15 @@ export default function DirectionsScreen() {
   const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
   const [showTraffic, setShowTraffic] = useState(true);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [showInsightsModal, setShowInsightsModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [mapViewport, setMapViewport] = useState<{
+    latitude: number;
+    longitude: number;
+    latitudeDelta: number;
+    longitudeDelta: number;
+  } | null>(null);
 
   const [showNowModal, setShowNowModal] = useState(false);
   const [showAvoidModal, setShowAvoidModal] = useState(false);
@@ -1176,6 +1209,18 @@ export default function DirectionsScreen() {
   const [pickerHour, setPickerHour] = useState(() => new Date().getHours());
   const [pickerMin,  setPickerMin]  = useState<0|30>(() => new Date().getMinutes() >= 30 ? 30 : 0);
   const pickerTimeLabel = `${pickerHour % 12 === 0 ? 12 : pickerHour % 12}:${pickerMin === 0 ? '00' : '30'} ${pickerHour < 12 ? 'AM' : 'PM'}`;
+
+  useEffect(() => {
+    void (async () => {
+      const s = await loadMapSession();
+      if (s?.mapStyleType) setMapStyleType(s.mapStyleType);
+      if (s?.heatmapFilter) setHeatmapFilter(s.heatmapFilter as HeatmapFilter | 'off');
+    })();
+  }, []);
+
+  useEffect(() => {
+    scheduleSaveMapSession({ mapStyleType, heatmapFilter });
+  }, [mapStyleType, heatmapFilter]);
 
   const nowLabel = nowChoice === 'now' ? 'Now'
     : nowChoice === 'depart' ? `Depart ${pickerTimeLabel}`
@@ -1188,23 +1233,25 @@ export default function DirectionsScreen() {
   });
   const activeHeatmapInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
-  const centerCoords = originCoords ?? destCoords;
+  const trafficIncidentsQuery = React.useMemo(() => {
+    if (!originCoords && !destCoords) return null;
+    if (originCoords && destCoords) {
+      const lat = (originCoords.lat + destCoords.lat) / 2;
+      const lng = (originCoords.lng + destCoords.lng) / 2;
+      const odKm = haversineKm(originCoords, destCoords);
+      const radiusKm = Math.min(50, Math.max(10, odKm * 0.55 + 6));
+      return { lat, lng, radiusKm };
+    }
+    const c = originCoords ?? destCoords!;
+    return { lat: c.lat, lng: c.lng, radiusKm: 16 };
+  }, [originCoords, destCoords]);
+
   const { incidents: rawIncidents, loading: trafficLoading } = useTrafficIncidents({
-    lat: centerCoords?.lat ?? null,
-    lng: centerCoords?.lng ?? null,
-    radiusKm: 8,
-    enabled: showTraffic,
+    lat: trafficIncidentsQuery?.lat ?? null,
+    lng: trafficIncidentsQuery?.lng ?? null,
+    radiusKm: trafficIncidentsQuery?.radiusKm ?? 15,
+    enabled: showTraffic && trafficIncidentsQuery != null,
   });
-  const incidents = React.useMemo(() => {
-    const seen = new Set<string>();
-    return rawIncidents.filter(inc => {
-      const key = inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [rawIncidents]);
-  const incidentsVisible = mapLatDelta < 0.08;
 
   useEffect(() => {
     if (params.originLat && params.originLng) return;
@@ -1395,8 +1442,19 @@ export default function DirectionsScreen() {
     const coords = selected?.coords?.length ? selected.coords
       : modeData?.primary?.coords?.length ? modeData.primary.coords
       : (originCoords && destCoords ? [{ latitude: originCoords.lat, longitude: originCoords.lng }, { latitude: destCoords.lat, longitude: destCoords.lng }] : null);
-    if (coords) mapRef.current.fitToCoordinates(coords, { edgePadding: { top: 80, right: 60, bottom: 300, left: 60 }, animated: true });
-  }, [travelMode, routeByMode, selectedRouteIndex]);
+    if (!coords?.length) return;
+    const topPad = insets.top + 158;
+    const bottomPad =
+      sheetIndex === 0
+        ? Math.round(windowHeight * 0.2) + insets.bottom
+        : sheetIndex === 1
+          ? Math.round(windowHeight * 0.48) + insets.bottom
+          : Math.round(windowHeight * 0.62) + insets.bottom;
+    mapRef.current.fitToCoordinates(coords, {
+      edgePadding: { top: topPad, right: 56, bottom: bottomPad, left: 56 },
+      animated: true,
+    });
+  }, [travelMode, routeByMode, selectedRouteIndex, sheetIndex, windowHeight, insets.top, insets.bottom, originCoords, destCoords]);
 
   function handleSelectOrigin(place: PlaceSearchResult) {
     setOriginLabel(place.name);
@@ -1444,6 +1502,45 @@ export default function DirectionsScreen() {
     : modeData?.primary ?? null;
   const activeSecs = activeData?.durationSecs ?? 0;
 
+  const routePolylineLists = React.useMemo(() => {
+    const lists: Array<Array<{ latitude: number; longitude: number }>> = [];
+    for (const alt of alternatives) {
+      if (alt.coords && alt.coords.length > 1) lists.push(alt.coords);
+    }
+    if (!lists.length && modeData?.primary?.coords && modeData.primary.coords.length > 1) {
+      lists.push(modeData.primary.coords);
+    }
+    return lists;
+  }, [alternatives, modeData?.primary?.coords]);
+
+  const incidents = React.useMemo(() => {
+    const seen = new Set<string>();
+    const deduped = rawIncidents.filter(inc => {
+      const key = inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!routePolylineLists.length) return [];
+
+    const scored = deduped
+      .map(inc => {
+        let minKm = Infinity;
+        for (const coords of routePolylineLists) {
+          minKm = Math.min(minKm, minDistanceKmToPolyline(inc.latitude, inc.longitude, coords));
+        }
+        return { inc, minKm };
+      })
+      .filter(x => x.minKm <= ROUTE_INCIDENT_BUFFER_KM)
+      .sort((a, b) => a.minKm - b.minKm)
+      .slice(0, MAX_ROUTE_INCIDENT_MARKERS)
+      .map(x => x.inc);
+
+    return scored;
+  }, [rawIncidents, routePolylineLists]);
+
+  const incidentsVisibleOnMap = mapLatDelta <= INCIDENT_MAP_MAX_LAT_DELTA;
+
   const modeItems: { mode: TravelMode; icon: any; label: string }[] = [
     { mode: 'DRIVE',     icon: 'car',           label: 'Drive'    },
     { mode: 'WALK',      icon: 'walk',          label: 'Walk'     },
@@ -1460,11 +1557,22 @@ export default function DirectionsScreen() {
     <View style={[styles.container, { backgroundColor: T.BG }]}>
       <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : undefined}
+        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
         initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}
         onRegionChange={(r) => setMapLatDelta(r.latitudeDelta)}
-        onRegionChangeComplete={(r) => setMapLatDelta(r.latitudeDelta)}>
+        onRegionChangeComplete={r => {
+          setMapLatDelta(r.latitudeDelta);
+          setMapViewport(r);
+          scheduleSaveMapSession({
+            latitude: r.latitude,
+            longitude: r.longitude,
+            latitudeDelta: r.latitudeDelta,
+            longitudeDelta: r.longitudeDelta,
+            mapStyleType,
+            heatmapFilter,
+          });
+        }}>
 
         {originCoords && (
           <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
@@ -1476,27 +1584,15 @@ export default function DirectionsScreen() {
         {alternatives.map((alt, i) => {
           if (!alt.coords?.length) return null;
           const isSelected = i === selectedRouteIndex;
-
-          if (isSelected && isCoordSegmentArray(alt.segmentRisks as any)) {
-            const segs = alt.segmentRisks as unknown as Array<{ start: RoutePoint; end: RoutePoint; risk: number }>;
-            return segs.map((seg, si) => (
-              <Polyline
-                key={`${travelMode}-alt-${i}-seg-${si}`}
-                coordinates={[seg.start, seg.end]}
-                strokeColor={seg.risk > 66 ? '#FF4444' : seg.risk > 33 ? '#FFA500' : SEAFOAM}
-                strokeWidth={5}
-                tappable
-                onPress={() => setSelectedRouteIndex(i)}
-              />
-            ));
-          }
-
           return (
             <Polyline
               key={`${travelMode}-alt-${i}`}
               coordinates={alt.coords}
-              strokeColor={isSelected ? '#4A90E2' : 'rgba(74,144,226,0.28)'}
-              strokeWidth={isSelected ? 5 : 3}
+              strokeColor={isSelected ? '#4A90E2' : 'rgba(74, 144, 226, 0.34)'}
+              strokeWidth={isSelected ? 9 : 7}
+              lineCap="round"
+              lineJoin="round"
+              zIndex={isSelected ? 2 : 0}
               tappable
               onPress={() => setSelectedRouteIndex(i)}
             />
@@ -1504,7 +1600,15 @@ export default function DirectionsScreen() {
         })}
 
         {alternatives.length === 0 && activeData?.coords?.length ? (
-          <Polyline key={travelMode} coordinates={activeData.coords} strokeColor="#4A90E2" strokeWidth={5} />
+          <Polyline
+            key={travelMode}
+            coordinates={activeData.coords}
+            strokeColor="#4A90E2"
+            strokeWidth={9}
+            lineCap="round"
+            lineJoin="round"
+            zIndex={2}
+          />
         ) : null}
 
         {(alternatives[selectedRouteIndex]?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
@@ -1519,7 +1623,7 @@ export default function DirectionsScreen() {
           />
         )}
 
-        {showTraffic && incidentsVisible && incidents.map((inc, idx) => {
+        {showTraffic && incidentsVisibleOnMap && incidents.map((inc, idx) => {
           const stableKey = inc.id
             ? `inc-id-${inc.id}`
             : `inc-pos-${inc.latitude.toFixed(6)}-${inc.longitude.toFixed(6)}-${inc.category}-${idx}`;
@@ -1528,6 +1632,7 @@ export default function DirectionsScreen() {
               key={stableKey}
               incident={inc}
               latDelta={mapLatDelta}
+              zIndex={900 + idx}
               onPress={() => setSelectedIncident(inc)}
             />
           );
@@ -1674,51 +1779,73 @@ export default function DirectionsScreen() {
         )}
       </View>
 
-      {/* ── Zoom cluster ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.ITEM }}>
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}><Ionicons name="add" size={22} color={T.TEXT_PRI} /></Pressable>
-        <View style={[styles.zoomDiv, { backgroundColor: T.DIVIDER }]} />
-        <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}><Ionicons name="remove" size={22} color={T.TEXT_PRI} /></Pressable>
-      </View>
-
-      {/* ── Locate ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21 }}>
-        <Pressable style={[styles.floatBtnInner, { backgroundColor: T.ITEM }]} onPress={handleLocate}>
-          <Ionicons name="locate" size={20} color={T.ACCENT} />
+      {/* ── Map chrome (right rail): z-index under bottom sheet so sheet covers when expanded ── */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.BG, zIndex: 6, elevation: 6 }}>
+        <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}>
+          <Ionicons name="add" size={22} color="#FFFFFF" />
+        </Pressable>
+        <View style={[styles.zoomDiv, { backgroundColor: 'rgba(255,255,255,0.12)' }]} />
+        <Pressable style={styles.zoomBtn} onPress={() => doZoom(2)}>
+          <Ionicons name="remove" size={22} color="#FFFFFF" />
         </Pressable>
       </View>
 
-      {/* ── Heatmap pill ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 152 }}>
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21, zIndex: 6, elevation: 6 }}>
+        <Pressable style={[styles.floatBtnInner, { backgroundColor: T.BG }]} onPress={handleLocate}>
+          <Ionicons name="locate" size={20} color="#FFFFFF" />
+        </Pressable>
+      </View>
+
+      <MapPegmanStreetView
+        mapRef={mapRef}
+        currentRegion={
+          mapViewport ?? {
+            latitude: destCoords?.lat ?? 41.8781,
+            longitude: destCoords?.lng ?? -87.6298,
+            latitudeDelta: mapLatDelta,
+            longitudeDelta: mapLatDelta,
+          }
+        }
+        fallbackLatLng={{ lat: destCoords?.lat ?? 41.8781, lng: destCoords?.lng ?? -87.6298 }}
+        top={TOP_BTNS + 152}
+        controlBg={T.BG}
+        dragHighlightBg={T.CARD}
+        stackBelowSheet
+      />
+
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 204, zIndex: 6, elevation: 6 }}>
         <Pressable
-          style={[styles.heatmapInner, { backgroundColor: T.ITEM }, heatmapFilter !== 'off' && styles.heatmapInnerActive]}
+          style={[
+            styles.heatmapInner,
+            { backgroundColor: T.BG },
+            heatmapFilter !== 'off' && { borderColor: 'rgba(255,255,255,0.28)', borderWidth: 1 },
+          ]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={T.ACCENT} style={{ width: 14 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? T.ACCENT) : T.ACCENT} />
+            ? <ActivityIndicator size="small" color="#FFFFFF" style={{ width: 14 }} />
+            : <Ionicons name="layers-outline" size={14} color="#FFFFFF" />
           }
           {heatmapFilter !== 'off' && (
-            <Text style={[styles.heatmapText, { color: activeHeatmapInfo?.color ?? T.ACCENT }]}>
+            <Text style={[styles.heatmapText, { color: '#FFFFFF' }]}>
               {activeHeatmapInfo?.label ?? 'Heatmap'}
             </Text>
           )}
         </Pressable>
       </View>
 
-      {/* ── Traffic pill ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 202 }}>
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 256, zIndex: 6, elevation: 6 }}>
         <Pressable
-          style={[styles.heatmapInner, { backgroundColor: T.ITEM }, showTraffic && { borderColor: '#FF475744', borderWidth: 1 }]}
+          style={[styles.heatmapInner, { backgroundColor: T.BG }, showTraffic && { borderColor: 'rgba(255,255,255,0.28)', borderWidth: 1 }]}
           onPress={() => setShowTraffic(v => !v)}
         >
           {trafficLoading
-            ? <ActivityIndicator size="small" color="#FF4757" style={{ width: 14 }} />
+            ? <ActivityIndicator size="small" color="#FFFFFF" style={{ width: 14 }} />
             : <Text style={{ fontSize: 13, lineHeight: 16 }}>🚦</Text>
           }
           {showTraffic && (
-            <Text style={[styles.heatmapText, { color: '#FF4757' }]}>
-              {incidentsVisible ? `${incidents.length}` : 'Traffic'}
+            <Text style={[styles.heatmapText, { color: '#FFFFFF' }]}>
+              {`${incidents.length}`}
             </Text>
           )}
         </Pressable>
@@ -1727,35 +1854,35 @@ export default function DirectionsScreen() {
       {/* ── Modals ── */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
-          <Pressable style={[hm.card, { backgroundColor: NAVY_CARD, borderWidth: 1, borderColor: GLASS_BORDER }]} onPress={() => {}}>
-            <Text style={[hm.title, { color: TEXT_PRI }]}>Map Style</Text>
+          <Pressable style={[hm.card, { backgroundColor: T.BG, borderWidth: 1, borderColor: T.DIVIDER }]} onPress={() => {}}>
+            <Text style={[hm.title, { color: T.TEXT_PRI }]}>Map Style</Text>
             <View style={hm.mapStyleRow}>
               {MAP_STYLE_OPTIONS.map(opt => {
                 const active = mapStyleType === opt.id;
                 return (
                   <Pressable key={opt.id}
-                    style={[hm.mapStyleBtn, { backgroundColor: NAVY_ITEM }, active && { borderColor: SEAFOAM, backgroundColor: 'rgba(26,188,147,0.12)' }]}
+                    style={[hm.mapStyleBtn, { backgroundColor: T.ITEM }, active && { borderColor: T.ACCENT, backgroundColor: T.isDark ? 'rgba(26,188,147,0.12)' : '#EDE8FF' }]}
                     onPress={() => setMapStyleType(opt.id)}>
-                    <Ionicons name={opt.icon as any} size={22} color={active ? SEAFOAM : TEXT_MUT} />
-                    <Text style={[hm.mapStyleLabel, { color: active ? SEAFOAM : TEXT_MUT }]}>{opt.label}</Text>
+                    <Ionicons name={opt.icon as any} size={22} color={active ? T.ACCENT : T.TEXT_MUT} />
+                    <Text style={[hm.mapStyleLabel, { color: active ? T.ACCENT : T.TEXT_MUT }]}>{opt.label}</Text>
                   </Pressable>
                 );
               })}
             </View>
-            <View style={[hm.sectionDiv, { backgroundColor: DIVIDER }]} />
+            <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
             <View style={hm.header}>
-              <Text style={[hm.title, { color: TEXT_PRI }]}>Safety Heatmap</Text>
+              <Text style={[hm.title, { color: T.TEXT_PRI }]}>Safety Heatmap</Text>
               {heatmapFilter !== 'off' && (
-                <View style={[hm.countBadge, { backgroundColor: NAVY_ITEM }]}>
+                <View style={[hm.countBadge, { backgroundColor: T.ITEM }]}>
                   {crashLoading
-                    ? <ActivityIndicator size="small" color={SEAFOAM} />
-                    : <Text style={[hm.countText, { color: SEAFOAM }]}>{crashPoints.length.toLocaleString()} points</Text>
+                    ? <ActivityIndicator size="small" color={T.ACCENT} />
+                    : <Text style={[hm.countText, { color: T.ACCENT }]}>{crashPoints.length.toLocaleString()} points</Text>
                   }
                 </View>
               )}
             </View>
-            <Text style={[hm.subtitle, { color: TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
-            <View style={[hm.filterList, { backgroundColor: NAVY_ITEM }]}>
+            <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;
                 return (
@@ -1764,16 +1891,16 @@ export default function DirectionsScreen() {
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
                     >
-                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : NAVY }]}>
-                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '33' : T.BG }]}>
+                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : T.TEXT_MUT} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[hm.filterLabel, { color: TEXT_MUT }, active && { color: TEXT_PRI }]}>{f.label}</Text>
-                        <Text style={[hm.filterDesc, { color: TEXT_MUT }]}>{f.desc}</Text>
+                        <Text style={[hm.filterLabel, { color: T.TEXT_MUT }, active && { color: T.TEXT_PRI }]}>{f.label}</Text>
+                        <Text style={[hm.filterDesc, { color: T.TEXT_MUT }]}>{f.desc}</Text>
                       </View>
-                      {active && <Ionicons name="checkmark-circle" size={20} color={SEAFOAM} />}
+                      {active && <Ionicons name="checkmark-circle" size={20} color={T.ACCENT} />}
                     </Pressable>
-                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: DIVIDER }]} />}
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: T.DIVIDER }]} />}
                   </View>
                 );
               })}
@@ -1866,19 +1993,20 @@ export default function DirectionsScreen() {
         originLng={originCoords?.lng}
       />
 
-      <RouteInsightsPage
-        visible={showInsightsModal}
-        onClose={() => setShowInsightsModal(false)}
-        activeData={activeData ?? null}
-        destLat={destCoords?.lat}
-        destLng={destCoords?.lng}
-        originLat={originCoords?.lat}
-        originLng={originCoords?.lng}
-      />
-
       {/* ── Floating bottom sheet ── */}
-      <Animated.View pointerEvents="box-none" style={{ position:'absolute', left:FLOAT_SIDE, right:FLOAT_SIDE, bottom: (insets.bottom * 0.5 + FLOAT_BOTTOM), top:0 }}>
-        <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow:'hidden', borderRadius:FLOAT_RADIUS }]}>
+      <Animated.View
+        pointerEvents="box-none"
+        style={{
+          position: 'absolute',
+          left: FLOAT_SIDE,
+          right: FLOAT_SIDE,
+          bottom: insets.bottom * 0.5 + FLOAT_BOTTOM,
+          top: 0,
+          zIndex: 32,
+          elevation: 32,
+        }}
+      >
+        <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow: 'hidden', borderRadius: FLOAT_RADIUS }]}>
       <BottomSheet ref={bottomSheetRef} index={1} snapPoints={snapPoints}
         onChange={handleSheetChange} animatedPosition={animatedPosition}
         backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} bg={T.BG} />}
@@ -1983,7 +2111,16 @@ export default function DirectionsScreen() {
               selectedRouteIndex={selectedRouteIndex}
               onSelectRoute={setSelectedRouteIndex}
               onShowDetails={() => setShowDetailsModal(true)}
-              onShowInsights={() => setShowInsightsModal(true)}
+              onShowInsights={() => {
+                setRouteInsightsPayload({
+                  activeData: activeData ?? null,
+                  originLat: originCoords?.lat,
+                  originLng: originCoords?.lng,
+                  destLat: destCoords?.lat,
+                  destLng: destCoords?.lng,
+                });
+                router.push('/route-insights');
+              }}
               travelMode={travelMode}
               originCoords={originCoords}
               destCoords={destCoords}
@@ -2005,14 +2142,14 @@ export default function DirectionsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   backBtn: {
-    position: 'absolute', left: 14, zIndex: 20,
+    position: 'absolute', left: 14, zIndex: 40,
     width: 38, height: 38, borderRadius: 19,
     backgroundColor: 'rgba(5,6,45,0.85)',
     borderWidth: 1, borderColor: GLASS_BORDER,
     justifyContent: 'center', alignItems: 'center',
   },
   topRouteCard: {
-    position: 'absolute', left: 62, right: 14, zIndex: 15,
+    position: 'absolute', left: 62, right: 14, zIndex: 40,
     borderRadius: 18, borderWidth: 1,
     paddingHorizontal: 14, paddingTop: 10, paddingBottom: 10,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
@@ -2037,7 +2174,6 @@ const styles = StyleSheet.create({
   zoomDiv: { height: 1, marginHorizontal: 8 },
   floatBtnInner: { flex: 1, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
   heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'transparent' },
-  heatmapInnerActive: { borderColor: '#FF6B6B55' },
   heatmapText: { fontSize: 12, fontWeight: '600' },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },

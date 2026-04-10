@@ -100,6 +100,7 @@ export default function RootLayout() {
               <Stack.Screen name="search"      options={{ headerShown: false, animation: 'slide_from_bottom' }} />
               <Stack.Screen name="destination" options={{ headerShown: false }} />
               <Stack.Screen name="directions"  options={{ headerShown: false }} />
+              <Stack.Screen name="route-insights" options={{ headerShown: false }} />
               <Stack.Screen name="login"       options={{ headerShown: false, presentation: 'modal' }} />
             </Stack>
 

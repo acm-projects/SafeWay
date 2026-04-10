@@ -16,14 +16,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { WebView } from 'react-native-webview';
-import Constants from 'expo-constants';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
-
-const GMAPS_KEY: string =
-  (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined) ||
-  (Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined) ||
-  '';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import * as Location from 'expo-location';
@@ -43,7 +36,9 @@ import { useAuth } from '@/providers/auth-provider';
 import { useTheme } from '@/providers/theme-context';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
-import StreetViewModal from '@/components/StreetViewModal';
+import MapPegmanStreetView from '@/components/MapPegmanStreetView';
+import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
+import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -444,23 +439,6 @@ function RecentStackCard({
 // ─────────────────────────────────────────────────────────────────────────────
 // Map constants
 // ─────────────────────────────────────────────────────────────────────────────
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#2b3544' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#2b3a33' }] },
-  { featureType: 'landscape.natural.landcover', elementType: 'geometry', stylers: [{ color: '#375849' }] },
-  { featureType: 'landscape.natural.terrain', elementType: 'geometry', stylers: [{ color: '#5b4a33' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#26403d' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
-
 const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string; color: string; desc: string }[] = [
   { id: 'off',   label: 'Off',             icon: 'eye-off-outline',   color: '#7A8FA6', desc: 'Hide heatmap' },
   { id: 'all',   label: 'All Crashes',     icon: 'warning-outline',   color: '#FF6B6B', desc: 'Every crash in the area' },
@@ -687,14 +665,6 @@ export default function HomeScreen() {
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType]       = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
   const [heatmapFilter, setHeatmapFilter]     = useState<HeatmapFilter | 'off'>('off');
-  const [showStreetView, setShowStreetView]   = useState(false);
-  const [streetViewLat, setStreetViewLat]     = useState(0);
-  const [streetViewLng, setStreetViewLng]     = useState(0);
-  const [isDraggingPegman, setIsDraggingPegman] = useState(false);
-  const [showCoverageLayer, setShowCoverageLayer] = useState(false);
-  const coverageTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pegmanPos          = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
-  const pegmanButtonLayout = useRef({ x: 0, y: 0, width: 42, height: 42 });
   const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
   const [localBookmarks, setLocalBookmarks] = useState<any[]>([]);
   const [recentPlaces, setRecentPlaces]     = useState<{ id: string; title: string; address: string; lat: number; lng: number }[]>([]);
@@ -724,42 +694,6 @@ export default function HomeScreen() {
     transform: [{ scale: homeMicScale.value }],
     opacity: homeMicOpacity.value,
   }));
-
-  // ── Pegman ──────────────────────────────────────────────────────────────────
-  const CANCEL_RADIUS = 70;
-  const pegmanPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder:  () => true,
-      onPanResponderGrant: () => {
-        setIsDraggingPegman(true);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        pegmanPos.setValue({ x: 0, y: 0 });
-        if (coverageTimerRef.current) clearTimeout(coverageTimerRef.current);
-        coverageTimerRef.current = setTimeout(() => setShowCoverageLayer(true), 1000);
-      },
-      onPanResponderMove: Animated.event([null, { dx: pegmanPos.x, dy: pegmanPos.y }], { useNativeDriver: false }),
-      onPanResponderRelease: async (_, gs) => {
-        if (coverageTimerRef.current) clearTimeout(coverageTimerRef.current);
-        setIsDraggingPegman(false); setShowCoverageLayer(false); pegmanPos.setValue({ x: 0, y: 0 });
-        const dist = Math.sqrt(gs.dx * gs.dx + gs.dy * gs.dy);
-        if (dist < CANCEL_RADIUS) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); return; }
-        const dropX = pegmanButtonLayout.current.x + pegmanButtonLayout.current.width / 2 + gs.dx;
-        const dropY = pegmanButtonLayout.current.y + pegmanButtonLayout.current.height / 2 + gs.dy;
-        try {
-          const coord = await mapRef.current?.coordinateForPoint({ x: dropX, y: dropY });
-          if (coord) { setStreetViewLat(coord.latitude); setStreetViewLng(coord.longitude); setShowStreetView(true); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); }
-        } catch {
-          const loc = userLocation ?? { lat: 41.8781, lng: -87.6298 };
-          setStreetViewLat(loc.lat); setStreetViewLng(loc.lng); setShowStreetView(true);
-        }
-      },
-      onPanResponderTerminate: () => {
-        if (coverageTimerRef.current) clearTimeout(coverageTimerRef.current);
-        setIsDraggingPegman(false); setShowCoverageLayer(false); pegmanPos.setValue({ x: 0, y: 0 });
-      },
-    })
-  ).current;
 
   function startHomeMic() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -831,6 +765,42 @@ export default function HomeScreen() {
     const storeItems = bookmarkStore.getAll();
     setLocalBookmarks(storeItems.filter(s => !['Home: ','Work: ','School: '].some(p => s.title.startsWith(p))));
   }, [jwt]));
+
+  useEffect(() => {
+    void (async () => {
+      const s = await loadMapSession();
+      if (s?.mapStyleType) setMapStyleType(s.mapStyleType);
+      if (s?.heatmapFilter) setHeatmapFilter(s.heatmapFilter as HeatmapFilter | 'off');
+      if (typeof s?.latitudeDelta === 'number') setZoomLevel(s.latitudeDelta);
+      if (
+        mapRef.current &&
+        typeof s?.latitude === 'number' &&
+        typeof s?.longitude === 'number' &&
+        typeof s?.latitudeDelta === 'number'
+      ) {
+        const lngD = typeof s.longitudeDelta === 'number' ? s.longitudeDelta : s.latitudeDelta;
+        mapRef.current.animateToRegion(
+          {
+            latitude: s.latitude,
+            longitude: s.longitude,
+            latitudeDelta: s.latitudeDelta,
+            longitudeDelta: lngD,
+          },
+          0,
+        );
+        setCurrentRegion({
+          latitude: s.latitude,
+          longitude: s.longitude,
+          latitudeDelta: s.latitudeDelta,
+          longitudeDelta: lngD,
+        });
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    scheduleSaveMapSession({ mapStyleType, heatmapFilter });
+  }, [mapStyleType, heatmapFilter]);
 
   useEffect(() => {
     const unsubscribe = bookmarkStore.subscribe(() => {
@@ -980,8 +950,20 @@ export default function HomeScreen() {
         provider={PROVIDER_GOOGLE} initialRegion={mapRegion}
         mapType={mapStyleType}
         showsUserLocation showsMyLocationButton={false}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : []}
-        onRegionChange={r => setCurrentRegion(r)}>
+        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : []}
+        onRegionChange={r => setCurrentRegion(r)}
+        onRegionChangeComplete={r => {
+          setCurrentRegion(r);
+          setZoomLevel(r.latitudeDelta);
+          scheduleSaveMapSession({
+            latitude: r.latitude,
+            longitude: r.longitude,
+            latitudeDelta: r.latitudeDelta,
+            longitudeDelta: r.longitudeDelta,
+            mapStyleType,
+            heatmapFilter,
+          });
+        }}>
         {bookmarks.map(bm => (
           <Marker key={bm.id} coordinate={{ latitude: bm.lat, longitude: bm.lng }}
             title={bm.title} description={bm.address} pinColor={T.ACCENT} />
@@ -993,18 +975,6 @@ export default function HomeScreen() {
         )}
       </MapView>
 
-      {/* Street View WebView */}
-      {isDraggingPegman && GMAPS_KEY ? (
-        <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
-          <WebView
-            style={[StyleSheet.absoluteFillObject, { opacity: showCoverageLayer ? 0.9 : 0 }]}
-            source={{ html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><style>*{margin:0;padding:0}html,body,#map{width:100%;height:100%;background:transparent}</style></head><body><div id="map"></div><script>function init(){new google.maps.StreetViewCoverageLayer().setMap(new google.maps.Map(document.getElementById('map'),{center:{lat:${currentRegion.latitude},lng:${currentRegion.longitude}},zoom:Math.round(Math.log2(360/${currentRegion.longitudeDelta})),disableDefaultUI:true,backgroundColor:'transparent',gestureHandling:'none',mapTypeId:'roadmap'}));}</script><script src="https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&callback=init" async defer></script></body></html>` }}
-            javaScriptEnabled originWhitelist={['*']} mixedContentMode="always"
-            scrollEnabled={false} backgroundColor="#00000000"
-          />
-        </View>
-      ) : null}
-
       {/* Vignettes */}
       <LinearGradient colors={[T.isDark ? 'rgba(7,13,72,0.82)' : 'rgba(255,255,255,0.72)', 'transparent']}
         style={{ position:'absolute', top:0, left:0, right:0, height:120, zIndex:5 }} pointerEvents="none" />
@@ -1012,55 +982,47 @@ export default function HomeScreen() {
         style={{ position:'absolute', bottom:0, left:0, right:0, height:180, zIndex:5 }} pointerEvents="none" />
 
       {/* ── Map controls — refined style ── */}
-      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP, borderRadius:14, width:42, backgroundColor:T.ITEM, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.18, shadowRadius:6, elevation:4 }}>
+      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP, borderRadius:14, width:42, backgroundColor:T.BG, zIndex:6, elevation:6, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.18, shadowRadius:6 }}>
         <Pressable style={{ width:42, height:42, justifyContent:'center', alignItems:'center' }} onPress={handleZoomIn}>
-          <Ionicons name="add" size={22} color={T.TEXT_PRI} />
+          <Ionicons name="add" size={22} color="#FFFFFF" />
         </Pressable>
-        <View style={{ height:1, backgroundColor:T.DIVIDER, marginHorizontal:8 }} />
+        <View style={{ height:1, backgroundColor:'rgba(255,255,255,0.12)', marginHorizontal:8 }} />
         <Pressable style={{ width:42, height:42, justifyContent:'center', alignItems:'center' }} onPress={handleZoomOut}>
-          <Ionicons name="remove" size={22} color={T.TEXT_PRI} />
+          <Ionicons name="remove" size={22} color="#FFFFFF" />
         </Pressable>
       </View>
-      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+100, width:42, height:42, borderRadius:21, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.18, shadowRadius:6, elevation:4 }}>
-        <Pressable style={{ flex:1, borderRadius:21, backgroundColor:T.ITEM, justifyContent:'center', alignItems:'center' }} onPress={handleMyLocation}>
-          <Ionicons name="locate" size={20} color={T.ACCENT} />
+      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+100, width:42, height:42, borderRadius:21, zIndex:6, elevation:6, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.18, shadowRadius:6 }}>
+        <Pressable style={{ flex:1, borderRadius:21, backgroundColor:T.BG, justifyContent:'center', alignItems:'center' }} onPress={handleMyLocation}>
+          <Ionicons name="locate" size={20} color="#FFFFFF" />
         </Pressable>
-      </View>
-      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+152, width:42, height:42, borderRadius:21 }}
-        onLayout={e => { e.target.measure((_x,_y,w,h,px,py) => { pegmanButtonLayout.current={x:px,y:py,width:w,height:h}; }); }}>
-        <Animated.View style={[{
-          width:42, height:42, borderRadius:21,
-          backgroundColor: isDraggingPegman ? T.ACCENT : T.ITEM,
-          justifyContent:'center', alignItems:'center',
-          transform: pegmanPos.getTranslateTransform(),
-          shadowColor: isDraggingPegman ? T.ACCENT : '#000',
-          shadowOffset:{width:0,height: isDraggingPegman ? 6 : 2},
-          shadowOpacity: isDraggingPegman ? 0.5 : 0.18,
-          shadowRadius: isDraggingPegman ? 8 : 6,
-          elevation: isDraggingPegman ? 24 : 0,
-          zIndex: isDraggingPegman ? 999 : 1,
-        }]} {...pegmanPanResponder.panHandlers}>
-          <Ionicons name="walk" size={22} color={isDraggingPegman ? '#fff' : T.ACCENT} />
-        </Animated.View>
       </View>
 
+      <MapPegmanStreetView
+        mapRef={mapRef}
+        currentRegion={currentRegion}
+        fallbackLatLng={userLocation ?? { lat: 41.8781, lng: -87.6298 }}
+        top={TOP_BUTTONS_TOP + 152}
+        controlBg={T.BG}
+        dragHighlightBg={T.CARD}
+        stackBelowSheet
+      />
+
       {/* ── Heatmap toggle pill — refined ── */}
-      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+204 }}>
+      <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+204, zIndex:6, elevation:6 }}>
         <Pressable
           style={[{
             flexDirection:'row', alignItems:'center', gap:6,
-            backgroundColor:T.ITEM, borderRadius:22,
+            backgroundColor:T.BG, borderRadius:22,
             paddingHorizontal:12, paddingVertical:8,
-            borderWidth:1, borderColor:'transparent',
+            borderWidth:1, borderColor: heatmapFilter !== 'off' ? 'rgba(255,255,255,0.28)' : 'transparent',
             shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.15, shadowRadius:4, elevation:3,
-          },
-            heatmapFilter !== 'off' && { borderColor: (activeFilterInfo?.color ?? T.ACCENT) + '44' }]}
+          }]}
           onPress={() => setShowHeatmapModal(true)}>
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={T.ACCENT} style={{ marginRight:2 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeFilterInfo?.color ?? T.ACCENT) : T.ACCENT} />}
+            ? <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight:2 }} />
+            : <Ionicons name="layers-outline" size={14} color="#FFFFFF" />}
           {heatmapFilter !== 'off' && (
-            <Text style={{ color: activeFilterInfo?.color ?? T.ACCENT, fontSize:12, fontWeight:'600' }}>
+            <Text style={{ color: '#FFFFFF', fontSize:12, fontWeight:'600' }}>
               {activeFilterInfo?.label ?? 'Heatmap'}
             </Text>
           )}
@@ -1156,22 +1118,9 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
-      {/* Street View Modal — placed before bottom sheet to ensure full-screen render above all layers */}
-      <StreetViewModal
-        visible={showStreetView}
-        lat={streetViewLat}
-        lng={streetViewLng}
-        placeName="Street View"
-        onClose={() => setShowStreetView(false)}
-        onNoCoverage={() => {
-          Animated.spring(pegmanPos, { toValue:{x:0,y:0}, useNativeDriver:false, friction:5, tension:80 }).start();
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        }}
-      />
-
       {/* ── BOTTOM SHEET ── */}
       <ReAnimated.View pointerEvents="box-none"
-        style={[{ position:'absolute', left:0, right:0, bottom:0, top:0, zIndex:10 }, outerWrapStyle]}>
+        style={[{ position:'absolute', left:0, right:0, bottom:0, top:0, zIndex:32, elevation:32 }, outerWrapStyle]}>
         <ReAnimated.View pointerEvents="box-none"
           style={[StyleSheet.absoluteFillObject, { overflow:'hidden' }, clipWrapStyle]}>
 

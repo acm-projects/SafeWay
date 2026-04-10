@@ -512,30 +512,16 @@ function RouteSourceCard({ routeSource }: { routeSource: 'google' | 'safeway' })
   );
 }
 
-// ─── Main Modal ───────────────────────────────────────────────────────────────
-export function RouteInsightsPage({
-  visible,
-  onClose,
-  activeData,
-  destLat,
-  destLng,
-  originLat,
-  originLng,
-}: {
-  visible: boolean;
-  onClose: () => void;
-  activeData: ModeRouteData | null;
-  destLat?: number;
-  destLng?: number;
-  originLat?: number;
-  originLng?: number;
-}) {
-  const { height: screenH } = useWindowDimensions();
+// ─── Metrics body (shared by modal + /route-insights screen) ────────────────
+export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRouteData | null }) {
   const { T } = useTheme();
-  const CARD_HEIGHT = screenH * 0.88;
-
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
+
+  useEffect(() => {
+    setInfoKey(null);
+    setTooltipVisible(null);
+  }, [activeData]);
 
   // ── Derived safety values ─────────────────────────────────────────────────
   const score = activeData?.safetyScore ?? null;
@@ -608,36 +594,8 @@ export function RouteInsightsPage({
   // ── Route summary (client-side) ───────────────────────────────────────────
   const routeSummary = useMemo(() => generateRouteSummary(activeData), [activeData]);
 
-  // Reset state on open
-  useEffect(() => {
-    if (visible) {
-      setInfoKey(null);
-      setTooltipVisible(null);
-    }
-  }, [visible]);
-
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={s.backdrop}>
-        <View style={[s.card, { height: CARD_HEIGHT, backgroundColor: T.BG, overflow: 'hidden' }]}>
-
-          {/* ── Header ── */}
-          <View style={s.tabRow}>
-            <Text style={[s.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
-            <View style={{ flex: 1 }} />
-            <Pressable onPress={onClose}>
-              <View style={[s.closeBtnCircle, { backgroundColor: T.ITEM }]}>
-                <Ionicons name="close" size={16} color={T.TEXT_PRI} />
-              </View>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={s.body}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ gap: 14, paddingBottom: 30 }}
-          >
-
+    <>
             {/* ── Safety Score Hero with route summary ── */}
             {safetyPct != null ? (
               <LinearGradient
@@ -924,6 +882,51 @@ export function RouteInsightsPage({
               </View>
             </View>
 
+    </>
+  );
+}
+
+// ─── Main Modal (optional; directions uses full-screen /route-insights) ─────
+export function RouteInsightsPage({
+  visible,
+  onClose,
+  activeData,
+  destLat: _destLat,
+  destLng: _destLng,
+  originLat: _originLat,
+  originLng: _originLng,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  activeData: ModeRouteData | null;
+  destLat?: number;
+  destLng?: number;
+  originLat?: number;
+  originLng?: number;
+}) {
+  const { height: screenH } = useWindowDimensions();
+  const { T } = useTheme();
+  const CARD_HEIGHT = screenH * 0.88;
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={s.backdrop}>
+        <View style={[s.card, { height: CARD_HEIGHT, backgroundColor: T.BG, overflow: 'hidden' }]}>
+          <View style={s.tabRow}>
+            <Text style={[s.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
+            <View style={{ flex: 1 }} />
+            <Pressable onPress={onClose}>
+              <View style={[s.closeBtnCircle, { backgroundColor: T.ITEM }]}>
+                <Ionicons name="close" size={16} color={T.TEXT_PRI} />
+              </View>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={s.body}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ gap: 14, paddingBottom: 30 }}
+          >
+            <RouteInsightsMetricsBody activeData={activeData} />
           </ScrollView>
         </View>
       </View>

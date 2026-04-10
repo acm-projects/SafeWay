@@ -25,6 +25,9 @@ import { useAuth } from '@/providers/auth-provider';
 import { useTheme } from '@/providers/theme-context';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
+import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
+import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
+import MapPegmanStreetView from '@/components/MapPegmanStreetView';
 
 // ─── API base URL ────────────────────────────────────────────────────────────
 import Constants from 'expo-constants';
@@ -79,86 +82,30 @@ const HEATMAP_FILTERS: { id: HeatmapFilter | 'off'; label: string; icon: string;
   { id: 'hit',   label: 'Hit & Run',       icon: 'car-sport-outline', color: '#C084FC', desc: 'Hit and run incidents' },
 ];
 
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#2b3544' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#2b3a33' }] },
-  { featureType: 'landscape.natural.landcover', elementType: 'geometry', stylers: [{ color: '#375849' }] },
-  { featureType: 'landscape.natural.terrain', elementType: 'geometry', stylers: [{ color: '#5b4a33' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#26403d' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
-
 const FLOAT_SIDE   = 14;
 const FLOAT_BOTTOM = 18;
 const FLOAT_RADIUS = 26;
 const HERO_HEIGHT  = 220;
 
-// ─── Pulsing halo for the map marker ──────────────────────────────────────────
-function PulsingMarker({ coordinate }: { coordinate: { latitude: number; longitude: number } }) {
-  const pulseAnim = useRef(new RNAnimated.Value(0)).current;
-
-  useEffect(() => {
-    const loop = RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(pulseAnim, { toValue: 1, duration: 1400, useNativeDriver: true, easing: Easing.out(Easing.ease) }),
-        RNAnimated.timing(pulseAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, []);
-
-  const pulseScale  = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.6] });
-  const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0.6, 0.3, 0] });
-
-  return (
-    <Marker coordinate={coordinate} anchor={{ x: 0.5, y: 0.5 }}>
-      <View style={{ width: 56, height: 56, alignItems: 'center', justifyContent: 'center' }}>
-        <RNAnimated.View style={[
-          StyleSheet.absoluteFillObject,
-          {
-            borderRadius: 28,
-            backgroundColor: SEAFOAM,
-            transform: [{ scale: pulseScale }],
-            opacity: pulseOpacity,
-          }
-        ]} />
-        <View style={{
-          width: 18, height: 18, borderRadius: 9,
-          backgroundColor: SEAFOAM,
-          borderWidth: 2.5, borderColor: '#FFFFFF',
-          shadowColor: SEAFOAM, shadowOpacity: 0.9, shadowRadius: 8, elevation: 6,
-        }} />
-      </View>
-    </Marker>
-  );
-}
-
-// ─── Bottom sheet glass background ────────────────────────────────────────────
-function SheetBg({ style, bg }: { style?: any; bg?: string }) {
+// ─── Bottom sheet background (same token as map chrome) ─────────────────────
+function SheetBg({ style, sheetBgStyle }: { style?: any; sheetBgStyle?: any }) {
+  const { T } = useTheme();
   return (
     <Animated.View
       pointerEvents="none"
       style={[
         StyleSheet.absoluteFillObject,
         {
-          backgroundColor: NAVY_GLASS,
+          backgroundColor: T.BG,
           borderWidth: 1,
           borderColor: GLASS_BORDER,
-          shadowColor: SEAFOAM,
-          shadowOpacity: 0.06,
+          shadowColor: '#000000',
+          shadowOpacity: 0.08,
           shadowRadius: 20,
           shadowOffset: { width: 0, height: -4 },
         },
         style,
+        sheetBgStyle,
       ]}
     />
   );
@@ -345,6 +292,12 @@ export default function DestinationScreen() {
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [mapViewport, setMapViewport] = useState<{
+    latitude: number;
+    longitude: number;
+    latitudeDelta: number;
+    longitudeDelta: number;
+  } | null>(null);
   const activeHeatmapInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
 
   const [destQuery, setDestQuery] = useState('');
@@ -362,6 +315,30 @@ export default function DestinationScreen() {
 
   const [safetyScore, setSafetyScore] = useState<number>(72);
   const [safetyLoading, setSafetyLoading] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const s = await loadMapSession();
+      if (s?.mapStyleType) setMapStyleType(s.mapStyleType);
+      if (s?.heatmapFilter) setHeatmapFilter(s.heatmapFilter as HeatmapFilter | 'off');
+      if (typeof s?.latitudeDelta === 'number') {
+        setZoomDelta(s.latitudeDelta);
+        if (lat && lng) {
+          const lngD = typeof s.longitudeDelta === 'number' ? s.longitudeDelta : s.latitudeDelta;
+          setTimeout(() => {
+            mapRef.current?.animateToRegion(
+              { latitude: lat, longitude: lng, latitudeDelta: s.latitudeDelta!, longitudeDelta: lngD },
+              0,
+            );
+          }, 250);
+        }
+      }
+    })();
+  }, [lat, lng]);
+
+  useEffect(() => {
+    scheduleSaveMapSession({ mapStyleType, heatmapFilter });
+  }, [mapStyleType, heatmapFilter]);
 
   useEffect(() => {
     if (!lat || !lng) return;
@@ -573,15 +550,41 @@ export default function DestinationScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? DARK_MAP_STYLE : []) : undefined}
+        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
-        initialRegion={{ latitude: lat, longitude: lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
-        showsUserLocation
+        initialRegion={{ latitude: lat, longitude: lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta }}
+        showsUserLocation={false}
         showsMyLocationButton={false}
         scrollEnabled
         zoomEnabled
+        onRegionChangeComplete={r => {
+          setMapViewport(r);
+          setZoomDelta(r.latitudeDelta);
+          scheduleSaveMapSession({
+            latitude: r.latitude,
+            longitude: r.longitude,
+            latitudeDelta: r.latitudeDelta,
+            longitudeDelta: r.longitudeDelta,
+            mapStyleType,
+            heatmapFilter,
+          });
+        }}
       >
-        <PulsingMarker coordinate={{ latitude: lat, longitude: lng }} />
+        <Marker coordinate={{ latitude: lat, longitude: lng }} pinColor="#FF4444" />
+        {originCoords ? (
+          <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
+            <View
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: 7,
+                backgroundColor: '#4285F4',
+                borderWidth: 3,
+                borderColor: '#FFFFFF',
+              }}
+            />
+          </Marker>
+        ) : null}
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap
             points={crashPoints}
@@ -730,42 +733,57 @@ export default function DestinationScreen() {
         )}
       </View>
 
-      {/* ── Zoom cluster ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.ITEM }}>
+      {/* ── Map chrome: original top offsets; stays under bottom sheet ── */}
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.BG, zIndex: 6, elevation: 6 }}>
         <Pressable style={s.zoomBtn} onPress={() => doZoom(0.5)}>
-          <Ionicons name="add" size={22} color={T.TEXT_PRI} />
+          <Ionicons name="add" size={22} color="#FFFFFF" />
         </Pressable>
-        <View style={[s.zoomDiv, { backgroundColor: T.DIVIDER }]} />
+        <View style={[s.zoomDiv, { backgroundColor: 'rgba(255,255,255,0.12)' }]} />
         <Pressable style={s.zoomBtn} onPress={() => doZoom(2)}>
-          <Ionicons name="remove" size={22} color={T.TEXT_PRI} />
+          <Ionicons name="remove" size={22} color="#FFFFFF" />
         </Pressable>
       </View>
 
-      {/* ── Locate ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21 }}>
-        <Pressable
-          style={[s.floatBtnInner, { backgroundColor: T.ITEM }]}
-          onPress={handleCenter}
-        >
-          <Ionicons name="locate" size={20} color={T.ACCENT} />
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 100, width: 42, height: 42, borderRadius: 21, zIndex: 6, elevation: 6 }}>
+        <Pressable style={[s.floatBtnInner, { backgroundColor: T.BG }]} onPress={handleCenter}>
+          <Ionicons name="locate" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
 
-      {/* ── Heatmap pill ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 152 }}>
+      <MapPegmanStreetView
+        mapRef={mapRef}
+        currentRegion={
+          mapViewport ?? {
+            latitude: lat,
+            longitude: lng,
+            latitudeDelta: zoomDelta,
+            longitudeDelta: zoomDelta,
+          }
+        }
+        fallbackLatLng={{ lat, lng }}
+        top={TOP_BTNS + 152}
+        controlBg={T.BG}
+        dragHighlightBg={T.CARD}
+        stackBelowSheet
+      />
+
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 204, zIndex: 6, elevation: 6 }}>
         <Pressable
           style={[
             s.heatmapInner,
-            { backgroundColor: T.ITEM, borderColor: heatmapFilter !== 'off' ? T.ACCENT + '55' : 'transparent' },
+            {
+              backgroundColor: T.BG,
+              borderColor: heatmapFilter !== 'off' ? 'rgba(255,255,255,0.28)' : 'transparent',
+            },
           ]}
           onPress={() => setShowHeatmapModal(true)}
         >
           {crashLoading && heatmapFilter !== 'off'
-            ? <ActivityIndicator size="small" color={T.ACCENT} style={{ marginRight: 2 }} />
-            : <Ionicons name="layers-outline" size={14} color={heatmapFilter !== 'off' ? (activeHeatmapInfo?.color ?? T.ACCENT) : T.ACCENT} />
+            ? <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 2 }} />
+            : <Ionicons name="layers-outline" size={14} color="#FFFFFF" />
           }
           {heatmapFilter !== 'off' && (
-            <Text style={[s.heatmapText, { color: activeHeatmapInfo?.color ?? T.ACCENT }]}>
+            <Text style={[s.heatmapText, { color: '#FFFFFF' }]}>
               {activeHeatmapInfo?.label ?? 'Heatmap'}
             </Text>
           )}
@@ -775,38 +793,38 @@ export default function DestinationScreen() {
       {/* ── Heatmap / map style modal ── */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
-          <Pressable style={[hm.card, { backgroundColor: NAVY_CARD, borderWidth: 1, borderColor: GLASS_BORDER }]} onPress={() => {}}>
+          <Pressable style={[hm.card, { backgroundColor: T.BG, borderWidth: 1, borderColor: T.DIVIDER }]} onPress={() => {}}>
 
-            <Text style={[hm.title, { color: TEXT_PRI }]}>Map Style</Text>
+            <Text style={[hm.title, { color: T.TEXT_PRI }]}>Map Style</Text>
             <View style={hm.mapStyleRow}>
               {MAP_STYLE_OPTIONS.map(opt => {
                 const active = mapStyleType === opt.id;
                 return (
                   <Pressable key={opt.id}
-                    style={[hm.mapStyleBtn, { backgroundColor: NAVY_ITEM }, active && { borderColor: SEAFOAM, backgroundColor: 'rgba(26,188,147,0.12)' }]}
+                    style={[hm.mapStyleBtn, { backgroundColor: T.ITEM }, active && { borderColor: T.ACCENT, backgroundColor: T.isDark ? 'rgba(26,188,147,0.12)' : '#EDE8FF' }]}
                     onPress={() => setMapStyleType(opt.id)}>
-                    <Ionicons name={opt.icon as any} size={22} color={active ? SEAFOAM : TEXT_MUT} />
-                    <Text style={[hm.mapStyleLabel, { color: active ? SEAFOAM : TEXT_MUT }]}>{opt.label}</Text>
+                    <Ionicons name={opt.icon as any} size={22} color={active ? T.ACCENT : T.TEXT_MUT} />
+                    <Text style={[hm.mapStyleLabel, { color: active ? T.ACCENT : T.TEXT_MUT }]}>{opt.label}</Text>
                   </Pressable>
                 );
               })}
             </View>
 
-            <View style={[hm.sectionDiv, { backgroundColor: DIVIDER }]} />
+            <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
 
             <View style={hm.header}>
-              <Text style={[hm.title, { color: TEXT_PRI }]}>Safety Heatmap</Text>
+              <Text style={[hm.title, { color: T.TEXT_PRI }]}>Safety Heatmap</Text>
               {heatmapFilter !== 'off' && (
-                <View style={[hm.countBadge, { backgroundColor: NAVY_ITEM }]}>
+                <View style={[hm.countBadge, { backgroundColor: T.ITEM }]}>
                   {crashLoading
-                    ? <ActivityIndicator size="small" color={SEAFOAM} />
-                    : <Text style={[hm.countText, { color: SEAFOAM }]}>{crashPoints.length.toLocaleString()} points</Text>
+                    ? <ActivityIndicator size="small" color={T.ACCENT} />
+                    : <Text style={[hm.countText, { color: T.ACCENT }]}>{crashPoints.length.toLocaleString()} points</Text>
                   }
                 </View>
               )}
             </View>
-            <Text style={[hm.subtitle, { color: TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
-            <View style={[hm.filterList, { backgroundColor: NAVY_ITEM }]}>
+            <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;
                 return (
@@ -815,16 +833,16 @@ export default function DestinationScreen() {
                       style={[hm.filterRow, active && hm.filterRowActive]}
                       onPress={() => { setHeatmapFilter(f.id); setShowHeatmapModal(false); }}
                     >
-                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '25' : NAVY }]}>
-                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : TEXT_MUT} />
+                      <View style={[hm.filterIcon, { backgroundColor: active ? f.color + '25' : T.BG }]}>
+                        <Ionicons name={f.icon as any} size={20} color={active ? f.color : T.TEXT_MUT} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[hm.filterLabel, { color: TEXT_MUT }, active && { color: TEXT_PRI }]}>{f.label}</Text>
-                        <Text style={[hm.filterDesc, { color: TEXT_MUT }]}>{f.desc}</Text>
+                        <Text style={[hm.filterLabel, { color: T.TEXT_MUT }, active && { color: T.TEXT_PRI }]}>{f.label}</Text>
+                        <Text style={[hm.filterDesc, { color: T.TEXT_MUT }]}>{f.desc}</Text>
                       </View>
-                      {active && <Ionicons name="checkmark-circle" size={20} color={SEAFOAM} />}
+                      {active && <Ionicons name="checkmark-circle" size={20} color={T.ACCENT} />}
                     </Pressable>
-                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: DIVIDER }]} />}
+                    {i < HEATMAP_FILTERS.length - 1 && <View style={[hm.filterDiv, { backgroundColor: T.DIVIDER }]} />}
                   </View>
                 );
               })}
@@ -836,7 +854,15 @@ export default function DestinationScreen() {
       {/* ── Floating glass island: the bottom sheet wrapper ── */}
       <Animated.View
         pointerEvents="box-none"
-        style={{ position: 'absolute', left: FLOAT_SIDE, right: FLOAT_SIDE, bottom: insets.bottom * 0.5 + FLOAT_BOTTOM, top: 0 }}
+        style={{
+          position: 'absolute',
+          left: FLOAT_SIDE,
+          right: FLOAT_SIDE,
+          bottom: insets.bottom * 0.5 + FLOAT_BOTTOM,
+          top: 0,
+          zIndex: 32,
+          elevation: 32,
+        }}
       >
         <Animated.View
           pointerEvents="box-none"
@@ -849,7 +875,7 @@ export default function DestinationScreen() {
         onChange={handleSheetChange}
         enableDynamicSizing={false}
         animatedPosition={animatedPosition}
-        backgroundComponent={({ style }) => <SheetBg style={[style, sheetBgStyle]} />}
+        backgroundComponent={({ style }) => <SheetBg style={style} sheetBgStyle={sheetBgStyle} />}
         handleComponent={() => (
           <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
             <View style={{
