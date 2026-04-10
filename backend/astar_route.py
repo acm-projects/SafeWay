@@ -18,6 +18,7 @@ def compute_astar_route(
     dest_lat: float,
     dest_lng: float,
     departure_hour: int | None = None,
+    travel_mode: str = "DRIVE",
 ) -> dict | None:
     """
     Compute a safety-optimized A* route between two lat/lng points.
@@ -41,13 +42,13 @@ def compute_astar_route(
         if orig_node == dest_node:
             return None
 
-        astar = find_safer_route(G, orig_node, dest_node, beta=0.5)
+        astar = find_safer_route(G, orig_node, dest_node, risk_weight=3.0)
         safe_coords = path_to_coordinates(G, astar["safe_path"])
         if len(safe_coords) < 2:
             return None
 
         safe_polyline = encode_polyline(safe_coords)
-        safety = score_coordinates(safe_coords, sample_every=3, departure_hour=departure_hour)
+        safety = score_coordinates(safe_coords, sample_every=3, departure_hour=departure_hour, travel_mode=travel_mode)
         aadt = estimate_route_aadt(G, astar["safe_path"])
 
         return {
