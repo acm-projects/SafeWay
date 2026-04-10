@@ -882,99 +882,47 @@ function TimeSliderPicker({
 }
 
 // ─── Stacked Route Deck Card (swipeable, mirrors "Recents" on home screen) ───
-function StackedRouteDeck({
-  alternatives, selectedRouteIndex, onSelectRoute, onShowDetails, onShowInsights,
-  travelMode, originCoords, destCoords, stopsSwapped, routeBusy, activeData,
-  activeSecs,
+function RouteCard({
+  alt,
+  index,
+  isSelected,
+  onSelect,
+  onShowInsights,
+  onShowDetails,
+  travelMode,
+  originCoords,
+  destCoords,
+  stopsSwapped,
 }: {
-  alternatives: RouteAltRow[];
-  selectedRouteIndex: number;
-  onSelectRoute: (i: number) => void;
-  onShowDetails: () => void;
+  alt: RouteAltRow;
+  index: number;
+  isSelected: boolean;
+  onSelect: () => void;
   onShowInsights: () => void;
+  onShowDetails: () => void;
   travelMode: TravelMode;
   originCoords: { lat: number; lng: number } | null;
   destCoords: { lat: number; lng: number } | null;
   stopsSwapped: boolean;
-  routeBusy: boolean;
-  activeData: ModeRouteData | null;
-  activeSecs: number;
 }) {
-  const swipeX = useRef(new RNAnimated.Value(0)).current;
   const { T } = useTheme();
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dx) > 8 && Math.abs(gs.dy) < 24,
-      onPanResponderMove: (_, gs) => { swipeX.setValue(gs.dx); },
-      onPanResponderRelease: (_, gs) => {
-        if (gs.dx < -50 && selectedRouteIndex < alternatives.length - 1) {
-          RNAnimated.timing(swipeX, { toValue: -400, duration: 200, useNativeDriver: true }).start(() => {
-            onSelectRoute(selectedRouteIndex + 1);
-            swipeX.setValue(0);
-          });
-        } else if (gs.dx > 50 && selectedRouteIndex > 0) {
-          RNAnimated.timing(swipeX, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => {
-            onSelectRoute(selectedRouteIndex - 1);
-            swipeX.setValue(0);
-          });
-        } else {
-          RNAnimated.spring(swipeX, { toValue: 0, useNativeDriver: true, friction: 6, tension: 80 }).start();
-        }
-      },
-    })
-  ).current;
-
-  if (routeBusy) {
-    return (
-      <View style={deck.loadingWrap}>
-        <ActivityIndicator size="small" color={T.ACCENT} />
-        <Text style={[deck.loadingText, { color: T.TEXT_MUT }]}>Calculating routes…</Text>
-      </View>
-    );
-  }
-
-  const displayAlts = alternatives.length > 0 ? alternatives : (activeData ? [primaryToAlternativeRow(activeData)] : []);
-  if (displayAlts.length === 0) return null;
-
-  const selectedAlt = displayAlts[selectedRouteIndex] ?? displayAlts[0];
-  const isSafeWay = selectedAlt.routeSource === 'safeway';
-  const score = selectedAlt.safetyScore;
+  const isSafeWay = alt.routeSource === 'safeway';
+  const score = alt.safetyScore;
   const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
   const safetyColor = score == null ? TEXT_MUT
     : score < 33 ? SEAFOAM : score < 66 ? '#FFA500' : '#FF4444';
 
   return (
-    <View>
-      {/* Pagination dots */}
-      {displayAlts.length > 1 && (
-        <View style={deck.dotsRow}>
-          {displayAlts.map((_, i) => (
-            <Pressable key={i} onPress={() => onSelectRoute(i)}>
-              <View style={[
-                deck.dot,
-                { backgroundColor: i === selectedRouteIndex ? T.ACCENT : 'rgba(255,255,255,0.2)' },
-                i === selectedRouteIndex && { width: 20 },
-              ]} />
-            </Pressable>
-          ))}
-        </View>
-      )}
-
-      {/* Stacked depth cards (visual) */}
-      {displayAlts.length > 2 && (
-        <View style={[deck.shadowCard, deck.shadowCard3, { backgroundColor: T.CARD, borderColor: GLASS_BORDER }]} />
-      )}
-      {displayAlts.length > 1 && (
-        <View style={[deck.shadowCard, deck.shadowCard2, { backgroundColor: T.CARD, borderColor: GLASS_BORDER }]} />
-      )}
-
-      {/* Main swipeable card */}
-      <RNAnimated.View
-        style={[deck.card, { backgroundColor: T.BG, borderColor: safetyColor + '55', transform: [{ translateX: swipeX }] }]}
-        {...panResponder.panHandlers}
-      >
+    <Pressable onPress={onSelect}>
+      <View style={[
+        deck.card,
+        {
+          backgroundColor: isSelected ? T.BG : T.CARD,
+          borderColor: isSelected ? safetyColor + '66' : GLASS_BORDER,
+          borderWidth: isSelected ? 1.5 : 1,
+          marginBottom: 10,
+        },
+      ]}>
         {/* Card header: safety badge + timing */}
         <View style={deck.cardHeader}>
           {/* Safety badge */}
@@ -1002,73 +950,126 @@ function StackedRouteDeck({
           </View>
 
           {/* ETA + meta */}
-          <Pressable style={deck.etaBlock} onPress={onShowDetails}>
+          <View style={deck.etaBlock}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <Text style={[deck.etaTime, { color: T.TEXT_PRI }]}>{fmtSecs(selectedAlt.durationSecs)}</Text>
+              <Text style={[deck.etaTime, { color: T.TEXT_PRI }]}>{fmtSecs(alt.durationSecs)}</Text>
               {isSafeWay && (
                 <View style={deck.safewayBadge}>
                   <Ionicons name="shield-checkmark" size={10} color={SEAFOAM} />
                   <Text style={deck.safewayBadgeText}>SafeWay</Text>
                 </View>
               )}
+              {isSelected && (
+                <View style={{ backgroundColor: SEAFOAM + '22', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 }}>
+                  <Text style={{ color: SEAFOAM, fontSize: 9, fontWeight: '800' }}>SELECTED</Text>
+                </View>
+              )}
             </View>
             <Text style={[deck.etaMeta, { color: T.TEXT_MUT }]}>
-              {fmtDist(selectedAlt.distance)}
+              {fmtDist(alt.distance)}
               {score != null ? `  ·  Risk: ${Math.round(score)}` : ''}
             </Text>
             <Text style={[deck.etaArrival, { color: T.ACCENT }]}>
-              Arrive ~{arrivalFrom(selectedAlt.durationSecs)}
-              {selectedAlt.nHighRisk ? `  ·  ${selectedAlt.nHighRisk} hot spots` : ''}
+              Arrive ~{arrivalFrom(alt.durationSecs)}
+              {alt.nHighRisk ? `  ·  ${alt.nHighRisk} hot spots` : ''}
             </Text>
-          </Pressable>
-
-          {/* Swipe hint */}
-          {displayAlts.length > 1 && (
-            <View style={deck.swipeHint}>
-              <Ionicons name="swap-horizontal-outline" size={14} color={TEXT_MUT} />
-            </View>
-          )}
+          </View>
         </View>
 
-        {/* Action buttons */}
-        <View style={deck.actionsRow}>
-          <Pressable
-            style={deck.startBtn}
-            onPress={() => {
-              const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
-              const from = stopsSwapped ? destCoords : originCoords;
-              const to   = stopsSwapped ? originCoords : destCoords;
-              Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
-            }}
-          >
-            <LinearGradient
-              colors={['#064E3B', '#047857', '#059669']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
-            />
-            <View style={[StyleSheet.absoluteFillObject, { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }]} />
-            <Ionicons name="navigate" size={15} color="#fff" />
-            <Text style={deck.startBtnText}>Start</Text>
-          </Pressable>
+        {/* Action buttons — only on selected card */}
+        {isSelected && (
+          <View style={deck.actionsRow}>
+            <Pressable
+              style={deck.startBtn}
+              onPress={() => {
+                const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
+                const from = stopsSwapped ? destCoords : originCoords;
+                const to   = stopsSwapped ? originCoords : destCoords;
+                Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from?.lat},${from?.lng}&destination=${to?.lat},${to?.lng}&travelmode=${modeMap[travelMode]}`);
+              }}
+            >
+              <LinearGradient
+                colors={['#064E3B', '#047857', '#059669']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: 12 }]}
+              />
+              <View style={[StyleSheet.absoluteFillObject, { borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' }]} />
+              <Ionicons name="navigate" size={15} color="#fff" />
+              <Text style={deck.startBtnText}>Start</Text>
+            </Pressable>
 
-          <Pressable
-            style={[deck.insightsBtn, { backgroundColor: T.isDark ? 'rgba(74,144,226,0.15)' : 'rgba(74,144,226,0.12)', borderColor: 'rgba(74,144,226,0.4)' }]}
-            onPress={onShowInsights}
-          >
-            <Ionicons name="stats-chart" size={14} color="#4A90E2" />
-            <Text style={deck.insightsBtnText}>Insights</Text>
-          </Pressable>
+            <Pressable
+              style={[deck.insightsBtn, { backgroundColor: T.isDark ? 'rgba(74,144,226,0.15)' : 'rgba(74,144,226,0.12)', borderColor: 'rgba(74,144,226,0.4)' }]}
+              onPress={onShowInsights}
+            >
+              <Ionicons name="stats-chart" size={14} color="#4A90E2" />
+              <Text style={deck.insightsBtnText}>Insights</Text>
+            </Pressable>
 
-          <Pressable
-            style={[deck.detailsBtn, { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: GLASS_BORDER }]}
-            onPress={onShowDetails}
-          >
-            <Ionicons name="list-outline" size={14} color={T.TEXT_MUT} />
-            <Text style={[deck.detailsBtnText, { color: T.TEXT_MUT }]}>Steps</Text>
-          </Pressable>
-        </View>
-      </RNAnimated.View>
+            <Pressable
+              style={[deck.detailsBtn, { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: GLASS_BORDER }]}
+              onPress={onShowDetails}
+            >
+              <Ionicons name="list-outline" size={14} color={T.TEXT_MUT} />
+              <Text style={[deck.detailsBtnText, { color: T.TEXT_MUT }]}>Steps</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
+function StackedRouteDeck({
+  alternatives, selectedRouteIndex, onSelectRoute, onShowDetails, onShowInsights,
+  travelMode, originCoords, destCoords, stopsSwapped, routeBusy, activeData,
+  activeSecs,
+}: {
+  alternatives: RouteAltRow[];
+  selectedRouteIndex: number;
+  onSelectRoute: (i: number) => void;
+  onShowDetails: () => void;
+  onShowInsights: () => void;
+  travelMode: TravelMode;
+  originCoords: { lat: number; lng: number } | null;
+  destCoords: { lat: number; lng: number } | null;
+  stopsSwapped: boolean;
+  routeBusy: boolean;
+  activeData: ModeRouteData | null;
+  activeSecs: number;
+}) {
+  const { T } = useTheme();
+
+  if (routeBusy) {
+    return (
+      <View style={deck.loadingWrap}>
+        <ActivityIndicator size="small" color={T.ACCENT} />
+        <Text style={[deck.loadingText, { color: T.TEXT_MUT }]}>Calculating routes…</Text>
+      </View>
+    );
+  }
+
+  const displayAlts = alternatives.length > 0 ? alternatives : (activeData ? [primaryToAlternativeRow(activeData)] : []);
+  if (displayAlts.length === 0) return null;
+
+  return (
+    <View style={{ gap: 0 }}>
+      {displayAlts.map((alt, i) => (
+        <RouteCard
+          key={i}
+          alt={alt}
+          index={i}
+          isSelected={i === selectedRouteIndex}
+          onSelect={() => onSelectRoute(i)}
+          onShowInsights={onShowInsights}
+          onShowDetails={onShowDetails}
+          travelMode={travelMode}
+          originCoords={originCoords}
+          destCoords={destCoords}
+          stopsSwapped={stopsSwapped}
+        />
+      ))}
     </View>
   );
 }
@@ -1086,7 +1087,7 @@ export default function DirectionsScreen() {
   const snapPoints = useMemo(() => {
     const cardBottom = insets.top + 132;
     const safeMax = windowHeight - cardBottom - 8;
-    const miniSnap = 75;
+    const miniSnap = 110;
     return [miniSnap, Math.round(windowHeight * 0.52), safeMax];
   }, [windowHeight, insets.top]);
   const animatedPosition = useSharedValue(windowHeight);
@@ -2106,21 +2107,7 @@ const deck = StyleSheet.create({
     gap: 10, paddingVertical: 28,
   },
   loadingText: { fontSize: 14 },
-  dotsRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 5, marginBottom: 8,
-  },
-  dot: { height: 4, width: 8, borderRadius: 2 },
-  // Stacked shadow cards (depth illusion)
-  shadowCard: {
-    position: 'absolute', left: 8, right: 8,
-    borderRadius: 20, borderWidth: 1,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15, shadowRadius: 6, elevation: 2,
-  },
-  shadowCard2: { bottom: -8, height: 60, opacity: 0.6 },
-  shadowCard3: { bottom: -14, height: 60, opacity: 0.3, left: 16, right: 16 },
-  // Main swipeable card
+  // Main card
   card: {
     borderRadius: 20, borderWidth: 1.5,
     padding: 16,
@@ -2142,11 +2129,7 @@ const deck = StyleSheet.create({
   etaTime: { fontSize: 24, fontWeight: '900', letterSpacing: -0.5 },
   etaMeta: { fontSize: 12, marginTop: 3 },
   etaArrival: { fontSize: 12, fontWeight: '600', marginTop: 3 },
-  swipeHint: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+
   safewayBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(26,188,147,0.15)',

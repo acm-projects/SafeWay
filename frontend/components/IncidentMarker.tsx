@@ -9,10 +9,12 @@ import {
   Text,
   View,
 } from 'react-native';
-import Svg, { Polygon, Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Polygon, Circle, Rect, Path, Defs, RadialGradient, Stop } from 'react-native-svg';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
 
 // ─── Per-category config ──────────────────────────────────────────────────────
+type IncidentShape = 'diamond' | 'circle' | 'triangle' | 'square' | 'hexagon' | 'shield';
+
 type IncidentStyle = {
   color: string;
   darkBg: string;
@@ -20,22 +22,23 @@ type IncidentStyle = {
   label: string;
   detail: string;
   pulse: boolean;
+  shape: IncidentShape;
 };
 
 const S: Record<number, IncidentStyle> = {
-  0:  { color: '#64748B', darkBg: '#0F1623', symbol: '?',  label: 'Unknown',             pulse: false, detail: 'An unclassified incident has been reported in this area.' },
-  1:  { color: '#FF4D6A', darkBg: '#2A0A10', symbol: '✕',  label: 'Accident',             pulse: true,  detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
-  2:  { color: '#A8C4D4', darkBg: '#101B22', symbol: '◌',  label: 'Fog',                  pulse: false, detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
-  3:  { color: '#FFB830', darkBg: '#221800', symbol: '!',  label: 'Hazard',               pulse: true,  detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
-  4:  { color: '#4DA6FF', darkBg: '#08162A', symbol: '≈',  label: 'Rain',                 pulse: false, detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
-  5:  { color: '#B8E4F9', darkBg: '#081520', symbol: '*',  label: 'Ice',                  pulse: true,  detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
-  6:  { color: '#FF7A30', darkBg: '#221008', symbol: '▲',  label: 'Traffic Jam',          pulse: true,  detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
-  7:  { color: '#FFCC44', darkBg: '#221900', symbol: '║',  label: 'Lane Closed',          pulse: false, detail: 'One or more lanes are closed. Merge early and watch for workers.' },
-  8:  { color: '#FF3333', darkBg: '#2A0808', symbol: '⊘',  label: 'Road Closed',          pulse: true,  detail: 'This road is fully closed. You must use an alternate route.' },
-  9:  { color: '#9B72F7', darkBg: '#130A2A', symbol: '⚙',  label: 'Road Works',           pulse: false, detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
-  10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '≋',  label: 'Wind',                 pulse: false, detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
-  11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  label: 'Flooding',             pulse: true,  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
-  14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  label: 'Broken Down Vehicle',  pulse: false, detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
+  0:  { color: '#64748B', darkBg: '#0F1623', symbol: '?',  label: 'Unknown',             pulse: false, shape: 'square',   detail: 'An unclassified incident has been reported in this area.' },
+  1:  { color: '#FF4D6A', darkBg: '#2A0A10', symbol: '✕',  label: 'Accident',             pulse: true,  shape: 'diamond',  detail: 'A traffic collision has been reported. Expect delays and emergency vehicles.' },
+  2:  { color: '#A8C4D4', darkBg: '#101B22', symbol: '◌',  label: 'Fog',                  pulse: false, shape: 'circle',   detail: 'Dense fog is reducing visibility. Slow down and use headlights.' },
+  3:  { color: '#FFB830', darkBg: '#221800', symbol: '!',  label: 'Hazard',               pulse: true,  shape: 'triangle', detail: 'Dangerous road conditions have been reported. Proceed with caution.' },
+  4:  { color: '#4DA6FF', darkBg: '#08162A', symbol: '≈',  label: 'Rain',                 pulse: false, shape: 'circle',   detail: 'Heavy rain is affecting road conditions. Reduce speed and increase following distance.' },
+  5:  { color: '#B8E4F9', darkBg: '#081520', symbol: '*',  label: 'Ice',                  pulse: true,  shape: 'hexagon',  detail: 'Icy road surface detected. Brake early and avoid sudden maneuvers.' },
+  6:  { color: '#FF7A30', darkBg: '#221008', symbol: '▲',  label: 'Traffic Jam',          pulse: true,  shape: 'triangle', detail: 'Heavy congestion ahead. Significant delays expected — consider an alternate route.' },
+  7:  { color: '#FFCC44', darkBg: '#221900', symbol: '║',  label: 'Lane Closed',          pulse: false, shape: 'square',   detail: 'One or more lanes are closed. Merge early and watch for workers.' },
+  8:  { color: '#FF3333', darkBg: '#2A0808', symbol: '⊘',  label: 'Road Closed',          pulse: true,  shape: 'shield',   detail: 'This road is fully closed. You must use an alternate route.' },
+  9:  { color: '#9B72F7', darkBg: '#130A2A', symbol: '⚙',  label: 'Road Works',           pulse: false, shape: 'square',   detail: 'Active road works in progress. Reduced speed limits and lane changes may apply.' },
+  10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '≋',  label: 'Wind',                 pulse: false, shape: 'circle',   detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
+  11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  label: 'Flooding',             pulse: true,  shape: 'hexagon',  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
+  14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  label: 'Broken Down Vehicle',  pulse: false, shape: 'diamond',  detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
 };
 
 function getStyle(cat: number): IncidentStyle {
@@ -91,7 +94,110 @@ function PulseRing({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ─── Incident bubble — diamond SVG shape ─────────────────────────────────────
+// ─── Shape renderers ─────────────────────────────────────────────────────────
+
+function DiamondShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const half = canvas / 2;
+  const pad = 6;
+  const pts = [
+    `${half},${pad}`,
+    `${canvas - pad},${half - 1}`,
+    `${half},${canvas - pad + 4}`,
+    `${pad},${half - 1}`,
+  ].join(' ');
+  const iPts = [
+    `${half},${pad + 3}`,
+    `${canvas - pad - 3},${half - 1}`,
+    `${half},${canvas - pad + 1}`,
+    `${pad + 3},${half - 1}`,
+  ].join(' ');
+  return (
+    <>
+      <Polygon points={pts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      <Polygon points={iPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
+      {size >= 22 && <Circle cx={half + size * 0.14} cy={half - size * 0.15} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+function CircleShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const cx = canvas / 2;
+  const cy = canvas / 2;
+  const r = (canvas - 10) / 2;
+  return (
+    <>
+      <Circle cx={cx} cy={cy} r={r} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      <Circle cx={cx} cy={cy} r={r - 3} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
+      {size >= 22 && <Circle cx={cx + size * 0.12} cy={cy - size * 0.15} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+function TriangleShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const half = canvas / 2;
+  const pad = 6;
+  const pts = [`${half},${pad}`, `${canvas - pad},${canvas - pad}`, `${pad},${canvas - pad}`].join(' ');
+  const iPts = [`${half},${pad + 4}`, `${canvas - pad - 4},${canvas - pad - 2}`, `${pad + 4},${canvas - pad - 2}`].join(' ');
+  return (
+    <>
+      <Polygon points={pts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      <Polygon points={iPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
+      {size >= 22 && <Circle cx={half + size * 0.1} cy={half + size * 0.05} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+function SquareShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const pad = 6;
+  const r = 4;
+  const w = canvas - pad * 2;
+  return (
+    <>
+      <Rect x={pad} y={pad} width={w} height={w} rx={r} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      <Rect x={pad + 3} y={pad + 3} width={w - 6} height={w - 6} rx={r - 1} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
+      {size >= 22 && <Circle cx={canvas / 2 + size * 0.12} cy={canvas / 2 - size * 0.12} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+function HexagonShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const cx = canvas / 2;
+  const cy = canvas / 2;
+  const r = (canvas - 10) / 2;
+  const hexPts = Array.from({ length: 6 }, (_, i) => {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
+  }).join(' ');
+  const iHexPts = Array.from({ length: 6 }, (_, i) => {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    return `${cx + (r - 3) * Math.cos(angle)},${cy + (r - 3) * Math.sin(angle)}`;
+  }).join(' ');
+  return (
+    <>
+      <Polygon points={hexPts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      <Polygon points={iHexPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
+      {size >= 22 && <Circle cx={cx + size * 0.1} cy={cy - size * 0.12} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+function ShieldShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
+  const pad = 6;
+  const w = canvas - pad * 2;
+  const h = canvas - pad * 2;
+  const cx = canvas / 2;
+  const top = pad;
+  // Shield: rounded top corners, pointed bottom
+  const d = `M ${pad + 4} ${top} H ${pad + w - 4} Q ${pad + w} ${top} ${pad + w} ${top + 4} V ${top + h * 0.55} Q ${pad + w} ${top + h * 0.85} ${cx} ${top + h} Q ${pad} ${top + h * 0.85} ${pad} ${top + h * 0.55} V ${top + 4} Q ${pad} ${top} ${pad + 4} ${top} Z`;
+  return (
+    <>
+      <Path d={d} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
+      {size >= 22 && <Circle cx={cx + size * 0.10} cy={canvas / 2 - size * 0.10} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
+    </>
+  );
+}
+
+// ─── Incident bubble — shape varies by incident type ────────────────────────
 export function IncidentBubble({
   incident,
   latDelta = 0.02,
@@ -99,99 +205,58 @@ export function IncidentBubble({
   incident: TrafficIncident;
   latDelta?: number;
 }) {
-  const s    = getStyle(incident.category);
+  const st   = getStyle(incident.category);
   const size = markerSize(latDelta);
   if (size === 0) return null;
 
-  const showPulse = s.pulse && size >= 20;
-  const canvas    = size + 12;   // SVG canvas with room for drop-shadow offset
-  const half      = canvas / 2;
-  const pad       = 5;
-  const symbolPx  = Math.max(8, Math.round(size * 0.38));
+  const showPulse = st.pulse && size >= 20;
+  // EDGE_PAD: enough room for strokeWidth (2) + bevel ring (3) + safe margin.
+  // All shape geometry is drawn inside [EDGE_PAD, canvas-EDGE_PAD] so nothing
+  // ever touches the SVG boundary and gets clipped.
+  const EDGE_PAD = 8;
+  const canvas   = size + EDGE_PAD * 2;
+  const symbolPx = Math.max(8, Math.round(size * 0.38));
+  const gradId   = `rg${incident.category ?? 0}`;
 
-  // Diamond: top · right · bottom-tip · left
-  // Bottom tip is pulled 4px lower than a pure diamond to act as a map pin
-  const pts = [
-    `${half},${pad}`,
-    `${canvas - pad},${half - 1}`,
-    `${half},${canvas - pad + 4}`,
-    `${pad},${half - 1}`,
-  ].join(' ');
-
-  // Inset inner highlight ring
-  const iPts = [
-    `${half},${pad + 3}`,
-    `${canvas - pad - 3},${half - 1}`,
-    `${half},${canvas - pad + 1}`,
-    `${pad + 3},${half - 1}`,
-  ].join(' ');
-
-  const gradId = `rg${incident.category ?? 0}`;
+  const shapeProps = { canvas, s: st, size, gradId };
 
   return (
-    <View style={{ width: canvas, height: canvas + 4, alignItems: 'center', justifyContent: 'center' }}>
-      {showPulse && <PulseRing color={s.color} size={size} />}
+    // overflow:'visible' prevents the RN Marker container from clipping the SVG
+    // at View boundaries when the marker is near a screen edge.
+    <View style={{ width: canvas, height: canvas, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+      {showPulse && <PulseRing color={st.color} size={size} />}
 
-      <Svg width={canvas} height={canvas + 4} style={{ position: 'absolute', top: 0, left: 0 }}>
+      {/* No overflow prop on Svg — not a valid SVGProps key (causes TS2322) */}
+      <Svg width={canvas} height={canvas} style={{ position: 'absolute', top: 0, left: 0 }}>
         <Defs>
           <RadialGradient id={gradId} cx="50%" cy="36%" r="62%">
-            <Stop offset="0%"   stopColor={s.color}  stopOpacity="0.25" />
-            <Stop offset="100%" stopColor={s.darkBg} stopOpacity="1.0"  />
+            <Stop offset="0%"   stopColor={st.color}  stopOpacity="0.25" />
+            <Stop offset="100%" stopColor={st.darkBg} stopOpacity="1.0"  />
           </RadialGradient>
         </Defs>
 
-        {/* Drop shadow — offset filled polygon */}
-        <Polygon
-          points={pts}
-          fill="rgba(0,0,0,0.32)"
-          x={1.5}
-          y={2.5}
-        />
-
-        {/* Main diamond */}
-        <Polygon
-          points={pts}
-          fill={`url(#${gradId})`}
-          stroke={s.color}
-          strokeWidth={size >= 24 ? 1.8 : 1.2}
-        />
-
-        {/* Inner bevel ring */}
-        <Polygon
-          points={iPts}
-          fill="none"
-          stroke={s.color}
-          strokeWidth={0.7}
-          strokeOpacity={0.30}
-        />
-
-        {/* Gloss highlight */}
-        {size >= 22 && (
-          <Circle
-            cx={half + size * 0.14}
-            cy={half - size * 0.15}
-            r={size * 0.09}
-            fill="rgba(255,255,255,0.22)"
-          />
-        )}
+        {st.shape === 'diamond'  && <DiamondShape  {...shapeProps} />}
+        {st.shape === 'circle'   && <CircleShape   {...shapeProps} />}
+        {st.shape === 'triangle' && <TriangleShape {...shapeProps} />}
+        {st.shape === 'square'   && <SquareShape   {...shapeProps} />}
+        {st.shape === 'hexagon'  && <HexagonShape  {...shapeProps} />}
+        {st.shape === 'shield'   && <ShieldShape   {...shapeProps} />}
       </Svg>
 
-      {/* Symbol — sits above the SVG layer */}
+      {/* Symbol — centred over the shape */}
       <Text
         style={{
           position:   'absolute',
-          color:       s.color,
+          color:       st.color,
           fontSize:    symbolPx,
           fontWeight:  '800',
           lineHeight:  symbolPx + 1,
           textAlign:   'center',
-          // Pull up slightly: the pin tip shifts visual center downward
-          marginTop:  -Math.round(size * 0.10),
           includeFontPadding: false,
         }}
         allowFontScaling={false}
       >
-        {s.symbol}
+        {st.symbol}
       </Text>
     </View>
   );
@@ -226,11 +291,14 @@ export function IncidentMarker({
     return () => clearTimeout(id);
   }, []);
 
-  // anchor.y = 0.90 so the bottom tip of the diamond pin points to the location
+  const st = getStyle(incident.category);
+  // anchor.y for triangle/shield: 1.0 (tip points down); others: 0.5 (centered)
+  const anchorY = (st.shape === 'diamond' || st.shape === 'triangle' || st.shape === 'shield') ? 0.90 : 0.5;
+
   return (
     <Marker
       coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
-      anchor={{ x: 0.5, y: 0.90 }}
+      anchor={{ x: 0.5, y: anchorY }}
       tracksViewChanges={tracks}
       onPress={onPress}
     >
@@ -269,7 +337,7 @@ export function IncidentDetailPopup({
 
   if (!incident) return null;
 
-  const s = getStyle(incident.category);
+  const st = getStyle(incident.category);
 
   const delayLabel = incident.delay_seconds
     ? incident.delay_seconds >= 60
@@ -279,22 +347,13 @@ export function IncidentDetailPopup({
 
   const road = incident.road?.length ? incident.road.join(' · ') : null;
 
-  // Popup icon — same diamond, 52px canvas
-  const D = 52;
+  // Popup icon — 52px canvas, same shape as marker
+  const D = 56;
   const dh = D / 2;
-  const dp = 5;
-  const iconPts = [
-    `${dh},${dp}`,
-    `${D - dp},${dh - 1}`,
-    `${dh},${D - dp + 4}`,
-    `${dp},${dh - 1}`,
-  ].join(' ');
-  const iIconPts = [
-    `${dh},${dp + 3}`,
-    `${D - dp - 3},${dh - 1}`,
-    `${dh},${D - dp + 1}`,
-    `${dp + 3},${dh - 1}`,
-  ].join(' ');
+  const dp = 6;
+  const gradIdPop = `rgpop_${incident.category ?? 0}`;
+
+  const iconShapeProps = { canvas: D, s: st, size: D - 16, gradId: gradIdPop };
 
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
@@ -302,7 +361,7 @@ export function IncidentDetailPopup({
         <Animated.View style={[pop.sheet, { opacity, transform: [{ translateY: slideY }, { scale: sc }] }]}>
 
           {/* Accent bar */}
-          <View style={[pop.topBar, { backgroundColor: s.color }]} />
+          <View style={[pop.topBar, { backgroundColor: st.color }]} />
 
           {/* Handle */}
           <View style={pop.handle} />
@@ -310,40 +369,41 @@ export function IncidentDetailPopup({
           {/* Header */}
           <View style={pop.header}>
 
-            {/* Diamond icon */}
+            {/* Shape icon */}
             <View style={pop.iconWrap}>
-              <View style={[pop.iconGlow, { backgroundColor: s.color + '14', borderColor: s.color + '2E' }]} />
+              <View style={[pop.iconGlow, { backgroundColor: st.color + '14', borderColor: st.color + '2E' }]} />
               <Svg width={D} height={D + 4} style={{ position: 'absolute' }}>
                 <Defs>
-                  <RadialGradient id="rgpop" cx="50%" cy="36%" r="62%">
-                    <Stop offset="0%"   stopColor={s.color}  stopOpacity="0.30" />
-                    <Stop offset="100%" stopColor={s.darkBg} stopOpacity="1.0"  />
+                  <RadialGradient id={gradIdPop} cx="50%" cy="36%" r="62%">
+                    <Stop offset="0%"   stopColor={st.color}  stopOpacity="0.30" />
+                    <Stop offset="100%" stopColor={st.darkBg} stopOpacity="1.0"  />
                   </RadialGradient>
                 </Defs>
-                <Polygon points={iconPts} fill="url(#rgpop)" stroke={s.color} strokeWidth={1.8} />
-                <Polygon points={iIconPts} fill="none" stroke={s.color} strokeWidth={0.7} strokeOpacity={0.28} />
-                <Circle cx={dh + 5} cy={dh - 7} r={4} fill="rgba(255,255,255,0.20)" />
+                {st.shape === 'diamond'  && <DiamondShape  {...iconShapeProps} />}
+                {st.shape === 'circle'   && <CircleShape   {...iconShapeProps} />}
+                {st.shape === 'triangle' && <TriangleShape {...iconShapeProps} />}
+                {st.shape === 'square'   && <SquareShape   {...iconShapeProps} />}
+                {st.shape === 'hexagon'  && <HexagonShape  {...iconShapeProps} />}
+                {st.shape === 'shield'   && <ShieldShape   {...iconShapeProps} />}
               </Svg>
-              <Text style={[pop.iconSymbol, { color: s.color }]}>{s.symbol}</Text>
+              <Text style={[pop.iconSymbol, { color: st.color }]}>{st.symbol}</Text>
             </View>
 
             {/* Title */}
             <View style={{ flex: 1 }}>
               <View style={pop.titleRow}>
-                <Text style={pop.typeText}>{s.label}</Text>
-                <View style={[pop.liveBadge, { backgroundColor: s.color + '1E', borderColor: s.color + '4E' }]}>
-                  <View style={[pop.liveDot, { backgroundColor: s.color }]} />
-                  <Text style={[pop.liveBadgeText, { color: s.color }]}>LIVE</Text>
+                <Text style={pop.typeText}>{st.label}</Text>
+                <View style={[pop.liveBadge, { backgroundColor: st.color + '1E', borderColor: st.color + '4E' }]}>
+                  <View style={[pop.liveDot, { backgroundColor: st.color }]} />
+                  <Text style={[pop.liveBadgeText, { color: st.color }]}>LIVE</Text>
                 </View>
               </View>
               {road && <Text style={pop.roadText} numberOfLines={1}>{road}</Text>}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
-                {/* Tiny diamond bullet */}
-                <Svg width={7} height={7}>
-                  <Polygon points="3.5,0 7,3.5 3.5,7 0,3.5" fill={s.color} />
-                </Svg>
-                <Text style={[pop.severityText, { color: s.color }]}>
-                  {s.pulse ? 'HIGH SEVERITY' : 'ADVISORY'}
+                {/* Shape label badge */}
+                <View style={{ width: 8, height: 8, borderRadius: st.shape === 'circle' ? 4 : 2, backgroundColor: st.color, transform: st.shape === 'diamond' ? [{ rotate: '45deg' }] : [] }} />
+                <Text style={[pop.severityText, { color: st.color }]}>
+                  {st.pulse ? 'HIGH SEVERITY' : 'ADVISORY'}
                 </Text>
               </View>
             </View>
@@ -353,13 +413,13 @@ export function IncidentDetailPopup({
             </Pressable>
           </View>
 
-          <View style={[pop.divider, { backgroundColor: s.color + '22' }]} />
+          <View style={[pop.divider, { backgroundColor: st.color + '22' }]} />
 
           <ScrollView style={{ maxHeight: 185 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 4 }}>
-            <Text style={pop.detailText}>{s.detail}</Text>
+            <Text style={pop.detailText}>{st.detail}</Text>
             {!!incident.description && (
-              <View style={[pop.reportedBox, { borderLeftColor: s.color, backgroundColor: s.color + '0D' }]}>
-                <Text style={[pop.reportedLabel, { color: s.color + 'A0' }]}>REPORTED</Text>
+              <View style={[pop.reportedBox, { borderLeftColor: st.color, backgroundColor: st.color + '0D' }]}>
+                <Text style={[pop.reportedLabel, { color: st.color + 'A0' }]}>REPORTED</Text>
                 <Text style={pop.reportedText}>{incident.description}</Text>
               </View>
             )}
@@ -371,8 +431,8 @@ export function IncidentDetailPopup({
                 <Text style={[pop.chipText, { color: '#FF8A94' }]}>⏱  {delayLabel}</Text>
               </View>
             )}
-            <View style={[pop.chip, { backgroundColor: s.color + '14', borderColor: s.color + '38' }]}>
-              <Text style={[pop.chipText, { color: s.color }]}>◈  Active</Text>
+            <View style={[pop.chip, { backgroundColor: st.color + '14', borderColor: st.color + '38' }]}>
+              <Text style={[pop.chipText, { color: st.color }]}>◈  Active</Text>
             </View>
             <View style={[pop.chip, { backgroundColor: '#FFFFFF06', borderColor: '#FFFFFF10' }]}>
               <Text style={[pop.chipText, { color: '#475569' }]}>↺  Auto-refresh</Text>

@@ -1,29 +1,19 @@
 /**
  * RouteInsightsPage.tsx
  *
- * Standalone Route Insights modal — all features merged from HEAD + feat/model-training.
- *
- * Data sourcing notes:
- *  - safetyScore / safetyLabel / routeSource / riskPerKm / nHighRisk / routeKm /
- *    topRiskFactors / timeBand / segmentRisks / riskReductionPct
- *      → From backend /maps/route → risk_cache.score_coordinates()
- *  - aadtAvg / aadtMax
- *      → From backend /maps/route → OSM-based AADT on scored routes.
- *        If missing (e.g. Google-only route), we estimate from route length (veh·day proxy).
- *  - durationSecs / distance
- *      → From Google Routes API (via backend or direct).
- *  - AADT hourly curve: backend gives only a daily average (aadtAvg).
- *    The 24-hour shape is computed client-side using time-of-day multipliers
- *    that mirror the backend's _hour_to_band() logic — this is intentional
- *    because the backend does not expose per-hour AADT breakdowns.
- *  - Peak Flow: derived as aadtAvg / 24 scaled by the same hourly multipliers.
- *    Always a formula from AADT — never a separate backend field.
- *  - topRiskFactors (SHAP): aggregated SHAP explanations per intersection across route.
- *    Each entry has { label, count, pct } or { factor, weight } shape.
+ * Changes from previous version:
+ *  - Removed the mini map (redundant with directions screen map)
+ *  - Line graphs (AADT + Peak Flow) moved to top, above speed gauge
+ *  - Speed gauge moved lower in the layout
+ *  - Animated line graph: periodic "trace" animation replays the line
+ *  - Safety hero: description replaced with client-side generated route summary
+ *    (e.g. "Low crash rate · light traffic · SafeWay optimised")
+ *  - Color theme tuned to match app navy/seafoam palette
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated as RNAnimated,
   Modal,
   PanResponder,
   Pressable,
@@ -33,15 +23,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE, type Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useTheme } from '@/providers/theme-context';
-import { useTrafficIncidents, type TrafficIncident } from '@/hooks/useTrafficIncidents';
-import { IncidentMarker, IncidentDetailPopup } from '@/components/IncidentMarker';
 
-// ─── Types (mirrored from directions.tsx) ────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 export interface ModeRouteData {
   coords: { latitude: number; longitude: number }[];
   distance: number;
@@ -52,7 +39,6 @@ export interface ModeRouteData {
   riskPerKm?: number;
   nHighRisk?: number;
   routeKm?: number;
-  /** SHAP-derived risk factors. Shape: { factor, weight } or { label, count, pct } */
   topRiskFactors?: { factor: string; weight: number }[] | { label: string; count: number; pct: number }[];
   timeBand?: string;
   segmentRisks?: number[];
@@ -63,22 +49,16 @@ export interface ModeRouteData {
   riskReductionPct?: number;
 }
 
-// ─── Dark map style ───────────────────────────────────────────────────────────
-const DARK_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2533' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ba7b4' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1d2533' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3c4a5a' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'landscape', elementType: 'geometry', stylers: [{ color: '#212a37' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283044' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
+// ─── Design tokens (matching app theme) ──────────────────────────────────────
+const NAVY        = '#030427';
+const NAVY_CARD   = '#0D0E3A';
+const NAVY_ITEM   = '#161750';
+const GLASS_BORDER = '#1A1B4D';
+const SEAFOAM     = '#1ABC93';
+const TEXT_PRI    = '#FFFFFF';
+const TEXT_MUT    = '#6B7FA8';
 
-// ─── INFO content for tooltips ────────────────────────────────────────────────
+// ─── INFO content ─────────────────────────────────────────────────────────────
 const INFO_CONTENT: Record<string, { title: string; body: string }> = {
   aadt: {
     title: 'AADT — Annual Average Daily Traffic',
@@ -86,8 +66,7 @@ const INFO_CONTENT: Record<string, { title: string; body: string }> = {
       'AADT estimates the average number of vehicles passing through a road segment per day, averaged over a full year.\n\n' +
       'SafeWay uses AADT proxy values based on OpenStreetMap road classification:\n' +
       '• Residential: ~1,000/day\n• Secondary: ~15,000/day\n• Primary: ~25,000/day\n• Trunk: ~40,000/day\n• Motorway: ~60,000/day\n\n' +
-      "This helps normalize crash rates — a highway with more crashes isn't necessarily more dangerous per vehicle-mile than a quiet street.\n\n" +
-      'If this route has no backend AADT (e.g. a Google-only path when Avoid filters are on), we estimate a daily proxy from trip length — labeled EST — so the hourly curve still reflects typical peaks.',
+      "This helps normalize crash rates — a highway with more crashes isn't necessarily more dangerous per vehicle-mile than a quiet street.",
   },
   shap: {
     title: 'SHAP — Risk Factor Explanation',
@@ -129,7 +108,6 @@ function arrivalFrom(secs: number): string {
   });
 }
 
-/** When backend AADT is absent: rough daily volume from trip length. */
 function estimateAadtFromDistanceMeters(distanceMeters: number): { avg: number; max: number } {
   const miles = Math.max(0.1, distanceMeters / 1609.34);
   const avg = Math.round(Math.min(52_000, Math.max(3_200, 1_800 + miles * 5_200)));
@@ -137,7 +115,71 @@ function estimateAadtFromDistanceMeters(distanceMeters: number): { avg: number; 
   return { avg, max };
 }
 
-// ─── Hourly Line Graph ────────────────────────────────────────────────────────
+// ─── Client-side route summary generator (no external API needed) ─────────────
+/**
+ * Generates a concise, friendly route summary from available data.
+ * Replaces the old "description of safety score" with actionable highlights.
+ *
+ * NOTE: This is 100% client-side logic — no Gemini or external API call needed.
+ * The data is deterministic enough that template-based generation works well here.
+ * If you want AI-generated prose in future, you could call the Anthropic API
+ * (already available in artifacts) with the route data as context.
+ */
+function generateRouteSummary(data: ModeRouteData | null): string {
+  if (!data) return 'No route data available.';
+
+  const parts: string[] = [];
+
+  const score = data.safetyScore ?? null;
+  const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
+  const hotSpots = data.nHighRisk ?? 0;
+  const riskPerKm = data.riskPerKm ?? null;
+  const aadtAvg = data.aadtAvg ?? null;
+  const timePenalty = data.timePenaltyPct ?? 0;
+  const riskReduction = data.riskReductionPct ?? 0;
+  const isOptimised = data.routeSource === 'safeway';
+
+  // Safety / crash rate
+  if (safetyPct != null) {
+    if (safetyPct >= 80) parts.push('Low crash risk');
+    else if (safetyPct >= 60) parts.push('Moderate crash risk');
+    else parts.push('Higher crash risk');
+  }
+
+  // Hot spots
+  if (hotSpots === 0) parts.push('no danger zones');
+  else if (hotSpots <= 2) parts.push(`${hotSpots} minor hot spot${hotSpots > 1 ? 's' : ''}`);
+  else parts.push(`${hotSpots} high-risk zones — caution advised`);
+
+  // Traffic / AADT
+  if (aadtAvg != null) {
+    if (aadtAvg < 5000)       parts.push('very light traffic');
+    else if (aadtAvg < 15000) parts.push('light traffic');
+    else if (aadtAvg < 30000) parts.push('moderate traffic');
+    else                      parts.push('heavy traffic corridor');
+  }
+
+  // Route optimisation
+  if (isOptimised && riskReduction > 0) {
+    parts.push(`${Math.round(riskReduction)}% safer than fastest route`);
+  } else if (isOptimised) {
+    parts.push('SafeWay optimised');
+  }
+
+  // Time penalty context
+  if (timePenalty > 0 && timePenalty < 15) {
+    parts.push(`only +${Math.round(timePenalty)}% longer`);
+  }
+
+  if (parts.length === 0) return 'Route data available — see metrics below.';
+
+  // Capitalise first, join with middle dots
+  return parts
+    .map((p, i) => (i === 0 ? p.charAt(0).toUpperCase() + p.slice(1) : p))
+    .join(' · ');
+}
+
+// ─── Animated Hourly Line Graph ───────────────────────────────────────────────
 function HourlyLineGraph({
   data,
   nowHour,
@@ -155,8 +197,25 @@ function HourlyLineGraph({
 }) {
   const [containerWidth, setContainerWidth] = useState(280);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  // Animation: progress 0→1 drives the visible portion of the solid line
+  const traceAnim = useRef(new RNAnimated.Value(1)).current;
   const CHART_H = 80;
   const LABEL_H = 18;
+
+  // Replay trace animation every 6 seconds
+  useEffect(() => {
+    const replay = () => {
+      traceAnim.setValue(0);
+      RNAnimated.timing(traceAnim, {
+        toValue: 1,
+        duration: 1800,
+        useNativeDriver: false,
+      }).start();
+    };
+    replay();
+    const id = setInterval(replay, 6000);
+    return () => clearInterval(id);
+  }, []);
 
   const vals = data.map(d => d.val);
   const maxVal = Math.max(...vals, 1);
@@ -167,26 +226,14 @@ function HourlyLineGraph({
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: evt => {
         const x = evt.nativeEvent.locationX;
-        const idx = Math.min(
-          data.length - 1,
-          Math.max(0, Math.round((x / containerWidth) * (data.length - 1))),
-        );
-        setHoveredIndex(idx);
+        setHoveredIndex(Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1)))));
       },
       onPanResponderMove: evt => {
         const x = evt.nativeEvent.locationX;
-        const idx = Math.min(
-          data.length - 1,
-          Math.max(0, Math.round((x / containerWidth) * (data.length - 1))),
-        );
-        setHoveredIndex(idx);
+        setHoveredIndex(Math.min(data.length - 1, Math.max(0, Math.round((x / containerWidth) * (data.length - 1)))));
       },
-      onPanResponderRelease: () => {
-        setTimeout(() => setHoveredIndex(null), 2000);
-      },
-      onPanResponderTerminate: () => {
-        setTimeout(() => setHoveredIndex(null), 2000);
-      },
+      onPanResponderRelease: () => { setTimeout(() => setHoveredIndex(null), 2000); },
+      onPanResponderTerminate: () => { setTimeout(() => setHoveredIndex(null), 2000); },
     }),
   ).current;
 
@@ -199,9 +246,15 @@ function HourlyLineGraph({
   const nowIdx = data.findIndex(d => d.h === nowHour);
   const solidPoints = points.slice(0, nowIdx + 1);
   const projectedPoints = points.slice(nowIdx);
-
   const activeIdx = hoveredIndex ?? nowIdx;
   const activePoint = points[activeIdx] ?? null;
+
+  // Animated segments: traceAnim controls how many solid segments are "lit"
+  const [traceVal, setTraceVal] = useState(1);
+  useEffect(() => {
+    const id = traceAnim.addListener(({ value }) => setTraceVal(value));
+    return () => traceAnim.removeListener(id);
+  }, []);
 
   return (
     <View
@@ -216,7 +269,7 @@ function HourlyLineGraph({
             position: 'absolute',
             left: Math.min(Math.max(activePoint.x - 36, 0), containerWidth - 80),
             top: Math.max(0, activePoint.y - 42),
-            backgroundColor: '#1A2040',
+            backgroundColor: NAVY_CARD,
             borderRadius: 8,
             paddingHorizontal: 10,
             paddingVertical: 6,
@@ -225,149 +278,97 @@ function HourlyLineGraph({
             zIndex: 10,
             minWidth: 76,
             alignItems: 'center',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.4,
-            shadowRadius: 6,
-            elevation: 8,
           }}
         >
-          <Text style={{ color: lineColor, fontSize: 13, fontWeight: '800' }}>
-            {formatValue(activePoint.val)}
-          </Text>
-          <Text style={{ color: '#7A8FA6', fontSize: 9, marginTop: 1 }}>
-            {activePoint.label} · {unit}
-          </Text>
+          <Text style={{ color: lineColor, fontSize: 13, fontWeight: '800' }}>{formatValue(activePoint.val)}</Text>
+          <Text style={{ color: TEXT_MUT, fontSize: 9, marginTop: 1 }}>{activePoint.label} · {unit}</Text>
         </View>
       )}
 
-      {/* Chart area */}
       <View style={{ height: CHART_H, overflow: 'hidden' }}>
         {/* Grid lines */}
         {[0.25, 0.5, 0.75].map(frac => (
-          <View
-            key={frac}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              top: frac * CHART_H,
-              height: 1,
-              backgroundColor: '#FFFFFF0A',
-            }}
-          />
+          <View key={frac} style={{ position: 'absolute', left: 0, right: 0, top: frac * CHART_H, height: 1, backgroundColor: '#FFFFFF0A' }} />
         ))}
 
-        {/* Solid line (past + now) */}
-        {solidPoints.length > 1 &&
-          solidPoints.slice(0, -1).map((p, i) => {
-            const next = solidPoints[i + 1];
-            const dx = next.x - p.x;
-            const dy = next.y - p.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-            return (
-              <View
-                key={i}
-                style={{
-                  position: 'absolute',
-                  left: p.x,
-                  top: p.y - 1.5,
-                  width: len,
-                  height: 3,
-                  borderRadius: 1.5,
-                  backgroundColor: lineColor,
-                  transform: [{ rotate: `${angle}deg` }],
-                  // @ts-ignore
-                  transformOrigin: '0 50%',
-                }}
-              />
-            );
-          })}
+        {/* Solid line with trace animation */}
+        {solidPoints.length > 1 && solidPoints.slice(0, -1).map((p, i) => {
+          const next = solidPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          // Determine if this segment is "traced" yet
+          const segFrac = (i + 1) / (solidPoints.length - 1);
+          const opacity = traceVal >= segFrac ? 1 : traceVal >= segFrac - (1 / (solidPoints.length - 1)) ? 0.3 : 0.08;
+          return (
+            <View
+              key={i}
+              style={{
+                position: 'absolute',
+                left: p.x,
+                top: p.y - 1.5,
+                width: len,
+                height: 3,
+                borderRadius: 1.5,
+                backgroundColor: lineColor,
+                opacity,
+                transform: [{ rotate: `${angle}deg` }],
+                // @ts-ignore
+                transformOrigin: '0 50%',
+              }}
+            />
+          );
+        })}
 
-        {/* Projected dashed line (nowHour → end) */}
-        {projectedPoints.length > 1 &&
-          projectedPoints.slice(0, -1).map((p, i) => {
-            const next = projectedPoints[i + 1];
-            const dx = next.x - p.x;
-            const dy = next.y - p.y;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-            return (
-              <View
-                key={`proj-${i}`}
-                style={{
-                  position: 'absolute',
-                  left: p.x,
-                  top: p.y - 1.5,
-                  width: len,
-                  height: 3,
-                  borderRadius: 1.5,
-                  backgroundColor: projectedColor,
-                  transform: [{ rotate: `${angle}deg` }],
-                  // @ts-ignore
-                  transformOrigin: '0 50%',
-                  opacity: 0.7,
-                }}
-              />
-            );
-          })}
+        {/* Projected dashed line */}
+        {projectedPoints.length > 1 && projectedPoints.slice(0, -1).map((p, i) => {
+          const next = projectedPoints[i + 1];
+          const dx = next.x - p.x;
+          const dy = next.y - p.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          return (
+            <View
+              key={`proj-${i}`}
+              style={{
+                position: 'absolute',
+                left: p.x,
+                top: p.y - 1.5,
+                width: len,
+                height: 3,
+                borderRadius: 1.5,
+                backgroundColor: projectedColor,
+                transform: [{ rotate: `${angle}deg` }],
+                // @ts-ignore
+                transformOrigin: '0 50%',
+                opacity: 0.55,
+              }}
+            />
+          );
+        })}
 
         {/* "Now" dot */}
-        {solidPoints.length > 0 &&
-          (() => {
-            const nowPt = solidPoints[solidPoints.length - 1];
-            return (
-              <View
-                style={{
-                  position: 'absolute',
-                  left: nowPt.x - 5,
-                  top: nowPt.y - 5,
-                  width: 10,
-                  height: 10,
-                  borderRadius: 5,
-                  backgroundColor: lineColor,
-                  borderWidth: 2,
-                  borderColor: '#fff',
-                }}
-              />
-            );
-          })()}
+        {solidPoints.length > 0 && (() => {
+          const nowPt = solidPoints[solidPoints.length - 1];
+          return (
+            <View style={{ position: 'absolute', left: nowPt.x - 5, top: nowPt.y - 5, width: 10, height: 10, borderRadius: 5, backgroundColor: lineColor, borderWidth: 2, borderColor: '#fff' }} />
+          );
+        })()}
 
         {/* Hover dot */}
         {hoveredIndex !== null && activePoint && (
-          <View
-            style={{
-              position: 'absolute',
-              left: activePoint.x - 5,
-              top: activePoint.y - 5,
-              width: 10,
-              height: 10,
-              borderRadius: 5,
-              backgroundColor: activePoint.isProjected ? projectedColor : lineColor,
-              borderWidth: 2,
-              borderColor: '#fff',
-            }}
-          />
+          <View style={{ position: 'absolute', left: activePoint.x - 5, top: activePoint.y - 5, width: 10, height: 10, borderRadius: 5, backgroundColor: activePoint.isProjected ? projectedColor : lineColor, borderWidth: 2, borderColor: '#fff' }} />
         )}
       </View>
 
-      {/* X-axis labels — every 4 hours */}
+      {/* X-axis labels */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
-        {data
-          .filter((_, i) => i % 4 === 0)
-          .map(d => (
-            <Text
-              key={d.h}
-              style={{
-                color: d.h === nowHour ? lineColor : '#7A8FA6',
-                fontSize: 9,
-                fontWeight: d.h === nowHour ? '700' : '500',
-              }}
-            >
-              {d.label}
-            </Text>
-          ))}
+        {data.filter((_, i) => i % 4 === 0).map(d => (
+          <Text key={d.h} style={{ color: d.h === nowHour ? lineColor : TEXT_MUT, fontSize: 9, fontWeight: d.h === nowHour ? '700' : '500' }}>
+            {d.label}
+          </Text>
+        ))}
       </View>
     </View>
   );
@@ -420,15 +421,7 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
         colors={['#06B6D433', '#8B5CF644', '#F43F5E55']}
         start={{ x: 0, y: 1 }}
         end={{ x: 1, y: 0 }}
-        style={{
-          position: 'absolute',
-          left: 12,
-          top: 10,
-          width: W - 24,
-          height: H - 24,
-          borderTopLeftRadius: 999,
-          borderTopRightRadius: 999,
-        }}
+        style={{ position: 'absolute', left: 12, top: 10, width: W - 24, height: H - 24, borderTopLeftRadius: 999, borderTopRightRadius: 999 }}
       />
       <View style={{ width: W, height: H, position: 'relative' }}>
         {Array.from({ length: 42 }, (_, i) => {
@@ -439,142 +432,36 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
           const y = hubY + r * Math.sin(ang) - 2.5;
           const speedAt = t * 120;
           const on = mph > 0 && speedAt <= mph;
-          const col = !on
-            ? '#FFFFFF12'
-            : speedAt < 38
-              ? '#4ADE80'
-              : speedAt < 76
-                ? '#FACC15'
-                : '#FB7185';
-          return (
-            <View
-              key={i}
-              style={{
-                position: 'absolute',
-                left: x,
-                top: y,
-                width: 5,
-                height: 5,
-                borderRadius: 2.5,
-                backgroundColor: col,
-              }}
-            />
-          );
+          const col = !on ? '#FFFFFF12' : speedAt < 38 ? '#4ADE80' : speedAt < 76 ? '#FACC15' : '#FB7185';
+          return <View key={i} style={{ position: 'absolute', left: x, top: y, width: 5, height: 5, borderRadius: 2.5, backgroundColor: col }} />;
         })}
 
         {/* Needle */}
-        <View
-          style={{
-            position: 'absolute',
-            left: cx,
-            top: hubY,
-            width: 0,
-            height: 0,
-            alignItems: 'center',
-            zIndex: 2,
-          }}
-        >
-          <Animated.View
-            style={[
-              {
-                position: 'absolute',
-                left: 0,
-                top: -2.5,
-                width: needleLen,
-                height: 5,
-                borderRadius: 2.5,
-                backgroundColor: accent,
-                shadowColor: accent,
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: 0.85,
-                shadowRadius: 10,
-                elevation: 8,
-              },
-              animatedNeedleStyle,
-            ]}
-          />
+        <View style={{ position: 'absolute', left: cx, top: hubY, width: 0, height: 0, alignItems: 'center', zIndex: 2 }}>
+          <Animated.View style={[{ position: 'absolute', left: 0, top: -2.5, width: needleLen, height: 5, borderRadius: 2.5, backgroundColor: accent, shadowColor: accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.85, shadowRadius: 10, elevation: 8 }, animatedNeedleStyle]} />
         </View>
 
         {/* Hub */}
-        <View
-          style={{
-            position: 'absolute',
-            left: cx - 12,
-            top: hubY - 12,
-            width: 24,
-            height: 24,
-            borderRadius: 12,
-            backgroundColor: '#0B1020',
-            borderWidth: 2,
-            borderColor: accent,
-            zIndex: 3,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
+        <View style={{ position: 'absolute', left: cx - 12, top: hubY - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: '#0B1020', borderWidth: 2, borderColor: accent, zIndex: 3, alignItems: 'center', justifyContent: 'center' }}>
           <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent }} />
         </View>
 
-        {/* Scale labels */}
-        <Text
-          style={{
-            position: 'absolute',
-            left: p0.x - 7,
-            top: p0.y - 7,
-            color: '#4ADE80',
-            fontSize: 10,
-            fontWeight: '800',
-          }}
-        >
-          0
-        </Text>
-        <Text
-          style={{
-            position: 'absolute',
-            left: p60.x - 8,
-            top: p60.y - 8,
-            color: '#64748B',
-            fontSize: 10,
-            fontWeight: '700',
-          }}
-        >
-          60
-        </Text>
-        <Text
-          style={{
-            position: 'absolute',
-            left: p120.x - 11,
-            top: p120.y - 7,
-            color: '#FB7185',
-            fontSize: 10,
-            fontWeight: '800',
-          }}
-        >
-          120
-        </Text>
+        <Text style={{ position: 'absolute', left: p0.x - 7, top: p0.y - 7, color: '#4ADE80', fontSize: 10, fontWeight: '800' }}>0</Text>
+        <Text style={{ position: 'absolute', left: p60.x - 8, top: p60.y - 8, color: '#64748B', fontSize: 10, fontWeight: '700' }}>60</Text>
+        <Text style={{ position: 'absolute', left: p120.x - 11, top: p120.y - 7, color: '#FB7185', fontSize: 10, fontWeight: '800' }}>120</Text>
       </View>
     </View>
   );
 }
 
 // ─── SHAP Risk Factors Card ───────────────────────────────────────────────────
-function ShapRiskFactors({
-  factors,
-  T,
-  infoKey,
-  setInfoKey,
-}: {
-  factors: any[];
-  T: any;
-  infoKey: string | null;
-  setInfoKey: (k: string | null) => void;
-}) {
+function ShapRiskFactors({ factors, infoKey, setInfoKey }: { factors: any[]; infoKey: string | null; setInfoKey: (k: string | null) => void }) {
   return (
-    <View style={[s.statCardWide, { backgroundColor: T.CARD }]}>
+    <View style={[s.statCardWide]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-        <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>🔍  RISK FACTORS (SHAP)</Text>
+        <Text style={[s.statLabel, { color: TEXT_MUT }]}>🔍  RISK FACTORS (SHAP)</Text>
         <Pressable onPress={() => setInfoKey(infoKey === 'shap' ? null : 'shap')} hitSlop={8}>
-          <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
+          <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
         </Pressable>
       </View>
 
@@ -588,36 +475,15 @@ function ShapRiskFactors({
         {factors.slice(0, 5).map((f: any, i: number) => {
           const label = f.label ?? f.factor ?? `Factor ${i + 1}`;
           const pct = f.pct ?? (f.weight != null ? Math.round(f.weight * 100) : 0);
-          const barColor = pct > 50 ? '#FF4444' : pct > 25 ? '#FFA500' : '#1ABC93';
+          const barColor = pct > 50 ? '#FF4444' : pct > 25 ? '#FFA500' : SEAFOAM;
           return (
             <View key={i}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                <Text
-                  style={{ color: T.TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 }}
-                  numberOfLines={1}
-                >
-                  {label}
-                </Text>
-                <Text style={{ color: barColor, fontSize: 12, fontWeight: '700' }}>
-                  {pct.toFixed(0)}%
-                </Text>
+                <Text style={{ color: TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 }} numberOfLines={1}>{label}</Text>
+                <Text style={{ color: barColor, fontSize: 12, fontWeight: '700' }}>{pct.toFixed(0)}%</Text>
               </View>
-              <View
-                style={{
-                  height: 6,
-                  borderRadius: 3,
-                  backgroundColor: '#FFFFFF14',
-                  overflow: 'hidden',
-                }}
-              >
-                <View
-                  style={{
-                    height: '100%',
-                    width: `${Math.min(100, pct)}%`,
-                    backgroundColor: barColor,
-                    borderRadius: 3,
-                  }}
-                />
+              <View style={{ height: 6, borderRadius: 3, backgroundColor: '#FFFFFF14', overflow: 'hidden' }}>
+                <View style={{ height: '100%', width: `${Math.min(100, pct)}%`, backgroundColor: barColor, borderRadius: 3 }} />
               </View>
             </View>
           );
@@ -628,24 +494,15 @@ function ShapRiskFactors({
 }
 
 // ─── Route Source Badge Card ──────────────────────────────────────────────────
-function RouteSourceCard({ routeSource, T }: { routeSource: 'google' | 'safeway'; T: any }) {
+function RouteSourceCard({ routeSource }: { routeSource: 'google' | 'safeway' }) {
   return (
-    <View
-      style={[
-        s.statCardWide,
-        { backgroundColor: T.CARD, flexDirection: 'row', alignItems: 'center', gap: 12 },
-      ]}
-    >
-      <Ionicons
-        name={routeSource === 'safeway' ? 'shield-checkmark' : 'navigate'}
-        size={22}
-        color={routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'}
-      />
+    <View style={[s.statCardWide, { flexDirection: 'row', alignItems: 'center', gap: 12 }]}>
+      <Ionicons name={routeSource === 'safeway' ? 'shield-checkmark' : 'navigate'} size={22} color={routeSource === 'safeway' ? SEAFOAM : '#4A90E2'} />
       <View style={{ flex: 1 }}>
-        <Text style={{ color: T.TEXT_PRI, fontSize: 14, fontWeight: '800', marginBottom: 2 }}>
+        <Text style={{ color: TEXT_PRI, fontSize: 14, fontWeight: '800', marginBottom: 2 }}>
           {routeSource === 'safeway' ? 'SafeWay A* Route' : 'Google Maps Route'}
         </Text>
-        <Text style={{ color: T.TEXT_MUT, fontSize: 12, lineHeight: 17 }}>
+        <Text style={{ color: TEXT_MUT, fontSize: 12, lineHeight: 17 }}>
           {routeSource === 'safeway'
             ? 'Optimised for safety using our ML risk model + A* pathfinding algorithm'
             : 'Standard route from Google Routes API, scored by the SafeWay ML model'}
@@ -679,29 +536,22 @@ export function RouteInsightsPage({
 
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
-  const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
 
-  // ── Derived safety values ───────────────────────────────────────────────────
+  // ── Derived safety values ─────────────────────────────────────────────────
   const score = activeData?.safetyScore ?? null;
-  const safetyPct =
-    score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
+  const safetyPct = score != null ? Math.max(0, Math.min(100, 100 - Math.round(score))) : null;
   const safetyColor =
-    score == null
-      ? '#7A8FA6'
-      : score < 33
-        ? '#1ABC93'
-        : score < 66
-          ? '#FFA500'
-          : '#FF4444';
+    score == null ? TEXT_MUT
+    : score < 33  ? SEAFOAM
+    : score < 66  ? '#FFA500'
+    : '#FF4444';
 
-  // ── Speed ───────────────────────────────────────────────────────────────────
-  // Use routeKm as distance fallback when distance=0 (SafeWay A* edge case)
+  // ── Speed ────────────────────────────────────────────────────────────────
   const distM =
     activeData?.distance && activeData.distance > 0
       ? activeData.distance
       : activeData?.routeKm ? Math.round(activeData.routeKm * 1000) : 0;
 
-  // Similarly estimate duration from routeKm at 30 km/h if durationSecs=0
   const effectiveDurationSecs =
     activeData?.durationSecs && activeData.durationSecs > 0
       ? activeData.durationSecs
@@ -712,49 +562,29 @@ export function RouteInsightsPage({
       ? Math.round(distM / 1609.34 / (effectiveDurationSecs / 3600))
       : 0;
 
-  // ── AADT ────────────────────────────────────────────────────────────────────
+  // ── AADT ─────────────────────────────────────────────────────────────────
   const backendAadtAvg = activeData?.aadtAvg ?? null;
   const backendAadtMax = activeData?.aadtMax ?? null;
   const hasBackendAadt = backendAadtAvg != null && backendAadtAvg > 0;
-  const mileageEstimate =
-    !hasBackendAadt && distM > 0 ? estimateAadtFromDistanceMeters(distM) : null;
-  const effectiveAadtAvg = hasBackendAadt
-    ? backendAadtAvg!
-    : mileageEstimate?.avg ?? null;
-  const effectiveAadtMax = hasBackendAadt
-    ? backendAadtMax ?? null
-    : mileageEstimate?.max ?? null;
+  const mileageEstimate = !hasBackendAadt && distM > 0 ? estimateAadtFromDistanceMeters(distM) : null;
+  const effectiveAadtAvg = hasBackendAadt ? backendAadtAvg! : mileageEstimate?.avg ?? null;
+  const effectiveAadtMax = hasBackendAadt ? backendAadtMax ?? null : mileageEstimate?.max ?? null;
   const hasAadt = effectiveAadtAvg != null && effectiveAadtAvg > 0;
-  const aadtSource: 'backend' | 'estimated' | 'none' = hasBackendAadt
-    ? 'backend'
-    : mileageEstimate
-      ? 'estimated'
-      : 'none';
+  const aadtSource: 'backend' | 'estimated' | 'none' = hasBackendAadt ? 'backend' : mileageEstimate ? 'estimated' : 'none';
 
-  // ── Hourly AADT curve ───────────────────────────────────────────────────────
+  // ── Hourly AADT curve ─────────────────────────────────────────────────────
   const nowHour = new Date().getHours();
 
-  /**
-   * 24-hour multiplier profile matching the backend's _hour_to_band() mapping.
-   * Values are relative weights that sum to approximately 24 (one day).
-   */
   const hourlyMultipliers = [
-    0.18, 0.12, 0.08, 0.07, 0.10, 0.28, // 00-05  night / very early AM
-    0.55, 0.85, 1.00, 0.88, 0.75, 0.80, // 06-11  morning peak at 08
-    0.82, 0.78, 0.76, 0.80, 0.95, 1.05, // 12-17  afternoon build
-    1.10, 0.90, 0.72, 0.55, 0.38, 0.25, // 18-23  evening peak at 18
+    0.18, 0.12, 0.08, 0.07, 0.10, 0.28,
+    0.55, 0.85, 1.00, 0.88, 0.75, 0.80,
+    0.82, 0.78, 0.76, 0.80, 0.95, 1.05,
+    1.10, 0.90, 0.72, 0.55, 0.38, 0.25,
   ];
 
   const aadtHourlyData = Array.from({ length: 24 }, (_, h) => ({
     h,
-    label:
-      h === 0
-        ? '12a'
-        : h < 12
-          ? `${h}a`
-          : h === 12
-            ? '12p'
-            : `${h - 12}p`,
+    label: h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`,
     val: hasAadt ? Math.round(effectiveAadtAvg! * hourlyMultipliers[h]) : 0,
     isProjected: h > nowHour,
   }));
@@ -768,58 +598,23 @@ export function RouteInsightsPage({
 
   const currentHourAadt = aadtHourlyData[nowHour]?.val ?? 0;
   const peakHourIdx = hasAadt
-    ? aadtHourlyData.reduce(
-        (maxI, d, i, arr) => (d.val > arr[maxI].val ? i : maxI),
-        0,
-      )
+    ? aadtHourlyData.reduce((maxI, d, i, arr) => (d.val > arr[maxI].val ? i : maxI), 0)
     : -1;
   const peakFlowNow = peakFlowHourly[nowHour]?.val ?? 0;
 
-  // ── Map region ──────────────────────────────────────────────────────────────
-  const initialRegion: Region | null = useMemo(() => {
-    if (!destLat || !destLng) return null;
-    return {
-      latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
-      longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
-      latitudeDelta: 0.1,
-      longitudeDelta: 0.1,
-    };
-  }, [destLat, destLng, originLat, originLng]);
+  // ── SHAP factors ──────────────────────────────────────────────────────────
+  const shapFactors = Array.isArray(activeData?.topRiskFactors) ? (activeData!.topRiskFactors as any[]) : [];
 
-  const [mapRegion, setMapRegion] = useState<Region | null>(initialRegion);
+  // ── Route summary (client-side) ───────────────────────────────────────────
+  const routeSummary = useMemo(() => generateRouteSummary(activeData), [activeData]);
 
+  // Reset state on open
   useEffect(() => {
-    setMapRegion(initialRegion);
-    // Reset tooltip state when modal opens
-    setInfoKey(null);
-    setTooltipVisible(null);
-  }, [initialRegion, visible]);
-
-  const incidentRadiusKm = Math.max(
-    2,
-    Math.min(12, ((mapRegion?.latitudeDelta ?? 0.1) * 111) / 2),
-  );
-  const incidentsVisible = (mapRegion?.latitudeDelta ?? 1) < 0.2;
-  const { incidents: rawIncidents } = useTrafficIncidents({
-    lat: mapRegion?.latitude ?? null,
-    lng: mapRegion?.longitude ?? null,
-    radiusKm: incidentRadiusKm,
-    enabled: visible && incidentsVisible && !!mapRegion,
-  });
-  const incidents = useMemo(() => {
-    const seen = new Set<string>();
-    return rawIncidents.filter(inc => {
-      const key = inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [rawIncidents]);
-
-  // ── SHAP factors ─────────────────────────────────────────────────────────────
-  const shapFactors = Array.isArray(activeData?.topRiskFactors)
-    ? (activeData!.topRiskFactors as any[])
-    : [];
+    if (visible) {
+      setInfoKey(null);
+      setTooltipVisible(null);
+    }
+  }, [visible]);
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -828,9 +623,7 @@ export function RouteInsightsPage({
 
           {/* ── Header ── */}
           <View style={s.tabRow}>
-            <Text style={[s.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>
-              Route Insights
-            </Text>
+            <Text style={[s.tabText, { color: T.TEXT_PRI, fontWeight: '800' }]}>Route Insights</Text>
             <View style={{ flex: 1 }} />
             <Pressable onPress={onClose}>
               <View style={[s.closeBtnCircle, { backgroundColor: T.ITEM }]}>
@@ -845,10 +638,10 @@ export function RouteInsightsPage({
             contentContainerStyle={{ gap: 14, paddingBottom: 30 }}
           >
 
-            {/* ── Safety Score Hero ── */}
+            {/* ── Safety Score Hero with route summary ── */}
             {safetyPct != null ? (
               <LinearGradient
-                colors={['#4F46E540', '#06B6D438', '#EC489936']}
+                colors={['#0D3B2E', '#0A1F3A', '#1A1B4D']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={{ borderRadius: 20, padding: 1.5 }}
@@ -862,339 +655,66 @@ export function RouteInsightsPage({
                       </View>
                     </View>
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                         <Text style={[s.heroTitle, { color: T.TEXT_PRI }]}>
-                          {activeData?.safetyLabel === 'low'
-                            ? 'Low Risk'
-                            : activeData?.safetyLabel === 'medium'
-                              ? 'Moderate Risk'
-                              : activeData?.safetyLabel === 'high'
-                                ? 'High Risk'
-                                : 'Safety Score'}
+                          {activeData?.safetyLabel === 'low'    ? 'Low Risk'
+                          : activeData?.safetyLabel === 'medium' ? 'Moderate Risk'
+                          : activeData?.safetyLabel === 'high'   ? 'High Risk'
+                          : 'Safety Score'}
                         </Text>
                         {activeData?.routeSource === 'safeway' && (
                           <View style={s.safewayBadge}>
-                            <Ionicons name="shield-checkmark" size={9} color="#1ABC93" />
+                            <Ionicons name="shield-checkmark" size={9} color={SEAFOAM} />
                             <Text style={s.safewayBadgeText}>SafeWay A*</Text>
                           </View>
                         )}
                       </View>
-                      <Text style={[s.heroSub, { color: T.TEXT_MUT }]}>
-                        {activeData?.routeKm
-                          ? `${activeData.routeKm.toFixed(1)} km`
-                          : fmtDist(distM)}
-                        {activeData?.nHighRisk ? `  •  ${activeData.nHighRisk} hot spots` : ''}
-                      </Text>
-                      {activeData?.timeBand ? (
-                        <Text style={[s.heroSub, { color: T.TEXT_MUT }]}>
-                          Time band: {activeData.timeBand}
-                        </Text>
-                      ) : null}
-                      {(activeData?.riskReductionPct ?? 0) > 0 && (
-                        <Text
-                          style={{ color: '#1ABC93', fontSize: 12, fontWeight: '700', marginTop: 4 }}
-                        >
-                          ↓ {activeData!.riskReductionPct!.toFixed(0)}% safer than fastest route
-                        </Text>
-                      )}
+                      {/* Route summary — replaces old description */}
+                      <View style={[s.summaryBox, { borderColor: safetyColor + '33' }]}>
+                        <Text style={[s.summaryText, { color: T.TEXT_PRI }]}>{routeSummary}</Text>
+                      </View>
                     </View>
                   </View>
                 </View>
               </LinearGradient>
             ) : (
-              <View style={[s.heroCard, { backgroundColor: T.CARD, borderColor: T.DIVIDER }]}>
+              <View style={[s.heroCard, { backgroundColor: T.CARD, borderColor: GLASS_BORDER }]}>
                 <View style={s.heroRow}>
                   <View style={s.heroCircle}>
-                    <View style={[s.heroCircleInner, { borderColor: '#7A8FA6' }]}>
+                    <View style={[s.heroCircleInner, { borderColor: TEXT_MUT }]}>
                       <Text style={[s.heroScoreText, { fontSize: 14 }]}>N/A</Text>
                       <Text style={s.heroScoreLabel}>Safe</Text>
                     </View>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[s.heroTitle, { color: T.TEXT_PRI }]}>Safety Unavailable</Text>
-                    <Text style={[s.heroSub, { color: T.TEXT_MUT }]}>
-                      Safety scoring requires the SafeWay backend to have crash data for this area.
-                      Try a route within a supported region.
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* ── Avg Speed Gauge ── */}
-            <LinearGradient
-              colors={['#1E1B4B', '#312E81']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{ borderRadius: 20, padding: 1 }}
-            >
-              <View
-                style={[s.statCardWide, { backgroundColor: T.CARD, borderColor: '#FFFFFF18', margin: 0 }]}
-              >
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: 8,
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <LinearGradient
-                      colors={['#22D3EE', '#A78BFA']}
-                      style={{
-                        width: 36,
-                        height: 36,
-                        borderRadius: 12,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Ionicons name="speedometer-outline" size={22} color="#fff" />
-                    </LinearGradient>
-                    <View>
-                      <Text style={[s.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>
-                        AVG SPEED
-                      </Text>
-                      <Text style={{ color: T.TEXT_PRI, fontSize: 13, fontWeight: '700' }}>
-                        Along this route
+                    <View style={[s.summaryBox, { borderColor: GLASS_BORDER, marginTop: 6 }]}>
+                      <Text style={[s.summaryText, { color: T.TEXT_MUT }]}>
+                        Safety scoring requires crash data for this area. Try a route within a supported region.
                       </Text>
                     </View>
                   </View>
-                  <Pressable
-                    onPress={() =>
-                      setTooltipVisible(tooltipVisible === 'AVG_SPEED' ? null : 'AVG_SPEED')
-                    }
-                    hitSlop={8}
-                  >
-                    <Ionicons name="information-circle-outline" size={18} color="#94A3B8" />
-                  </Pressable>
-                </View>
-
-                {tooltipVisible === 'AVG_SPEED' && (
-                  <View style={s.infoBubble}>
-                    <Text style={s.infoBubbleText}>{STAT_INFO.AVG_SPEED}</Text>
-                  </View>
-                )}
-
-                <View style={{ alignItems: 'center', paddingTop: 4 }}>
-                  <AvgSpeedGauge mph={avgSpeedMph} accent="#22D3EE" />
-                  <Text
-                    style={{
-                      color: '#fff',
-                      fontSize: 44,
-                      fontWeight: '900',
-                      letterSpacing: -1,
-                      marginTop: -6,
-                    }}
-                  >
-                    {avgSpeedMph > 0 ? avgSpeedMph : '–'}
-                    <Text style={{ fontSize: 16, color: '#94A3B8', fontWeight: '700' }}> mph</Text>
-                  </Text>
-                  <View
-                    style={{
-                      marginTop: 10,
-                      paddingHorizontal: 16,
-                      paddingVertical: 6,
-                      borderRadius: 999,
-                      backgroundColor:
-                        avgSpeedMph < 40
-                          ? '#22C55E28'
-                          : avgSpeedMph < 80
-                            ? '#EAB30828'
-                            : '#FB718528',
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 12,
-                        fontWeight: '800',
-                        color:
-                          avgSpeedMph <= 0
-                            ? '#94A3B8'
-                            : avgSpeedMph < 40
-                              ? '#4ADE80'
-                              : avgSpeedMph < 80
-                                ? '#FACC15'
-                                : '#FB7185',
-                      }}
-                    >
-                      {avgSpeedMph <= 0
-                        ? 'No pace data'
-                        : avgSpeedMph < 40
-                          ? 'Neighbourhood pace'
-                          : avgSpeedMph < 80
-                            ? 'Mixed / arterial'
-                            : 'Wide open'}
-                    </Text>
-                  </View>
                 </View>
               </View>
-            </LinearGradient>
-
-            {/* ── SHAP Risk Factors ── */}
-            {shapFactors.length > 0 && (
-              <ShapRiskFactors
-                factors={shapFactors}
-                T={T}
-                infoKey={infoKey}
-                setInfoKey={setInfoKey}
-              />
             )}
 
-            {/* ── Route Source Badge ── */}
-            {activeData?.routeSource && (
-              <RouteSourceCard routeSource={activeData.routeSource} T={T} />
-            )}
-
-            {/* ── Mini map with segment-risk colouring ── */}
-            {destLat && destLng ? (
-              <View style={s.insightMapWrap}>
-                <MapView
-                  style={s.insightMap}
-                  provider={PROVIDER_GOOGLE}
-                  customMapStyle={DARK_MAP_STYLE}
-                  initialRegion={initialRegion ?? undefined}
-                  scrollEnabled
-                  zoomEnabled
-                  rotateEnabled={false}
-                  pitchEnabled={false}
-                  onRegionChangeComplete={setMapRegion}
-                >
-                  {originLat && originLng && (
-                    <Marker coordinate={{ latitude: originLat, longitude: originLng }}>
-                      <View style={s.originDot}>
-                        <View style={s.originDotInner} />
-                      </View>
-                    </Marker>
-                  )}
-                  <Marker
-                    coordinate={{ latitude: destLat, longitude: destLng }}
-                    pinColor="#FF4444"
-                  />
-
-                  {/* Segment-risk coloured polyline (if backend provided segment_risks) */}
-                  {activeData?.coords?.length ? (
-                    Array.isArray(activeData.segmentRisks) &&
-                    (activeData.segmentRisks as any[]).length > 0 &&
-                    typeof (activeData.segmentRisks as any[])[0] === 'object' ? (
-                      (activeData.segmentRisks as any[]).map((seg: any, si: number) => (
-                        <Polyline
-                          key={`seg-${si}`}
-                          coordinates={[seg.start, seg.end]}
-                          strokeColor={
-                            seg.risk > 66
-                              ? '#FF4444'
-                              : seg.risk > 33
-                                ? '#FFA500'
-                                : '#1ABC93'
-                          }
-                          strokeWidth={4}
-                        />
-                      ))
-                    ) : (
-                      <Polyline
-                        coordinates={activeData.coords}
-                        strokeColor={
-                          activeData.routeSource === 'safeway' ? '#1ABC93' : '#4A90E2'
-                        }
-                        strokeWidth={4}
-                      />
-                    )
-                  ) : null}
-
-                  {/* High-risk hotspot markers */}
-                  {(activeData?.highRiskCoords ?? []).map((coord, i) => (
-                    <Marker
-                      key={`hs-${i}`}
-                      coordinate={coord}
-                      anchor={{ x: 0.5, y: 1.0 }}
-                      tracksViewChanges={false}
-                    >
-                      <Text style={{ fontSize: 14 }}>⚠️</Text>
-                    </Marker>
-                  ))}
-
-                  {/* Live traffic incidents */}
-                  {incidentsVisible &&
-                    incidents.map((inc, idx) => {
-                      const stableKey = inc.id
-                        ? `inc-id-${inc.id}`
-                        : `inc-pos-${inc.latitude.toFixed(6)}-${inc.longitude.toFixed(6)}-${inc.category}-${idx}`;
-                      return (
-                        <IncidentMarker
-                          key={stableKey}
-                          incident={inc}
-                          latDelta={mapRegion?.latitudeDelta ?? 0.05}
-                          onPress={() => setSelectedIncident(inc)}
-                        />
-                      );
-                    })}
-                </MapView>
-
-                {activeData && (
-                  <View style={s.routeTimeBubble}>
-                    <Text style={s.routeTimeBubbleText}>
-                      {fmtSecs(effectiveDurationSecs)}
-                    </Text>
-                  </View>
-                )}
-
-                {!incidentsVisible && (
-                  <View style={s.incidentHint}>
-                    <Text style={s.incidentHintText}>Zoom in to view live incidents</Text>
-                  </View>
-                )}
-              </View>
-            ) : null}
-
-            {/* ── AADT Hourly Graph ── */}
-            <View style={[s.statCardWide, { backgroundColor: T.CARD }]}>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  marginBottom: 12,
-                }}
-              >
+            {/* ── AADT Hourly Graph (moved to top) ── */}
+            <View style={s.statCardWide}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <View style={{ flex: 1 }}>
-                  <View
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}
-                  >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                     <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>📊  AADT</Text>
-                    <Pressable
-                      onPress={() => setInfoKey(infoKey === 'aadt' ? null : 'aadt')}
-                      hitSlop={8}
-                    >
-                      <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
+                    <Pressable onPress={() => setInfoKey(infoKey === 'aadt' ? null : 'aadt')} hitSlop={8}>
+                      <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
                     </Pressable>
                     {aadtSource === 'backend' && (
-                      <View
-                        style={{
-                          backgroundColor: '#1ABC9322',
-                          borderRadius: 6,
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                        }}
-                      >
-                        <Text style={{ color: '#1ABC93', fontSize: 9, fontWeight: '800' }}>
-                          LIVE
-                        </Text>
+                      <View style={{ backgroundColor: SEAFOAM + '22', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ color: SEAFOAM, fontSize: 9, fontWeight: '800' }}>LIVE</Text>
                       </View>
                     )}
                     {aadtSource === 'estimated' && (
-                      <View
-                        style={{
-                          backgroundColor: '#A855F722',
-                          borderRadius: 6,
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                        }}
-                      >
-                        <Text style={{ color: '#C084FC', fontSize: 9, fontWeight: '800' }}>
-                          EST
-                        </Text>
+                      <View style={{ backgroundColor: '#A855F722', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ color: '#C084FC', fontSize: 9, fontWeight: '800' }}>EST</Text>
                       </View>
                     )}
                   </View>
@@ -1205,22 +725,18 @@ export function RouteInsightsPage({
                     </View>
                   )}
 
-                  <Text style={[s.statValue, { color: '#fff', fontSize: 22 }]}>
+                  <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>
                     {hasAadt ? effectiveAadtAvg!.toLocaleString() : '–'}
                   </Text>
-                  <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 2 }}>
-                    {hasAadt
-                      ? `avg/day · now: ~${currentHourAadt.toLocaleString()}`
-                      : 'No route distance — AADT unavailable'}
+                  <Text style={{ color: TEXT_MUT, fontSize: 10, marginTop: 2 }}>
+                    {hasAadt ? `avg/day · now: ~${currentHourAadt.toLocaleString()}` : 'No route distance — AADT unavailable'}
                   </Text>
                 </View>
 
                 {effectiveAadtMax != null && (
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: '#7A8FA6', fontSize: 10 }}>peak segment</Text>
-                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>
-                      {effectiveAadtMax.toLocaleString()}
-                    </Text>
+                    <Text style={{ color: TEXT_MUT, fontSize: 10 }}>peak segment</Text>
+                    <Text style={{ color: TEXT_PRI, fontSize: 16, fontWeight: '700' }}>{effectiveAadtMax.toLocaleString()}</Text>
                   </View>
                 )}
               </View>
@@ -1235,44 +751,26 @@ export function RouteInsightsPage({
                     formatValue={v => `${(v / 1000).toFixed(1)}k`}
                     unit="vehicles"
                   />
-                  <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 6 }}>
+                  <Text style={{ color: TEXT_MUT, fontSize: 10, marginTop: 6 }}>
                     Hourly traffic volume · solid = past, dashed = projected
                     {peakHourIdx >= 0 ? ` · peak at ${aadtHourlyData[peakHourIdx]?.label}` : ''}
                   </Text>
                 </>
               ) : (
                 <View style={{ height: 60, justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#7A8FA6', fontSize: 12 }}>
-                    No route length — cannot estimate AADT
-                  </Text>
+                  <Text style={{ color: TEXT_MUT, fontSize: 12 }}>No route length — cannot estimate AADT</Text>
                 </View>
               )}
             </View>
 
-            {/* ── Peak Flow Hourly Graph ── */}
-            <View style={[s.statCardWide, { backgroundColor: T.CARD }]}>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  justifyContent: 'space-between',
-                  alignItems: 'flex-start',
-                  marginBottom: 12,
-                }}
-              >
+            {/* ── Peak Flow Hourly Graph (moved to top alongside AADT) ── */}
+            <View style={s.statCardWide}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <View style={{ flex: 1 }}>
-                  <View
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}
-                  >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                     <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>〰  PEAK FLOW</Text>
-                    <Pressable
-                      onPress={() =>
-                        setTooltipVisible(
-                          tooltipVisible === 'PEAK_FLOW' ? null : 'PEAK_FLOW',
-                        )
-                      }
-                      hitSlop={8}
-                    >
-                      <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
+                    <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'PEAK_FLOW' ? null : 'PEAK_FLOW')} hitSlop={8}>
+                      <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
                     </Pressable>
                   </View>
 
@@ -1282,42 +780,19 @@ export function RouteInsightsPage({
                     </View>
                   )}
 
-                  <Text style={[s.statValue, { color: '#fff', fontSize: 22 }]}>
-                    {hasAadt && peakFlowNow > 0 ? (
-                      <>
-                        {peakFlowNow.toFixed(1)}
-                        <Text style={{ fontSize: 13 }}>k/h</Text>
-                      </>
-                    ) : (
-                      '–'
-                    )}
+                  <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>
+                    {hasAadt && peakFlowNow > 0 ? `${peakFlowNow.toFixed(1)}k/h` : '–'}
                   </Text>
-                  <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 2 }}>
+                  <Text style={{ color: TEXT_MUT, fontSize: 10, marginTop: 2 }}>
                     {hasAadt
-                      ? aadtSource === 'estimated'
-                        ? 'vehicles/hour now (estimated curve)'
-                        : 'vehicles/hour now'
+                      ? aadtSource === 'estimated' ? 'vehicles/hour now (estimated curve)' : 'vehicles/hour now'
                       : 'Derived from AADT — unavailable'}
                   </Text>
                 </View>
 
                 {hasAadt && (
-                  <View
-                    style={{
-                      backgroundColor:
-                        aadtSource === 'backend' ? '#22C55E22' : '#A855F722',
-                      borderRadius: 10,
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: aadtSource === 'backend' ? '#22C55E' : '#C084FC',
-                        fontSize: 11,
-                        fontWeight: '700',
-                      }}
-                    >
+                  <View style={{ backgroundColor: aadtSource === 'backend' ? '#22C55E22' : '#A855F722', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 }}>
+                    <Text style={{ color: aadtSource === 'backend' ? '#22C55E' : '#C084FC', fontSize: 11, fontWeight: '700' }}>
                       {aadtSource === 'backend' ? '✓ Live AADT' : '~ Estimated'}
                     </Text>
                   </View>
@@ -1329,39 +804,83 @@ export function RouteInsightsPage({
                   <HourlyLineGraph
                     data={peakFlowHourly}
                     nowHour={nowHour}
-                    lineColor="#22C55E"
-                    projectedColor="#22C55E44"
+                    lineColor={SEAFOAM}
+                    projectedColor={SEAFOAM + '44'}
                     formatValue={v => `${v.toFixed(1)}k`}
                     unit="k veh/h"
                   />
-                  <Text style={{ color: '#7A8FA6', fontSize: 10, marginTop: 6 }}>
+                  <Text style={{ color: TEXT_MUT, fontSize: 10, marginTop: 6 }}>
                     Vehicles/hour · solid = past, dashed = projected for rest of day
                   </Text>
                 </>
               ) : (
                 <View style={{ height: 60, justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: '#7A8FA6', fontSize: 12 }}>
-                    Need AADT (or route distance) for flow curve
-                  </Text>
+                  <Text style={{ color: TEXT_MUT, fontSize: 12 }}>Need AADT (or route distance) for flow curve</Text>
                 </View>
               )}
             </View>
 
+            {/* ── Avg Speed Gauge (moved lower) ── */}
+            <LinearGradient
+              colors={['#1E1B4B', '#312E81']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ borderRadius: 20, padding: 1 }}
+            >
+              <View style={[s.statCardWide, { borderColor: '#FFFFFF18', margin: 0 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <LinearGradient
+                      colors={['#22D3EE', '#A78BFA']}
+                      style={{ width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Ionicons name="speedometer-outline" size={22} color="#fff" />
+                    </LinearGradient>
+                    <View>
+                      <Text style={[s.statLabel, { color: T.TEXT_MUT, marginBottom: 0 }]}>AVG SPEED</Text>
+                      <Text style={{ color: T.TEXT_PRI, fontSize: 13, fontWeight: '700' }}>Along this route</Text>
+                    </View>
+                  </View>
+                  <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'AVG_SPEED' ? null : 'AVG_SPEED')} hitSlop={8}>
+                    <Ionicons name="information-circle-outline" size={18} color="#94A3B8" />
+                  </Pressable>
+                </View>
+
+                {tooltipVisible === 'AVG_SPEED' && (
+                  <View style={s.infoBubble}>
+                    <Text style={s.infoBubbleText}>{STAT_INFO.AVG_SPEED}</Text>
+                  </View>
+                )}
+
+                <View style={{ alignItems: 'center', paddingTop: 4 }}>
+                  <AvgSpeedGauge mph={avgSpeedMph} accent="#22D3EE" />
+                  <Text style={{ color: '#fff', fontSize: 44, fontWeight: '900', letterSpacing: -1, marginTop: -6 }}>
+                    {avgSpeedMph > 0 ? avgSpeedMph : '–'}
+                    <Text style={{ fontSize: 16, color: '#94A3B8', fontWeight: '700' }}> mph</Text>
+                  </Text>
+                  <View style={{ marginTop: 10, paddingHorizontal: 16, paddingVertical: 6, borderRadius: 999, backgroundColor: avgSpeedMph < 40 ? '#22C55E28' : avgSpeedMph < 80 ? '#EAB30828' : '#FB718528' }}>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: avgSpeedMph <= 0 ? '#94A3B8' : avgSpeedMph < 40 ? '#4ADE80' : avgSpeedMph < 80 ? '#FACC15' : '#FB7185' }}>
+                      {avgSpeedMph <= 0 ? 'No pace data' : avgSpeedMph < 40 ? 'Neighbourhood pace' : avgSpeedMph < 80 ? 'Mixed / arterial' : 'Wide open'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </LinearGradient>
+
+            {/* ── SHAP Risk Factors ── */}
+            {shapFactors.length > 0 && (
+              <ShapRiskFactors factors={shapFactors} infoKey={infoKey} setInfoKey={setInfoKey} />
+            )}
+
+            {/* ── Route Source Badge ── */}
+            {activeData?.routeSource && <RouteSourceCard routeSource={activeData.routeSource} />}
+
             {/* ── Travel Time Card ── */}
-            <View style={[s.statCardWide, { backgroundColor: T.CARD }]}>
-              <View
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}
-              >
+            <View style={s.statCardWide}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>⏱  TRAVEL TIME</Text>
-                <Pressable
-                  onPress={() =>
-                    setTooltipVisible(
-                      tooltipVisible === 'TRAVEL_TIME' ? null : 'TRAVEL_TIME',
-                    )
-                  }
-                  hitSlop={8}
-                >
-                  <Ionicons name="information-circle-outline" size={15} color="#7A8FA6" />
+                <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'TRAVEL_TIME' ? null : 'TRAVEL_TIME')} hitSlop={8}>
+                  <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
                 </Pressable>
               </View>
 
@@ -1372,37 +891,17 @@ export function RouteInsightsPage({
               )}
 
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-                <Text style={[s.statValue, { color: '#fff' }]}>
+                <Text style={[s.statValue, { color: TEXT_PRI }]}>
                   {effectiveDurationSecs > 0 ? fmtSecs(effectiveDurationSecs) : '–'}
                 </Text>
               </View>
 
               <View style={{ marginTop: 12 }}>
-                <View
-                  style={{
-                    height: 6,
-                    backgroundColor: '#FFFFFF18',
-                    borderRadius: 3,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <View
-                    style={{
-                      height: '100%',
-                      width: `${Math.round((nowHour / 23) * 100)}%`,
-                      backgroundColor: '#4A90E2',
-                      borderRadius: 3,
-                    }}
-                  />
+                <View style={{ height: 6, backgroundColor: '#FFFFFF18', borderRadius: 3, overflow: 'hidden' }}>
+                  <View style={{ height: '100%', width: `${Math.round((nowHour / 23) * 100)}%`, backgroundColor: '#4A90E2', borderRadius: 3 }} />
                 </View>
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    justifyContent: 'space-between',
-                    marginTop: 4,
-                  }}
-                >
-                  <Text style={{ color: '#7A8FA6', fontSize: 10 }}>Depart now</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                  <Text style={{ color: TEXT_MUT, fontSize: 10 }}>Depart now</Text>
                   <Text style={{ color: '#4A90E2', fontSize: 10, fontWeight: '600' }}>
                     Arrive ~{effectiveDurationSecs > 0 ? arrivalFrom(effectiveDurationSecs) : '–'}
                   </Text>
@@ -1412,35 +911,15 @@ export function RouteInsightsPage({
 
             {/* ── Hot Spots + Distance stats row ── */}
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={[s.statCardHalf, { backgroundColor: T.CARD }]}>
+              <View style={s.statCardHalf}>
                 <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>📏  DISTANCE</Text>
-                <Text style={[s.statValue, { color: T.TEXT_PRI, fontSize: 22 }]}>
-                  {fmtDist(distM)}
-                </Text>
+                <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>{fmtDist(distM)}</Text>
               </View>
-              <View style={[s.statCardHalf, { backgroundColor: T.CARD }]}>
+              <View style={s.statCardHalf}>
                 <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>⚠️  HOT SPOTS</Text>
-                <Text style={[s.statValue, { color: T.TEXT_PRI, fontSize: 22 }]}>
-                  {activeData?.nHighRisk ?? 0}
-                </Text>
-                <Text
-                  style={{
-                    color:
-                      (activeData?.nHighRisk ?? 0) === 0
-                        ? '#1ABC93'
-                        : (activeData?.nHighRisk ?? 0) > 3
-                          ? '#FF6B6B'
-                          : '#FFA500',
-                    fontSize: 11,
-                    fontWeight: '600',
-                    marginTop: 2,
-                  }}
-                >
-                  {(activeData?.nHighRisk ?? 0) === 0
-                    ? '✅ Clear route'
-                    : (activeData?.nHighRisk ?? 0) > 3
-                      ? '⚠ Use caution'
-                      : 'Manageable'}
+                <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>{activeData?.nHighRisk ?? 0}</Text>
+                <Text style={{ color: (activeData?.nHighRisk ?? 0) === 0 ? SEAFOAM : (activeData?.nHighRisk ?? 0) > 3 ? '#FF6B6B' : '#FFA500', fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  {(activeData?.nHighRisk ?? 0) === 0 ? '✅ Clear route' : (activeData?.nHighRisk ?? 0) > 3 ? '⚠ Use caution' : 'Manageable'}
                 </Text>
               </View>
             </View>
@@ -1448,12 +927,6 @@ export function RouteInsightsPage({
           </ScrollView>
         </View>
       </View>
-
-      {/* Incident detail popup */}
-      <IncidentDetailPopup
-        incident={selectedIncident}
-        onClose={() => setSelectedIncident(null)}
-      />
     </Modal>
   );
 }
@@ -1462,7 +935,7 @@ export function RouteInsightsPage({
 const s = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     justifyContent: 'flex-end',
   },
   card: {
@@ -1470,6 +943,10 @@ const s = StyleSheet.create({
     borderTopRightRadius: 28,
     padding: 20,
     paddingBottom: 24,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: GLASS_BORDER,
   },
   tabRow: {
     flexDirection: 'row',
@@ -1498,12 +975,11 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  heroScoreText: { color: '#fff', fontSize: 20, fontWeight: '900' },
-  heroScoreLabel: { color: '#7A8FA6', fontSize: 10, fontWeight: '600' },
+  heroScoreText: { color: TEXT_PRI, fontSize: 20, fontWeight: '900' },
+  heroScoreLabel: { color: TEXT_MUT, fontSize: 10, fontWeight: '600' },
   heroTitle: { fontSize: 16, fontWeight: '800' },
-  heroSub: { fontSize: 12, marginTop: 2 },
   safewayBadge: {
-    backgroundColor: '#1ABC9322',
+    backgroundColor: SEAFOAM + '22',
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 8,
@@ -1511,66 +987,34 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
-  safewayBadgeText: { color: '#1ABC93', fontSize: 10, fontWeight: '800' },
-
-  insightMapWrap: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    height: 220,
-    position: 'relative',
-  },
-  insightMap: { width: '100%', height: '100%' },
-  routeTimeBubble: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  routeTimeBubbleText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  incidentHint: {
-    position: 'absolute',
-    left: 10,
-    top: 10,
-    backgroundColor: 'rgba(5,10,24,0.82)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  safewayBadgeText: { color: SEAFOAM, fontSize: 10, fontWeight: '800' },
+  summaryBox: {
     borderWidth: 1,
-    borderColor: '#FFFFFF22',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(26,27,77,0.5)',
   },
-  incidentHintText: { color: '#CBD5E1', fontSize: 11, fontWeight: '700' },
-  originDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(74,144,226,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  originDotInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4A90E2',
-    borderWidth: 2,
-    borderColor: '#fff',
+  summaryText: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
   },
 
   statCardWide: {
     borderRadius: 16,
     padding: 20,
     borderWidth: 1.5,
-    borderColor: '#FFFFFF22',
+    borderColor: GLASS_BORDER,
+    backgroundColor: NAVY_CARD,
   },
   statCardHalf: {
     flex: 1,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1.5,
-    borderColor: '#FFFFFF22',
+    borderColor: GLASS_BORDER,
+    backgroundColor: NAVY_CARD,
   },
   statLabel: {
     fontSize: 11,
@@ -1581,14 +1025,15 @@ const s = StyleSheet.create({
   statValue: { fontSize: 28, fontWeight: '800', marginBottom: 4 },
 
   infoBubble: {
-    backgroundColor: '#1A1F3A',
+    backgroundColor: NAVY_ITEM,
     borderRadius: 10,
     padding: 10,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#FFFFFF18',
+    borderColor: GLASS_BORDER,
     maxWidth: 300,
   },
   infoBubbleText: { color: '#C8D6E5', fontSize: 12, lineHeight: 17 },
 });
+
 export default RouteInsightsPage;
