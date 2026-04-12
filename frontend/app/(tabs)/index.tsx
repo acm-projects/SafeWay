@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
+import { useRoadHeatmap } from '@/lib/useRoadHeatmap';
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +17,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { WebView } from 'react-native-webview';
 import Constants from 'expo-constants';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
@@ -779,6 +781,7 @@ export default function HomeScreen() {
     limit: 10_000,
   });
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
+  const roadSegments = useRoadHeatmap({ filter: heatmapFilter === 'off' ? 'all' : heatmapFilter as string, enabled: heatmapFilter !== 'off' });
 
   useEffect(() => {
     let cancelled = false;
@@ -986,11 +989,17 @@ export default function HomeScreen() {
           <Marker key={bm.id} coordinate={{ latitude: bm.lat, longitude: bm.lng }}
             title={bm.title} description={bm.address} pinColor={T.ACCENT} />
         ))}
-        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
-          <Heatmap points={crashPoints} opacity={0.75} radius={20}
-            gradient={{ colors: ['#00E5FF','#FFD600','#FF1744'], startPoints: [0.1,0.5,1.0], colorMapSize: 256 }}
-          />
-        )}
+        {heatmapFilter !== 'off' && roadSegments.map((seg, i) => {
+  const g = Math.round(120 + seg.intensity * 135);
+  const color = `rgba(0, ${g}, 255, `;
+  return (
+    <React.Fragment key={i}>
+      <Polyline coordinates={seg.coordinates} strokeColor={color + '0.12)'} strokeWidth={18} />
+      <Polyline coordinates={seg.coordinates} strokeColor={color + '0.3)'} strokeWidth={8} />
+      <Polyline coordinates={seg.coordinates} strokeColor={color + '0.9)'} strokeWidth={2} />
+    </React.Fragment>
+  );
+})}
       </MapView>
 
       {/* Street View WebView */}
