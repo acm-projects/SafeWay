@@ -555,6 +555,92 @@ def get_weather(lat: float = Query(...), lng: float = Query(...)):
         "wind_speed": current.get("wind_speed_10m"),
     }
 
+@app.get("/weather")
+def get_weather(lat: float = Query(...), lng: float = Query(...)):
+    """Get current weather using Open-Meteo API (free, no API key needed)."""
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lng}"
+        f"&current=temperature_2m,weather_code,wind_speed_10m"
+        f"&temperature_unit=fahrenheit"
+    )
+    response = requests.get(url, timeout=10)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail="Weather API error")
+
+    data = response.json()
+    current = data.get("current", {})
+
+    # Map WMO weather codes to descriptions
+    code = current.get("weather_code", 0)
+    descriptions = {
+        0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+        45: "Foggy", 48: "Rime fog", 51: "Light drizzle", 53: "Drizzle",
+        55: "Dense drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain",
+        71: "Light snow", 73: "Snow", 75: "Heavy snow", 80: "Light showers",
+        81: "Showers", 82: "Heavy showers", 95: "Thunderstorm",
+        96: "Thunderstorm with hail", 99: "Severe thunderstorm",
+    }
+
+    return {
+        "temperature": current.get("temperature_2m"),
+        "unit": "F",
+        "description": descriptions.get(code, "Unknown"),
+        "weather_code": code,
+        "wind_speed": current.get("wind_speed_10m"),
+    }
+
+_hex_cache: dict = {}
+HEX_CACHE_TTL = 300  # 5 minutes
+
+@app.get("/crashes/hex")
+def get_crash_hexes(filter: str = Query(default="all"), resolution: int = Query(default=8, ge=5, le=12)):
+    """Fetch crash coordinates, bin into H3 hexagons, return hex data."""
+    cache_key = f"{filter}:{resolution}"
+    if cache_key in _hex_cache:
+        cached_at, data = _hex_cache[cache_key]
+        if time.time() - cached_at < HEX_CACHE_TTL:
+            return data
+
+    import h3
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            base_query = """
+                SELECT latitude, longitude
+                FROM public.enriched_crashes
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """
+            if filter == "fatal":
+                base_query += " AND is_fsi = true"
+            elif filter == "ped":
+                base_query += " AND has_ped = true"
+            elif filter == "bike":
+                base_query += " AND has_bike = true"
+            elif filter == "hit":
+                base_query += " AND hit_and_run_i = true"
+            cur.execute(base_query)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    hex_counts: dict[str, int] = {}
+    for lat, lng in rows:
+        hex_id = h3.latlng_to_cell(lat, lng, resolution)
+        hex_counts[hex_id] = hex_counts.get(hex_id, 0) + 1
+
+    result = []
+    for hex_id, count in hex_counts.items():
+        boundary = h3.cell_to_boundary(hex_id)
+        corners = [{"latitude": lat, "longitude": lng} for lat, lng in boundary]
+        result.append({"hexId": hex_id, "count": count, "corners": corners})
+
+    return {"hexes": result, "total": len(result)}    
+
+
+
+    
+
 
 # ---------------------------------------------------------------------------
 # Recent Searches
@@ -857,7 +943,6 @@ def get_news(
         raise HTTPException(status_code=502, detail=f"News fetch failed: {e}")
 
 
-
 # ---------------------------------------------------------------------------
 # Safe Route — returns Google fastest route + OSM safer alternative
 # ---------------------------------------------------------------------------
@@ -1121,7 +1206,6 @@ def get_traffic_incidents(
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Traffic fetch failed: {e}")
 
-
 # ---------------------------------------------------------------------------
 # Safety POIs — Nearby police stations, hospitals, fire stations
 # ---------------------------------------------------------------------------
@@ -1205,3 +1289,91 @@ def get_nearby_safety_pois(
         "poi_type": poi_type,
         "search_location": {"lat": lat, "lng": lng},
     }
+
+
+# ---------------------------------------------------------------------------
+# Road Segments — snaps crash clusters to roads via Google Roads API
+# ---------------------------------------------------------------------------
+@app.get("/crashes/road-segments")
+def get_road_segments(
+    filter: str = Query(default="all"),
+    limit: int = Query(default=500, ge=1, le=2000),
+):
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+
+    if not google_key:
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
+
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            base_query = """
+                SELECT latitude, longitude, is_fsi, has_ped, has_bike, hit_and_run_i
+                FROM public.enriched_crashes
+                WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            """
+            if filter == "fatal":
+                base_query += " AND is_fsi = true"
+            elif filter == "ped":
+                base_query += " AND has_ped = true"
+            elif filter == "bike":
+                base_query += " AND has_bike = true"
+            elif filter == "hit":
+                base_query += " AND hit_and_run_i = true"
+            base_query += f" LIMIT {limit}"
+            cur.execute(base_query)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {"segments": []}
+
+    points = []
+    for row in rows:
+        weight = 3 if row[2] else 2 if (row[3] or row[4] or row[5]) else 1
+        points.append({"lat": row[0], "lng": row[1], "weight": weight})
+
+    # Sort by location so nearby points get connected, not random ones
+    points.sort(key=lambda p: (round(p["lat"], 3), round(p["lng"], 3)))
+
+    BATCH_SIZE = 100
+    snapped = []
+    for i in range(0, len(points), BATCH_SIZE):
+        batch = points[i:i + BATCH_SIZE]
+        path = "|".join(f"{p['lat']},{p['lng']}" for p in batch)
+        resp = requests.get(
+            "https://roads.googleapis.com/v1/snapToRoads",
+            params={"path": path, "key": google_key, "interpolate": "true"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"[roads] batch {i}: status={resp.status_code} snapped={len(data.get('snappedPoints', []))} raw_resp={str(data)[:200]}")
+            for sp in data.get("snappedPoints", []):
+                loc = sp.get("location", {})
+                orig_idx = sp.get("originalIndex")
+                w = points[i + orig_idx]["weight"] if orig_idx is not None and i + orig_idx < len(points) else 1
+                snapped.append({"lat": loc["latitude"], "lng": loc["longitude"], "weight": w})
+
+    if not snapped:
+        return {"segments": []}
+
+    max_weight = max(p["weight"] for p in snapped)
+    segments = []
+    MAX_SEGMENT_DIST = 0.002  # ~200m, only connect nearby points
+    for i in range(len(snapped) - 1):
+        a, b = snapped[i], snapped[i + 1]
+        dist = ((a["lat"] - b["lat"]) ** 2 + (a["lng"] - b["lng"]) ** 2) ** 0.5
+        if dist > MAX_SEGMENT_DIST:
+            continue
+        intensity = min(1.0, (a["weight"] + b["weight"]) / (max_weight * 2))
+        segments.append({
+            "coordinates": [
+                {"latitude": a["lat"], "longitude": a["lng"]},
+                {"latitude": b["lat"], "longitude": b["lng"]},
+            ],
+            "intensity": intensity,
+        })
+
+    return {"segments": segments}

@@ -1,4 +1,7 @@
+import HexHeatmap from '@/app/HexHeatmap';
+import { useNearbyUsers } from '@/lib/useNearbyUsers';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +18,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
@@ -469,18 +472,29 @@ function SheetBg({ style, bg }: { style?: any; bg?: string }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Heatmap modal
 // ─────────────────────────────────────────────────────────────────────────────
-function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle }: {
-  visible: boolean; activeFilter: HeatmapFilter | 'off';
+function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle, showNearbyUsers, onToggleNearbyUsers }: {  visible: boolean; activeFilter: HeatmapFilter | 'off';
   onSelect: (id: HeatmapFilter | 'off') => void; onClose: () => void;
   crashCount: number; loading: boolean;
   mapStyleType: 'standard'|'satellite'|'hybrid'|'terrain';
   onSelectMapStyle: (s: 'standard'|'satellite'|'hybrid'|'terrain') => void;
+  showNearbyUsers: boolean;
+  onToggleNearbyUsers: (v: boolean) => void;
 }) {
   const { T } = useTheme();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }} onPress={onClose}>
         <Pressable style={{ borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 24, paddingBottom: 40, backgroundColor: T.CARD }} onPress={() => {}}>
+        <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingHorizontal:4, marginBottom:16 }}>
+  <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+    <Ionicons name="people-outline" size={20} color={T.TEXT_PRI} />
+    <View>
+      <Text style={{ color:T.TEXT_PRI, fontSize:15, fontWeight:'600' }}>Nearby Users</Text>
+      <Text style={{ color:T.TEXT_MUT, fontSize:12 }}>Show anonymized users near you</Text>
+    </View>
+  </View>
+  <Switch value={showNearbyUsers} onValueChange={onToggleNearbyUsers} trackColor={{ false: '#C8D8E8', true: T.ACCENT + 'AA' }} thumbColor={showNearbyUsers ? T.ACCENT : '#FFFFFF'} />
+</View>
           <Text style={{ color: T.TEXT_PRI, fontSize: 22, fontWeight: '700', marginBottom: 12 }}>Map Style</Text>
           <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
             {MAP_STYLE_OPTIONS.map(opt => {
@@ -659,6 +673,7 @@ export default function HomeScreen() {
 
   const animatedPosition = useSharedValue(windowHeight);
 
+  const [showNearbyUsers, setShowNearbyUsers] = useState(false);
   const [userLocation, setUserLocation]       = useState<{ lat: number; lng: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -713,6 +728,7 @@ export default function HomeScreen() {
     limit: 10_000,
   });
   const activeFilterInfo = HEATMAP_FILTERS.find(f => f.id === heatmapFilter);
+  const nearbyUsers = useNearbyUsers(userLocation?.lat ?? null, userLocation?.lng ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -968,11 +984,25 @@ export default function HomeScreen() {
           <Marker key={bm.id} coordinate={{ latitude: bm.lat, longitude: bm.lng }}
             title={bm.title} description={bm.address} pinColor={T.ACCENT} />
         ))}
-        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
-          <Heatmap points={crashPoints} opacity={0.75} radius={20}
-            gradient={{ colors: ['#00E5FF','#FFD600','#FF1744'], startPoints: [0.1,0.5,1.0], colorMapSize: 256 }}
-          />
-        )}
+        {showNearbyUsers && nearbyUsers.map(u => (
+  <Marker key={u.user_id} coordinate={{ latitude: u.latitude, longitude: u.longitude }} anchor={{ x: 0.5, y: 0.5 }}>
+    <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#FF8C00', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 3, elevation: 3 }}>
+  <Text style={{ fontSize: 14 }}>{u.emoji}</Text>
+</View>
+  </Marker>
+))}
+        {heatmapFilter !== 'off' && (
+  currentRegion.latitudeDelta > 0.05
+    ? <HexHeatmap points={crashPoints} region={currentRegion} filter={heatmapFilter} />
+    : crashPoints.slice(0, 500).map((pt, i) => (
+        <Marker
+          key={`crash-${i}`}
+          coordinate={{ latitude: pt.latitude, longitude: pt.longitude }}
+          pinColor="red"
+          anchor={{ x: 0.5, y: 0.5 }}
+        />
+      ))
+)}
       </MapView>
 
       {/* Vignettes */}
@@ -1039,9 +1069,10 @@ export default function HomeScreen() {
         onRemoveBookmark={(id:string) => { bookmarkStore.remove(id); if (!String(id).startsWith('local_')) void handleDeleteBookmark(id); }}
       />
       <HeatmapModal visible={showHeatmapModal} activeFilter={heatmapFilter} onSelect={setHeatmapFilter}
-        onClose={() => setShowHeatmapModal(false)} crashCount={crashPoints.length}
-        loading={crashLoading} mapStyleType={mapStyleType} onSelectMapStyle={setMapStyleType}
-      />
+  onClose={() => setShowHeatmapModal(false)} crashCount={crashPoints.length}
+  loading={crashLoading} mapStyleType={mapStyleType} onSelectMapStyle={setMapStyleType}
+  showNearbyUsers={showNearbyUsers} onToggleNearbyUsers={setShowNearbyUsers}
+/>
 
       {/* Place picker */}
       <Modal visible={placeModal !== null} transparent animationType="slide"
@@ -1061,6 +1092,7 @@ export default function HomeScreen() {
               {placeBusy && <ActivityIndicator size="small" color={T.ACCENT} />}
             </View>
             {placeSugg.length > 0 && (
+              
               <View style={{ backgroundColor:T.ITEM, borderRadius:14, overflow:'hidden' }}>
                 {placeSugg.map((s,i) => (
                   <View key={s.place_id}>
