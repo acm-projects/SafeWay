@@ -147,6 +147,42 @@ def decode_polyline(encoded: str) -> list[dict[str, float]]:
     return points
 
 
+def _normalize_google_route_duration(raw) -> str:
+    """Routes API v2 returns duration as a string (e.g. '600s') or occasionally as a dict."""
+    if raw is None:
+        return "0s"
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return "0s"
+        return s if s.endswith("s") else f"{s}s"
+    if isinstance(raw, dict):
+        sec = raw.get("seconds")
+        if sec is not None:
+            try:
+                return f"{int(float(sec))}s"
+            except (TypeError, ValueError):
+                pass
+        if "duration" in raw:
+            return _normalize_google_route_duration(raw["duration"])
+    return "0s"
+
+
+CHICAGO_ROUTE_BOUNDS = {
+    "min_lat": 41.63,
+    "max_lat": 42.05,
+    "min_lng": -87.94,
+    "max_lng": -87.52,
+}
+
+
+def _is_in_chicago(lat: float, lng: float) -> bool:
+    return (
+        CHICAGO_ROUTE_BOUNDS["min_lat"] <= lat <= CHICAGO_ROUTE_BOUNDS["max_lat"]
+        and CHICAGO_ROUTE_BOUNDS["min_lng"] <= lng <= CHICAGO_ROUTE_BOUNDS["max_lng"]
+    )
+
+
 def get_current_user_id(authorization: str | None = Header(default=None)) -> str:
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
@@ -359,33 +395,26 @@ def compute_route(payload: RouteRequest):
     if not raw_routes:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No routes found")
 
-    result_routes = []
+    use_chicago_scoring = _is_in_chicago(payload.origin.lat, payload.origin.lng)
+    safeway_eligible = (
+        _is_in_chicago(payload.origin.lat, payload.origin.lng)
+        and _is_in_chicago(payload.destination.lat, payload.destination.lng)
+        and payload.travel_mode in ("DRIVE", "TWO_WHEELER")
+    )
+
+    result_routes: list[dict] = []
     try:
         from risk_cache import score_coordinates
         from model.generic_scorer import score_coordinates_generic
-
-        # Check if route is within Chicago bounds
-        CHICAGO_BOUNDS = {
-            "min_lat": 41.63, "max_lat": 42.05,
-            "min_lng": -87.94, "max_lng": -87.52,
-        }
-
-        def is_in_chicago(lat: float, lng: float) -> bool:
-            return (
-                CHICAGO_BOUNDS["min_lat"] <= lat <= CHICAGO_BOUNDS["max_lat"] and
-                CHICAGO_BOUNDS["min_lng"] <= lng <= CHICAGO_BOUNDS["max_lng"]
-            )
-
-        use_chicago_model = is_in_chicago(payload.origin.lat, payload.origin.lng)
 
         for route in raw_routes:
             polyline = ((route.get("polyline") or {}).get("encodedPolyline")) or ""
             coordinates = decode_polyline(polyline) if polyline else []
             safety_score = None
             safety_label = "unknown"
-            extra = {}
+            extra: dict = {}
             try:
-                if use_chicago_model:
+                if use_chicago_scoring:
                     safety = score_coordinates(
                         coordinates,
                         sample_every=5,
@@ -407,17 +436,20 @@ def compute_route(payload: RouteRequest):
                     "n_high_risk": safety.get("n_high_risk", 0),
                     "top_risk_factors": safety.get("top_risk_factors", []),
                     "time_band": safety.get("time_band"),
+                    "segment_risks": safety.get("segment_risks", []),
+                    "high_risk_coords": safety.get("high_risk_coords", []),
                 }
             except Exception as scoring_err:
                 print(f"[route] scoring error: {scoring_err}")
 
             result_routes.append({
                 "distance_meters": route.get("distanceMeters"),
-                "duration": route.get("duration"),
+                "duration": _normalize_google_route_duration(route.get("duration")),
                 "polyline": polyline,
                 "coordinates": coordinates,
                 "safety_score": safety_score,
                 "safety_label": safety_label,
+                "route_source": "google",
                 **extra,
             })
     except Exception as e:
@@ -427,12 +459,35 @@ def compute_route(payload: RouteRequest):
             coordinates = decode_polyline(polyline) if polyline else []
             result_routes.append({
                 "distance_meters": route.get("distanceMeters"),
-                "duration": route.get("duration"),
+                "duration": _normalize_google_route_duration(route.get("duration")),
                 "polyline": polyline,
                 "coordinates": coordinates,
                 "safety_score": None,
                 "safety_label": "unknown",
+                "route_source": "google",
             })
+
+    if safeway_eligible:
+        try:
+            import astar_route
+
+            sw = astar_route.compute_astar_route(
+                payload.origin.lat,
+                payload.origin.lng,
+                payload.destination.lat,
+                payload.destination.lng,
+                departure_hour=payload.departure_hour,
+                travel_mode=payload.travel_mode,
+            )
+            if sw:
+                result_routes.insert(0, sw)
+        except Exception as astar_err:
+            print(f"[route] SafeWay A* skipped: {astar_err}", flush=True)
+
+    for r in result_routes:
+        if not r.get("route_source"):
+            r["route_source"] = "google"
+
     return {"routes": result_routes, "travel_mode": payload.travel_mode}
 
 
