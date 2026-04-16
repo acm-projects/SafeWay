@@ -15,6 +15,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
+import os
+import pickle
+
+_GRAPH_FILE = os.path.join(os.path.dirname(__file__), "chicago_graph.graphml")
+_cached_graph = None
+
+def get_chicago_graph():
+    global _cached_graph
+    if _cached_graph is not None:
+        return _cached_graph
+    import osmnx as ox
+    print("[road] Loading graph from file...")
+    _cached_graph = ox.load_graphml(_GRAPH_FILE)
+    print("[road] Graph loaded.")
+    return _cached_graph
+
 # Load .env from backend directory
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -555,40 +571,6 @@ def get_weather(lat: float = Query(...), lng: float = Query(...)):
         "wind_speed": current.get("wind_speed_10m"),
     }
 
-@app.get("/weather")
-def get_weather(lat: float = Query(...), lng: float = Query(...)):
-    """Get current weather using Open-Meteo API (free, no API key needed)."""
-    url = (
-        f"https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lng}"
-        f"&current=temperature_2m,weather_code,wind_speed_10m"
-        f"&temperature_unit=fahrenheit"
-    )
-    response = requests.get(url, timeout=10)
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail="Weather API error")
-
-    data = response.json()
-    current = data.get("current", {})
-
-    # Map WMO weather codes to descriptions
-    code = current.get("weather_code", 0)
-    descriptions = {
-        0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-        45: "Foggy", 48: "Rime fog", 51: "Light drizzle", 53: "Drizzle",
-        55: "Dense drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain",
-        71: "Light snow", 73: "Snow", 75: "Heavy snow", 80: "Light showers",
-        81: "Showers", 82: "Heavy showers", 95: "Thunderstorm",
-        96: "Thunderstorm with hail", 99: "Severe thunderstorm",
-    }
-
-    return {
-        "temperature": current.get("temperature_2m"),
-        "unit": "F",
-        "description": descriptions.get(code, "Unknown"),
-        "weather_code": code,
-        "wind_speed": current.get("wind_speed_10m"),
-    }
 
 _hex_cache: dict = {}
 HEX_CACHE_TTL = 300  # 5 minutes
@@ -1297,13 +1279,8 @@ def get_nearby_safety_pois(
 @app.get("/crashes/road-segments")
 def get_road_segments(
     filter: str = Query(default="all"),
-    limit: int = Query(default=500, ge=1, le=2000),
+    limit: int = Query(default=5000, ge=1, le=50000),
 ):
-    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
-
-    if not google_key:
-        raise HTTPException(status_code=500, detail="Missing GOOGLE_MAPS_API_KEY")
-
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
@@ -1329,51 +1306,77 @@ def get_road_segments(
     if not rows:
         return {"segments": []}
 
-    points = []
-    for row in rows:
-        weight = 3 if row[2] else 2 if (row[3] or row[4] or row[5]) else 1
-        points.append({"lat": row[0], "lng": row[1], "weight": weight})
+    try:
+        import osmnx as ox
+        from collections import defaultdict
 
-    # Sort by location so nearby points get connected, not random ones
-    points.sort(key=lambda p: (round(p["lat"], 3), round(p["lng"], 3)))
+        points = []
+        for row in rows:
+            weight = 3 if row[2] else 2 if (row[3] or row[4] or row[5]) else 1
+            points.append({"lat": row[0], "lng": row[1], "weight": weight})
 
-    BATCH_SIZE = 100
-    snapped = []
-    for i in range(0, len(points), BATCH_SIZE):
-        batch = points[i:i + BATCH_SIZE]
-        path = "|".join(f"{p['lat']},{p['lng']}" for p in batch)
-        resp = requests.get(
-            "https://roads.googleapis.com/v1/snapToRoads",
-            params={"path": path, "key": google_key, "interpolate": "true"},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            print(f"[roads] batch {i}: status={resp.status_code} snapped={len(data.get('snappedPoints', []))} raw_resp={str(data)[:200]}")
-            for sp in data.get("snappedPoints", []):
-                loc = sp.get("location", {})
-                orig_idx = sp.get("originalIndex")
-                w = points[i + orig_idx]["weight"] if orig_idx is not None and i + orig_idx < len(points) else 1
-                snapped.append({"lat": loc["latitude"], "lng": loc["longitude"], "weight": w})
+        G = get_chicago_graph()
 
-    if not snapped:
+        edge_weights: dict[tuple, float] = defaultdict(float)
+        lngs = [p["lng"] for p in points]
+        lats = [p["lat"] for p in points]
+        weights = [p["weight"] for p in points]
+        results = ox.distance.nearest_edges(G, X=lngs, Y=lats)
+        for (u, v, _), w in zip(results, weights):
+            edge_weights[(u, v)] += w
+
+        import math
+        max_w = math.log1p(max(edge_weights.values())) if edge_weights else 1
+
+        segments = []
+
+        for (u, v), w in edge_weights.items():
+            intensity = min(1.0, math.log1p(w) / max_w)
+            edata = G.get_edge_data(u, v, 0) or {}
+
+            if "geometry" in edata:
+                coords = [
+                    {"latitude": lat, "longitude": lng}
+                    for lng, lat in edata["geometry"].coords
+                ]
+            else:
+                u_data, v_data = G.nodes[u], G.nodes[v]
+                coords = [
+                    {"latitude": u_data["y"], "longitude": u_data["x"]},
+                    {"latitude": v_data["y"], "longitude": v_data["x"]},
+                ]
+
+            if len(coords) >= 2:
+                segments.append({"coordinates": coords, "intensity": intensity})
+
+        return {"segments": segments}
+    except Exception as e:
+        print(f"[road-segments] ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"segments": [], "error": str(e)}
+
+@app.get("/crashes/road-base")
+def get_road_base():
+    try:
+        import osmnx as ox
+        G = get_chicago_graph()
+        segments = []
+        for u, v, edata in G.edges(data=True):
+            if "geometry" in edata:
+                coords = [
+                    {"latitude": lat, "longitude": lng}
+                    for lng, lat in edata["geometry"].coords
+                ]
+            else:
+                u_data, v_data = G.nodes[u], G.nodes[v]
+                coords = [
+                    {"latitude": u_data["y"], "longitude": u_data["x"]},
+                    {"latitude": v_data["y"], "longitude": v_data["x"]},
+                ]
+            if len(coords) >= 2:
+                segments.append({"coordinates": coords})
+        return {"segments": segments}
+    except Exception as e:
+        print(f"[road-base] ERROR: {e}")
         return {"segments": []}
-
-    max_weight = max(p["weight"] for p in snapped)
-    segments = []
-    MAX_SEGMENT_DIST = 0.002  # ~200m, only connect nearby points
-    for i in range(len(snapped) - 1):
-        a, b = snapped[i], snapped[i + 1]
-        dist = ((a["lat"] - b["lat"]) ** 2 + (a["lng"] - b["lng"]) ** 2) ** 0.5
-        if dist > MAX_SEGMENT_DIST:
-            continue
-        intensity = min(1.0, (a["weight"] + b["weight"]) / (max_weight * 2))
-        segments.append({
-            "coordinates": [
-                {"latitude": a["lat"], "longitude": a["lng"]},
-                {"latitude": b["lat"], "longitude": b["lng"]},
-            ],
-            "intensity": intensity,
-        })
-
-    return {"segments": segments}
