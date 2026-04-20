@@ -1,3 +1,4 @@
+import HexHeatmap from '@/app/HexHeatmap';
 import RoadHeatmap from '@/app/RoadHeatmap';
 import { useNearbyUsers } from '@/lib/useNearbyUsers';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -472,13 +473,15 @@ function SheetBg({ style, bg }: { style?: any; bg?: string }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Heatmap modal
 // ─────────────────────────────────────────────────────────────────────────────
-function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle, showNearbyUsers, onToggleNearbyUsers }: {  visible: boolean; activeFilter: HeatmapFilter | 'off';
+function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle, showNearbyUsers, onToggleNearbyUsers, heatmapMode, onSelectHeatmapMode }: {  visible: boolean; activeFilter: HeatmapFilter | 'off';
   onSelect: (id: HeatmapFilter | 'off') => void; onClose: () => void;
   crashCount: number; loading: boolean;
   mapStyleType: 'standard'|'satellite'|'hybrid'|'terrain';
   onSelectMapStyle: (s: 'standard'|'satellite'|'hybrid'|'terrain') => void;
   showNearbyUsers: boolean;
   onToggleNearbyUsers: (v: boolean) => void;
+  heatmapMode: 'hex' | 'road';
+  onSelectHeatmapMode: (m: 'hex' | 'road') => void;
 }) {
   const { T } = useTheme();
   return (
@@ -520,7 +523,17 @@ function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, lo
               </View>
             )}
           </View>
-          <Text style={{ color: T.TEXT_MUT, fontSize: 13, marginBottom: 20, lineHeight: 18 }}>Crash data from traffic records. Brighter = higher density.</Text>
+          <Text style={{ color: T.TEXT_MUT, fontSize: 13, marginBottom: 12, lineHeight: 18 }}>Crash data from traffic records. Brighter = higher density.</Text>
+          <View style={{ flexDirection: 'row', backgroundColor: T.ITEM, borderRadius: 14, padding: 4, marginBottom: 16 }}>
+            <Pressable onPress={() => onSelectHeatmapMode('road')}
+              style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center', backgroundColor: heatmapMode === 'road' ? T.ACCENT : 'transparent' }}>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Road</Text>
+            </Pressable>
+            <Pressable onPress={() => onSelectHeatmapMode('hex')}
+              style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center', backgroundColor: heatmapMode === 'hex' ? T.ACCENT : 'transparent' }}>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Hex</Text>
+            </Pressable>
+          </View>
           <View style={{ backgroundColor: T.ITEM, borderRadius: 18, overflow: 'hidden' }}>
             {HEATMAP_FILTERS.map((f, i) => {
               const active = activeFilter === f.id;
@@ -679,6 +692,7 @@ export default function HomeScreen() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType]       = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [heatmapMode, setHeatmapMode] = useState<'hex' | 'road'>('road');
   const [heatmapFilter, setHeatmapFilter]     = useState<HeatmapFilter | 'off'>('off');
   const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
   const [localBookmarks, setLocalBookmarks] = useState<any[]>([]);
@@ -992,7 +1006,9 @@ export default function HomeScreen() {
   </Marker>
 ))}
         {heatmapFilter !== 'off' && (
-  <RoadHeatmap filter={heatmapFilter} opacity={1.0} />
+  heatmapMode === 'road'
+    ? <RoadHeatmap filter={heatmapFilter} opacity={1.0} />
+    : <HexHeatmap filter={heatmapFilter} points={crashPoints} region={currentRegion} />
 )}
       </MapView>
 
@@ -1017,16 +1033,6 @@ export default function HomeScreen() {
           <Ionicons name="locate" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
-
-      <MapPegmanStreetView
-        mapRef={mapRef}
-        currentRegion={currentRegion}
-        fallbackLatLng={userLocation ?? { lat: 41.8781, lng: -87.6298 }}
-        top={TOP_BUTTONS_TOP + 152}
-        controlBg={T.BG}
-        dragHighlightBg={T.CARD}
-        stackBelowSheet
-      />
 
       {/* ── Heatmap toggle pill — refined ── */}
       <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP+204, zIndex:6, elevation:6 }}>
@@ -1063,6 +1069,7 @@ export default function HomeScreen() {
   onClose={() => setShowHeatmapModal(false)} crashCount={crashPoints.length}
   loading={crashLoading} mapStyleType={mapStyleType} onSelectMapStyle={setMapStyleType}
   showNearbyUsers={showNearbyUsers} onToggleNearbyUsers={setShowNearbyUsers}
+  heatmapMode={heatmapMode} onSelectHeatmapMode={setHeatmapMode}
 />
 
       {/* Place picker */}

@@ -8,11 +8,11 @@ interface Props {
 }
 
 const COLOR_STOPS: [number, [number, number, number]][] = [
-  [0.0,  [0, 100, 255]],
-  [0.25, [0, 150, 255]],
-  [0.5,  [0, 200, 255]],
-  [0.75, [0, 220, 255]],
-  [1.0,  [0, 255, 255]],
+  [0.0,  [0, 20,  60]],    // dark navy      → very low
+  [0.25, [0, 50,  140]],   // dark blue      → low
+  [0.5,  [0, 100, 220]],   // medium blue    → medium
+  [0.75, [0, 170, 255]],   // bright blue    → high
+  [1.0,  [0, 230, 255]],   // neon cyan-blue → max
 ];
 
 function lerpColor(t: number): [number, number, number] {
@@ -35,7 +35,8 @@ function lerpColor(t: number): [number, number, number] {
 function toHex(n: number) { return n.toString(16).padStart(2, '0'); }
 
 function segmentColor(intensity: number, alpha: number): string {
-  const [r, g, b] = lerpColor(intensity);
+  const boosted = Math.pow(intensity, 0.4);
+  const [r, g, b] = lerpColor(boosted);
   const effectiveAlpha = intensity < 0.01 ? 0.08 : alpha;
   const a = Math.round(Math.max(0, Math.min(1, effectiveAlpha)) * 255);
   return `#${toHex(r)}${toHex(g)}${toHex(b)}${toHex(a)}`;
@@ -46,7 +47,8 @@ export default function RoadHeatmap({ filter = 'all', opacity = 0.85 }: Props) {
 
   const rendered = useMemo(() =>
     segments
-      .filter(seg => seg.intensity > 0)
+      .filter(seg => seg.intensity > 0.3)
+      .slice(0, 500)
       .map((seg, i) => ({
         key: `road-${i}`,
         coordinates: seg.coordinates,
@@ -56,8 +58,8 @@ export default function RoadHeatmap({ filter = 'all', opacity = 0.85 }: Props) {
     [segments, opacity]
   );
 
-  if (!rendered.length) return null;
-
+console.log('[RoadHeatmap] rendering', rendered.length, 'segments, sample:', rendered[0]);
+if (!rendered.length) return null;
   return (
     <>
       {rendered.map(seg => (
