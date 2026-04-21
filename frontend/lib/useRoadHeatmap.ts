@@ -21,12 +21,13 @@ export function useRoadHeatmap({ filter = 'all', enabled = true }: Options = {})
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(`${API_BASE}/crashes/road-segments?filter=${filter}&limit=5000`);        
+        const resp = await fetch(`${API_BASE}/crashes/road-segments?filter=${filter}&limit=8000`);        
         if (!resp.ok) return;
         const data = await resp.json();
         if (!cancelled) {
-          console.log('[RoadHeatmap] got segments:', data.length);
-          setSegments(data ?? []);
+          const arr = Array.isArray(data) ? data : (data?.segments ?? data?.data ?? []);
+          console.log('[RoadHeatmap] got segments:', arr.length);
+          setSegments(arr);
         }
       } catch (e) {
         console.warn('[useRoadHeatmap] fetch failed:', e);

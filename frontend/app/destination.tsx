@@ -7,7 +7,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Gesture, NativeViewGestureHandler } from 'react-native-gesture-handler';
 import MapView, { Heatmap, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { router, useLocalSearchParams } from 'expo-router';
+import RoadHeatmap from '@/app/RoadHeatmap';
+import HexHeatmap from '@/app/HexHeatmap';import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -290,6 +291,7 @@ export default function DestinationScreen() {
   const [zoomDelta, setZoomDelta] = useState(0.012);
   const [currentAddress, setCurrentAddress] = useState('My Location');
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
+  const [heatmapMode, setHeatmapMode] = useState<'hex' | 'road'>('road');
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
   const [mapViewport, setMapViewport] = useState<{
@@ -585,17 +587,10 @@ export default function DestinationScreen() {
             />
           </Marker>
         ) : null}
-        {heatmapFilter !== 'off' && crashPoints.length > 0 && (
-          <Heatmap
-            points={crashPoints}
-            opacity={0.75}
-            radius={22}
-            gradient={{
-              colors: ['#00E5FF', '#FFD600', '#FF1744'],
-              startPoints: [0.1, 0.5, 1.0],
-              colorMapSize: 256,
-            }}
-          />
+        {heatmapFilter !== 'off' && (
+          heatmapMode === 'road'
+            ? <RoadHeatmap filter={heatmapFilter} opacity={1.0} />
+            : <HexHeatmap filter={heatmapFilter} points={crashPoints} region={{ latitude: lat, longitude: lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta }} />
         )}
       </MapView>
 
@@ -824,6 +819,16 @@ export default function DestinationScreen() {
               )}
             </View>
             <Text style={[hm.subtitle, { color: T.TEXT_MUT }]}>Crash data from traffic records. Brighter = higher density.</Text>
+            <View style={{ flexDirection: 'row', backgroundColor: T.ITEM, borderRadius: 14, padding: 4, marginBottom: 16 }}>
+              <Pressable onPress={() => setHeatmapMode('road')}
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center', backgroundColor: heatmapMode === 'road' ? T.ACCENT : 'transparent' }}>
+                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Road</Text>
+              </Pressable>
+              <Pressable onPress={() => setHeatmapMode('hex')}
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center', backgroundColor: heatmapMode === 'hex' ? T.ACCENT : 'transparent' }}>
+                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Hex</Text>
+              </Pressable>
+            </View>
             <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
               {HEATMAP_FILTERS.map((f, i) => {
                 const active = heatmapFilter === f.id;

@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthProvider } from '@/providers/auth-provider';
 import { ThemeProvider as AppThemeProvider } from '@/providers/theme-context';
+import { HeatmapProvider } from '@/providers/heatmap-context';
 
 // Inline the splash so there is zero module resolution ambiguity
 import { useEffect } from 'react';

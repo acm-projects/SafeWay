@@ -540,8 +540,7 @@ function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, lo
               return (
                 <View key={f.id}>
                   <Pressable style={[{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },
-                    active && { backgroundColor: 'rgba(26,188,147,0.08)' }]}
-                    onPress={() => { onSelect(f.id); onClose(); }}>
+                    active && { backgroundColor: 'rgba(26,188,147,0.08)' }]} onPress={() => { console.log('[HeatmapModal] selected:', f.id); onSelect(f.id); onClose(); }}>
                     <View style={{ width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', backgroundColor: active ? f.color + '33' : T.BG }}>
                       <Ionicons name={f.icon as any} size={20} color={active ? f.color : T.TEXT_MUT} />
                     </View>
@@ -693,7 +692,7 @@ export default function HomeScreen() {
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType]       = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
   const [heatmapMode, setHeatmapMode] = useState<'hex' | 'road'>('road');
-  const [heatmapFilter, setHeatmapFilter]     = useState<HeatmapFilter | 'off'>('off');
+  const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
   const [localBookmarks, setLocalBookmarks] = useState<any[]>([]);
   const [recentPlaces, setRecentPlaces]     = useState<{ id: string; title: string; address: string; lat: number; lng: number }[]>([]);
@@ -800,7 +799,6 @@ export default function HomeScreen() {
     void (async () => {
       const s = await loadMapSession();
       if (s?.mapStyleType) setMapStyleType(s.mapStyleType);
-      if (s?.heatmapFilter) setHeatmapFilter(s.heatmapFilter as HeatmapFilter | 'off');
       if (typeof s?.latitudeDelta === 'number') setZoomLevel(s.latitudeDelta);
       if (
         mapRef.current &&

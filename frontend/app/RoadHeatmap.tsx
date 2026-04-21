@@ -47,8 +47,8 @@ export default function RoadHeatmap({ filter = 'all', opacity = 0.85 }: Props) {
 
   const rendered = useMemo(() =>
     segments
-      .filter(seg => seg.intensity > 0.3)
-      .slice(0, 500)
+      .filter(seg => seg.intensity > 0.1)
+      .slice(0, 2000)
       .map((seg, i) => ({
         key: `road-${i}`,
         coordinates: seg.coordinates,
