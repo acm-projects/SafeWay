@@ -42,7 +42,19 @@ export function useTrafficIncidents(params: {
       const res = await fetch(url, { signal: ctrl.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: IncidentsResponse = await res.json();
-      setIncidents(data.incidents ?? []);
+      const raw = data.incidents ?? [];
+      setIncidents(
+        raw.map(inc => ({
+          ...inc,
+          category:
+            typeof inc.category === 'number' && Number.isFinite(inc.category)
+              ? inc.category
+              : (() => {
+                  const n = parseInt(String(inc.category ?? ''), 10);
+                  return Number.isFinite(n) ? n : 0;
+                })(),
+        })),
+      );
       setError(null);
     } catch (e: any) {
       if (e?.name !== 'AbortError') {

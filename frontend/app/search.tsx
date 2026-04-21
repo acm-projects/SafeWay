@@ -181,7 +181,7 @@ export default function SearchScreen() {
             }
           </View>
           <Pressable style={{ paddingHorizontal: 4, paddingVertical: 8 }} onPress={() => router.back()}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: T.ACCENT }}>Cancel</Text>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#FFFFFF' }}>Cancel</Text>
           </Pressable>
         </View>
 
@@ -245,7 +245,7 @@ export default function SearchScreen() {
                     <Pressable style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, gap: 14 }} onPress={() => runSearch(item.q)}>
                       {/* Icon circle uses T.ITEM bg, icon color uses T.ACCENT so it's purple in light mode */}
                       <View style={{ width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', backgroundColor: T.ITEM }}>
-                        <Ionicons name={item.icon} size={18} color={T.ACCENT} />
+                        <Ionicons name={item.icon} size={18} color="#1ABC93" />
                       </View>
                       <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: T.TEXT_PRI }}>{item.label}</Text>
                       <Ionicons name="chevron-forward" size={16} color={T.TEXT_MUT} />

@@ -37,7 +37,13 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/providers/theme-context';
-import { fetchSafetyNews, type NewsArticle } from '@/lib/api';
+
+type NewsArticle = {
+  title: string;
+  url?: string;
+  source?: string;
+  publishedAt?: string;
+};
 
 // ─── Types (mirrored from directions.tsx) ────────────────────────────────────
 export interface ModeRouteData {
@@ -99,16 +105,11 @@ const INFO_CONTENT: Record<string, { title: string; body: string }> = {
       'This helps normalize crash rates — a highway with more crashes isn\'t necessarily more dangerous per vehicle-mile than a quiet street.',
   },
   shap: {
-    title: 'SHAP — Risk Factor Explanation',
+    title: 'What makes this route safer or riskier?',
     body:
-      'SHAP (SHapley Additive exPlanations) is an AI interpretability technique that shows how much each feature contributed to a prediction.\n\n' +
-      'For each intersection on your route, the model identifies the top 3 factors that most increased its risk score. These are then aggregated across all intersections on the route.\n\n' +
-      'Common factors include:\n' +
-      '• High crash history — many past crashes at that intersection\n' +
-      '• Dark conditions — poor lighting correlated with higher risk\n' +
-      '• Pedestrian crashes — history of pedestrian-involved incidents\n' +
-      '• Speed camera violations — frequent speeding in the area\n\n' +
-      'The percentage shows how many route intersections flagged that factor.',
+      'SafeWay scores your route segment by segment. For each risky stretch, the model asks which real-world patterns best explain the score. Those explanations are summarized in the factors below.\n\n' +
+      'The % on each row is not a second safety grade. It means roughly what share of scored segments on this route flagged that factor when we explained the model (standard SHAP-style attribution).\n\n' +
+      'Examples: crash history, lighting, pedestrian-related risk, speed patterns, road layout. Use this as transparency into what the model reacts to—not a guarantee of conditions on the ground.',
   },
 };
 
@@ -318,7 +319,7 @@ export function RouteInsightsPage({
 
   useEffect(() => {
     if (!visible) return;
-    fetchSafetyNews('Chicago', 'traffic').then(setNewsArticles).catch(() => {});
+    setNewsArticles([]);
   }, [visible]);
 
   // ── Derived values ──────────────────────────────────────────────────────────
@@ -453,15 +454,20 @@ export function RouteInsightsPage({
                   </View>
                 </View>
 
-                {/* SHAP risk factors */}
+                {/* Risk factor explanations (SHAP-style attribution) */}
                 {Array.isArray(activeData?.topRiskFactors) && activeData!.topRiskFactors.length > 0 && (
                   <View style={{ marginTop: 14 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                      <Text style={{ color: T.TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 }}>TOP RISK FACTORS</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <Text style={{ color: T.TEXT_MUT, fontSize: 11, fontWeight: '700', letterSpacing: 0.3 }}>
+                        What shaped this score?
+                      </Text>
                       <Pressable onPress={() => setInfoKey(infoKey === 'shap' ? null : 'shap')} hitSlop={8}>
                         <Ionicons name="information-circle-outline" size={14} color="#7A8FA6" />
                       </Pressable>
                     </View>
+                    <Text style={{ color: '#8A9BBF', fontSize: 10, lineHeight: 14, marginBottom: 8 }}>
+                      % = how often each pattern appeared among scored segments—not a second safety rating.
+                    </Text>
                     {infoKey === 'shap' && (
                       <View style={{ backgroundColor: '#1A1F3A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FFFFFF18' }}>
                         <Text style={{ color: '#C8D6E5', fontSize: 12, lineHeight: 17 }}>{INFO_CONTENT.shap.body}</Text>
@@ -470,11 +476,15 @@ export function RouteInsightsPage({
                     {(activeData!.topRiskFactors as any[]).slice(0, 4).map((f: any, i: number) => {
                       const label = f.label ?? f.factor ?? `Factor ${i + 1}`;
                       const pct   = f.pct   ?? (f.weight != null ? Math.round(f.weight * 100) : 0);
+                      const pctNote = f.pct != null ? 'of segments' : 'rel. weight';
                       return (
                         <View key={i} style={{ marginBottom: 6 }}>
                           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
                             <Text style={{ color: T.TEXT_PRI, fontSize: 12, fontWeight: '600', flex: 1 }} numberOfLines={1}>{label}</Text>
-                            <Text style={{ color: '#FFA500', fontSize: 11, fontWeight: '700' }}>{pct}%</Text>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={{ color: '#FFA500', fontSize: 11, fontWeight: '800' }}>{pct}%</Text>
+                              <Text style={{ color: T.TEXT_MUT, fontSize: 8, fontWeight: '600' }}>{pctNote}</Text>
+                            </View>
                           </View>
                           <View style={{ height: 4, backgroundColor: '#FFFFFF14', borderRadius: 2, overflow: 'hidden' }}>
                             <View style={{ height: '100%', width: `${Math.min(100, pct)}%`, backgroundColor: '#FFA500', borderRadius: 2 }} />
@@ -510,7 +520,7 @@ export function RouteInsightsPage({
                 <MapView
                   style={s.insightMap}
                   provider={PROVIDER_GOOGLE}
-                  customMapStyle={DARK_MAP_STYLE}
+                  customMapStyle={undefined /* Previous: DARK_MAP_STYLE — now light map */}
                   initialRegion={{
                     latitude: originLat && destLat ? (originLat + destLat) / 2 : destLat,
                     longitude: originLng && destLng ? (originLng + destLng) / 2 : destLng,
@@ -780,6 +790,7 @@ const s = StyleSheet.create({
   tabText: { fontSize: 18, fontWeight: '600' },
   closeBtnCircle: { width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center' },
   body: { flex: 1 },
+  
 
   heroCard: { borderRadius: 16, padding: 16, borderWidth: 1 },
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },

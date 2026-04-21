@@ -6,7 +6,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: 'SafeWay',
   version: '1.0.0',
   orientation: 'portrait',
-  icon: './assets/images/icon.png',
+  icon: './assets/safeway-logo-transparent.png',
   scheme: 'safeway',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
@@ -14,10 +14,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: true,
   },
   android: {
+    icon: './assets/images/icon.png',
     adaptiveIcon: {
-      backgroundColor: '#E6F4FE',
+      backgroundColor: '#030427',
       foregroundImage: './assets/images/android-icon-foreground.png',
-      backgroundImage: './assets/images/android-icon-background.png',
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
     edgeToEdgeEnabled: true,
@@ -34,15 +34,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   plugins: [
     'expo-router',
+    '@react-native-community/datetimepicker',
     [
       'expo-splash-screen',
       {
-        image: './assets/images/splash-icon.png',
-        imageWidth: 200,
-        resizeMode: 'contain',
-        backgroundColor: '#ffffff',
+        backgroundColor: '#030427',
         dark: {
-          backgroundColor: '#000000',
+          backgroundColor: '#030427',
         },
       },
     ],

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutAnimation,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -9,7 +10,9 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import MapView, { Heatmap, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+// DateTimePicker removed — replaced with inline preset chips
+// import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +20,8 @@ import * as Haptics from 'expo-haptics';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { ScrollView as GHScrollView } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
 
-import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
 import {
   RouteInsightsMetricsBody,
   type ModeRouteData,
@@ -27,11 +30,14 @@ import { consumeRouteInsightsPayload, type RouteInsightsPayload } from '@/lib/ro
 import { loadMapSession, scheduleSaveMapSession, type MapStyleId } from '@/lib/mapSession';
 import { useTheme } from '@/providers/theme-context';
 import {
-  AadtFlowPolylines,
-  HotspotGlassModal,
+  HotspotDetailPanel,
   HotspotPulseMarkers,
-  PeakFlowMarkers,
-  ShapLogicMarkers,
+  HotspotRouteSegments,
+  PeakFlowIntensityPolylines,
+  PeakFlowVolumeHalos,
+  strokeColorForSegmentRisk,
+  strokeColorForSegmentRiskBlue,
+  type HotspotMapItem,
 } from '@/components/RouteInsightsMapOverlays';
 
 type RoutePoint = { latitude: number; longitude: number };
@@ -48,19 +54,54 @@ function isCoordSegmentArray(
   );
 }
 
-type VizId = 'risk' | 'aadt' | 'peak' | 'hotspots';
+type VizId = 'overview' | 'aadt' | 'peak' | 'hotspots' | 'scored';
+
+/** Stable calendar date for time-only pickers (no meaningful day — only clock matters). */
+function dateFromMinutesOfDay(totalMin: number): Date {
+  const d = new Date(2000, 0, 1, 0, 0, 0, 0);
+  const clamped = Math.max(0, Math.min(1439, Math.round(totalMin)));
+  d.setHours(Math.floor(clamped / 60), clamped % 60, 0, 0);
+  return d;
+}
+
+function minutesOfDayFromDate(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function formatTimeOfDayLabel(totalMin: number): string {
+  return dateFromMinutesOfDay(totalMin).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 const VIZ_OPTIONS: { id: VizId; label: string; hint: string }[] = [
-  { id: 'risk', label: 'SHAP', hint: 'Logic layers · factors' },
-  { id: 'aadt', label: 'AADT', hint: 'Volume glow' },
-  { id: 'peak', label: 'Peak flow', hint: 'Rush intensity' },
-  { id: 'hotspots', label: 'Hot spots', hint: 'The pulse' },
+  { id: 'overview', label: 'Overview', hint: 'Safety score, speed, and key factors' },
+  { id: 'aadt', label: 'AADT', hint: 'Hourly traffic trend for this route' },
+  {
+    id: 'peak',
+    label: 'Peak flow',
+    hint: 'How traffic intensity changes by time',
+  },
+  {
+    id: 'scored',
+    label: 'Route Segments',
+    hint: 'Segment count and structural route quality',
+  },
+  { id: 'hotspots', label: 'Hot spots', hint: 'Most critical stretches to watch' },
 ];
 
-const SEAFOAM = '#1ABC93';
+const LEGEND_COLORS = ['#000000', '#4B1D7E', '#8D2E6C', '#D4573A', '#F6C23E'] as const;
+const AADT_LEGEND_COLORS = ['#42A5F5', '#FBC02D', '#E53935'] as const;
+
 const FLOAT_SIDE = 14;
 const FLOAT_BOTTOM = 18;
 const FLOAT_RADIUS = 26;
+
+/** Space above expanded sheet so it never covers the map back FAB. */
+const BACK_FAB_TOP = 10;
+const BACK_FAB_SIZE = 42;
+const SHEET_CLEAR_BELOW_BACK = 12;
 
 export default function RouteInsightsScreen() {
   const { T } = useTheme();
@@ -68,12 +109,25 @@ export default function RouteInsightsScreen() {
   const { height: windowHeight } = useWindowDimensions();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
+  const lastSheetSnapRef = useRef(1);
+  const hotspotResumeSnapRef = useRef(1);
   const animatedPosition = useSharedValue(windowHeight);
 
   const [payload, setPayload] = useState<RouteInsightsPayload | null>(null);
-  const [viz, setViz] = useState<VizId>('risk');
+  const [viz, setViz] = useState<VizId>('overview');
   const [hotspotModalIndex, setHotspotModalIndex] = useState<number | null>(null);
-  const [peakHour, setPeakHour] = useState(12);
+  const [peakMinutesOfDay, setPeakMinutesOfDay] = useState(() => {
+    const now = new Date();
+    const m = Math.round((now.getHours() * 60 + now.getMinutes()) / 15) * 15;
+    return Math.min(1439, Math.max(0, m));
+  });
+  const [draftMinutesOfDay, setDraftMinutesOfDay] = useState(() => {
+    const now = new Date();
+    const m = Math.round((now.getHours() * 60 + now.getMinutes()) / 15) * 15;
+    return Math.min(1439, Math.max(0, m));
+  });
+  // timeModalVisible removed — using inline preset chips now
+  // const [timeModalVisible, setTimeModalVisible] = useState(false);
   const [mapStyleType, setMapStyleType] = useState<MapStyleId>('standard');
   const [currentRegion, setCurrentRegion] = useState({
     latitude: 41.8781,
@@ -125,11 +179,12 @@ export default function RouteInsightsScreen() {
   }, []);
 
   const rushFactor = useMemo(() => {
-    if (peakHour >= 7 && peakHour <= 9) return 0.82;
-    if (peakHour >= 16 && peakHour <= 19) return 0.88;
-    if (peakHour >= 11 && peakHour <= 14) return 0.52;
-    return 0.32;
-  }, [peakHour]);
+    const h = Math.floor(peakMinutesOfDay / 60);
+    if (h >= 7 && h <= 9) return 0.92;
+    if (h >= 16 && h <= 19) return 0.98;
+    if (h >= 11 && h <= 14) return 0.45;
+    return 0.12;
+  }, [peakMinutesOfDay]);
 
   const shapFactors = useMemo(() => {
     const raw = payload?.activeData?.topRiskFactors;
@@ -141,12 +196,18 @@ export default function RouteInsightsScreen() {
     }));
   }, [payload?.activeData?.topRiskFactors]);
 
+  const sheetTopInset = insets.top + BACK_FAB_TOP + BACK_FAB_SIZE + SHEET_CLEAR_BELOW_BACK;
+  const sheetContainerBottomPad = insets.bottom * 0.5 + FLOAT_BOTTOM;
+
   const snapPoints = useMemo(() => {
-    const minPeek = Math.max(76, Math.round(windowHeight * 0.11));
-    const mid = Math.round(windowHeight * 0.5);
-    const max = Math.round(windowHeight * 0.92);
+    // Short peek: handle + title only so the green “Overview” chip gradient stays hidden when collapsed.
+    const minPeek = Math.max(86, Math.round(windowHeight * 0.072));
+    const containerH = windowHeight - sheetContainerBottomPad;
+    const maxFromTop = windowHeight - sheetTopInset;
+    const max = Math.max(minPeek + 100, Math.round(Math.min(maxFromTop, containerH - 6)));
+    const mid = Math.min(Math.round(windowHeight * 0.5), max - 32);
     return [minPeek, mid, max];
-  }, [windowHeight]);
+  }, [windowHeight, sheetTopInset, sheetContainerBottomPad]);
 
   const sheetBgStyle = useAnimatedStyle(() => ({
     borderTopLeftRadius: FLOAT_RADIUS,
@@ -174,14 +235,37 @@ export default function RouteInsightsScreen() {
       : null;
   }, [segsRaw]);
 
-  /** Hot spots on map: API coords when present; else top-N segment midpoints by risk; else spaced along the route. */
-  const displayHotspots = useMemo((): RoutePoint[] => {
-    if (highRiskApi.length > 0) return highRiskApi;
+  /** Hot spots: coordinates + segment risk when known (backend high_risk_coords or derived segments). */
+  const hotspotItems = useMemo((): HotspotMapItem[] => {
+    const attachNearestRisk = (coord: RoutePoint): HotspotMapItem => {
+      let risk: number | undefined;
+      if (segsCoordArray?.length) {
+        let best = Infinity;
+        let bestR = 0;
+        for (const seg of segsCoordArray) {
+          const midLat = (seg.start.latitude + seg.end.latitude) / 2;
+          const midLng = (seg.start.longitude + seg.end.longitude) / 2;
+          const d =
+            Math.abs(midLat - coord.latitude) +
+            Math.abs(midLng - coord.longitude);
+          if (d < best) {
+            best = d;
+            bestR = seg.risk;
+          }
+        }
+        risk = bestR;
+      }
+      return { coord, risk };
+    };
+
+    if (highRiskApi.length > 0) {
+      return highRiskApi.map(c => attachNearestRisk(c));
+    }
     const cap = Math.max(0, nHighRisk);
     if (cap <= 0) return [];
     if (segsCoordArray?.length) {
       const sorted = [...segsCoordArray].sort((a, b) => b.risk - a.risk);
-      const out: RoutePoint[] = [];
+      const out: HotspotMapItem[] = [];
       const seen = new Set<string>();
       for (const seg of sorted) {
         const lat = (seg.start.latitude + seg.end.latitude) / 2;
@@ -189,13 +273,13 @@ export default function RouteInsightsScreen() {
         const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ latitude: lat, longitude: lng });
+        out.push({ coord: { latitude: lat, longitude: lng }, risk: seg.risk });
         if (out.length >= cap) break;
       }
       if (out.length > 0) return out;
     }
     if (coords.length >= 2) {
-      const out: RoutePoint[] = [];
+      const out: HotspotMapItem[] = [];
       for (let k = 1; k <= cap; k++) {
         const t = k / (cap + 1);
         const pos = t * (coords.length - 1);
@@ -204,8 +288,10 @@ export default function RouteInsightsScreen() {
         const a = coords[idx]!;
         const b = coords[Math.min(idx + 1, coords.length - 1)]!;
         out.push({
-          latitude: a.latitude + (b.latitude - a.latitude) * f,
-          longitude: a.longitude + (b.longitude - a.longitude) * f,
+          coord: {
+            latitude: a.latitude + (b.latitude - a.latitude) * f,
+            longitude: a.longitude + (b.longitude - a.longitude) * f,
+          },
         });
       }
       return out;
@@ -215,20 +301,22 @@ export default function RouteInsightsScreen() {
 
   const hotspotHeatPoints = useMemo(() => {
     const pts: { latitude: number; longitude: number; weight: number }[] = [];
-    const d = 0.00035;
-    for (const h of displayHotspots) {
-      pts.push({ latitude: h.latitude, longitude: h.longitude, weight: 8 });
+    const d = 0.00022;
+    for (const h of hotspotItems) {
+      const { latitude, longitude } = h.coord;
+      const baseW = h.risk != null ? 4 + (h.risk / 100) * 10 : 6;
+      pts.push({ latitude, longitude, weight: baseW });
       for (let i = 0; i < 8; i++) {
         const a = (i / 8) * Math.PI * 2;
         pts.push({
-          latitude: h.latitude + Math.sin(a) * d,
-          longitude: h.longitude + Math.cos(a) * d,
-          weight: 3,
+          latitude: latitude + Math.sin(a) * d,
+          longitude: longitude + Math.cos(a) * d,
+          weight: Math.max(1, baseW * 0.35),
         });
       }
     }
     return pts;
-  }, [displayHotspots]);
+  }, [hotspotItems]);
 
   const onRegionComplete = useCallback(
     (r: typeof currentRegion) => {
@@ -243,6 +331,21 @@ export default function RouteInsightsScreen() {
     },
     [mapStyleType],
   );
+
+  const dismissHotspot = useCallback(() => {
+    setHotspotModalIndex(null);
+    requestAnimationFrame(() => {
+      bottomSheetRef.current?.snapToIndex(hotspotResumeSnapRef.current);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (hotspotModalIndex === null) return;
+    hotspotResumeSnapRef.current = lastSheetSnapRef.current;
+    requestAnimationFrame(() => {
+      bottomSheetRef.current?.snapToIndex(0);
+    });
+  }, [hotspotModalIndex]);
 
   const refitForSheetIndex = useCallback(
     (idx: number) => {
@@ -275,97 +378,108 @@ export default function RouteInsightsScreen() {
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
         initialRegion={currentRegion}
-        customMapStyle={mapStyleType === 'standard' && T.isDark ? GOOGLE_MAPS_DARK_STYLE : undefined}
+        customMapStyle={undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
         onRegionChangeComplete={onRegionComplete}
       >
-        {viz === 'risk' && isCoordSegmentArray(segsRaw as any)
+        {viz === 'overview' && coords.length > 1 ? (
+          <Polyline
+            coordinates={coords}
+            strokeColor="rgba(74, 144, 226, 0.92)"
+            strokeWidth={6}
+            lineCap="round"
+            lineJoin="round"
+          />
+        ) : null}
+
+        {viz === 'aadt' && coords.length > 1 && isCoordSegmentArray(segsRaw as any)
           ? (segsRaw as Array<{ start: RoutePoint; end: RoutePoint; risk: number }>).map((seg, si) => (
               <Polyline
-                key={`seg-${si}`}
+                key={`aadt-seg-${si}`}
                 coordinates={[seg.start, seg.end]}
-                strokeColor={seg.risk > 66 ? '#FF4444' : seg.risk > 33 ? '#FFA500' : SEAFOAM}
-                strokeWidth={6}
+                strokeColor={strokeColorForSegmentRisk(seg.risk)}
+                strokeWidth={7}
                 lineCap="round"
                 lineJoin="round"
               />
             ))
           : null}
 
-        {viz === 'risk' && !isCoordSegmentArray(segsRaw as any) && coords.length > 1 ? (
-          <Polyline coordinates={coords} strokeColor="#4A90E2" strokeWidth={5} lineCap="round" lineJoin="round" />
-        ) : null}
-
-        {viz === 'risk' && coords.length > 1 && shapFactors.length > 0 ? (
-          <ShapLogicMarkers coords={coords} factors={shapFactors} />
-        ) : null}
-
-        {viz === 'aadt' && coords.length > 1 ? (
-          <>
-            <Polyline
-              coordinates={coords}
-              strokeColor="rgba(74, 144, 226, 0.2)"
-              strokeWidth={3}
-              lineCap="round"
-              lineJoin="round"
-            />
-            <AadtFlowPolylines coords={coords} />
-          </>
+        {viz === 'aadt' && coords.length > 1 && !isCoordSegmentArray(segsRaw as any) ? (
+          <Polyline
+            coordinates={coords}
+            strokeColor="rgba(66, 165, 245, 0.92)"
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
+          />
         ) : null}
 
         {viz === 'peak' && coords.length > 1 ? (
           <>
-            <Polyline
-              coordinates={coords}
-              strokeColor={`rgba(26, 188, 147, ${0.12 + rushFactor * 0.22})`}
-              strokeWidth={6}
-              lineCap="round"
-              lineJoin="round"
+            <PeakFlowVolumeHalos coords={coords} segments={segsCoordArray} rushFactor={rushFactor} />
+            <PeakFlowIntensityPolylines
+              coords={coords}
+              segments={segsCoordArray}
+              rushFactor={rushFactor}
             />
-            <Polyline
-              coordinates={coords}
-              strokeColor={T.ACCENT}
-              strokeWidth={2.5}
-              lineCap="round"
-              lineJoin="round"
-            />
-            <PeakFlowMarkers coords={coords} rushFactor={rushFactor} />
           </>
+        ) : null}
+
+        {viz === 'scored' && coords.length > 1 && isCoordSegmentArray(segsRaw as any)
+          ? (segsRaw as Array<{ start: RoutePoint; end: RoutePoint; risk: number }>).map((seg, si) => (
+              <Polyline
+                key={`scored-seg-${si}`}
+                coordinates={[seg.start, seg.end]}
+                strokeColor={strokeColorForSegmentRiskBlue(seg.risk)}
+                strokeWidth={7}
+                lineCap="round"
+                lineJoin="round"
+              />
+            ))
+          : null}
+
+        {viz === 'scored' && coords.length > 1 && !isCoordSegmentArray(segsRaw as any) ? (
+          <Polyline
+            coordinates={coords}
+            strokeColor="rgba(74, 144, 226, 0.92)"
+            strokeWidth={5}
+            lineCap="round"
+            lineJoin="round"
+          />
         ) : null}
 
         {viz === 'hotspots' && coords.length > 1 ? (
           <Polyline
             coordinates={coords}
             strokeColor="rgba(255, 107, 107, 0.32)"
-            strokeWidth={4}
+            strokeWidth={8}
             lineCap="round"
             lineJoin="round"
           />
         ) : null}
 
-        {viz === 'hotspots' && hotspotHeatPoints.length > 0 ? (
-          <Heatmap
-            points={hotspotHeatPoints}
-            opacity={0.82}
-            radius={38}
-            gradient={{
-              colors: ['#FFFF00', '#FF9800', '#F44336', '#B71C1C'],
-              startPoints: [0.15, 0.4, 0.65, 1],
-              colorMapSize: 256,
-            }}
+        {viz === 'hotspots' && hotspotItems.length > 0 ? (
+          <HotspotRouteSegments
+            coords={coords}
+            segments={segsCoordArray}
+            hotspotItems={hotspotItems}
           />
         ) : null}
 
-        {viz === 'hotspots' && displayHotspots.length > 0 ? (
-          <HotspotPulseMarkers spots={displayHotspots} onPressSpot={i => setHotspotModalIndex(i)} />
+        {viz === 'hotspots' && hotspotItems.length > 0 ? (
+          <HotspotPulseMarkers items={hotspotItems} onPressSpot={i => setHotspotModalIndex(i)} />
         ) : null}
 
         {payload.originLat != null && payload.originLng != null ? (
-          <Marker coordinate={{ latitude: payload.originLat, longitude: payload.originLng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.originDot}>
-              <View style={styles.originInner} />
+          <Marker coordinate={{ latitude: payload.originLat, longitude: payload.originLng }} anchor={{ x: 0.35, y: 0.5 }}>
+            <View style={styles.originMarkerRow}>
+              <View style={styles.originDot}>
+                <View style={styles.originInner} />
+              </View>
+              <View style={styles.originHeadingChev} />
             </View>
           </Marker>
         ) : null}
@@ -373,27 +487,88 @@ export default function RouteInsightsScreen() {
         {payload.destLat != null && payload.destLng != null ? (
           <Marker coordinate={{ latitude: payload.destLat, longitude: payload.destLng }} pinColor="#FF4444" />
         ) : null}
+
       </MapView>
 
-      {(() => {
-        const i = hotspotModalIndex;
-        if (i === null) return null;
-        const f = shapFactors[i % Math.max(shapFactors.length, 1)];
-        const title = f?.label ? `Pattern: ${f.label}` : 'High-risk zone';
-        const body = f?.label
-          ? `${f.label} shows up often on this route${f.pct != null ? ` (~${f.pct}% of scored nodes).` : '.'} Use extra caution when merging or crossing here.`
-          : 'This location scores higher than nearby segments on the route model.';
-        return (
-          <HotspotGlassModal
-            visible
-            onClose={() => setHotspotModalIndex(null)}
-            index={i}
-            reasonTitle={title}
-            reasonBody={body}
-            accentColor={T.ACCENT}
+      {(viz === 'aadt' || viz === 'scored') && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            right: 14,
+            width: 178,
+            top: insets.top + 106,
+            backgroundColor: 'rgba(8,10,32,0.86)',
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.15)',
+            paddingHorizontal: 8,
+            paddingVertical: 6,
+            zIndex: 30,
+          }}
+        >
+          <Text style={{ color: '#C8D6E5', fontSize: 9, fontWeight: '700', marginBottom: 4 }}>
+            {viz === 'aadt' ? 'AADT' : 'Route Segments'}
+          </Text>
+          <View style={{ borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' }}>
+            <LinearGradient
+              colors={viz === 'aadt' ? [...AADT_LEGEND_COLORS] : [...LEGEND_COLORS]}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={{ height: 7 }}
+            />
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+            <Text style={{ color: '#9BB1C8', fontSize: 8 }}>{viz === 'aadt' ? 'Low traffic risk' : '0'}</Text>
+            <Text style={{ color: '#9BB1C8', fontSize: 8 }}>{viz === 'aadt' ? 'High traffic risk' : '250'}</Text>
+          </View>
+        </View>
+      )}
+
+{/* Time picker modal replaced with inline preset chips + slider below */}
+
+      {hotspotModalIndex !== null ? (
+        <>
+          <Pressable
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.45)', zIndex: 44 }]}
+            onPress={dismissHotspot}
           />
-        );
-      })()}
+          <View
+            pointerEvents="box-none"
+            style={{
+              position: 'absolute',
+              left: 14,
+              right: 14,
+              bottom: insets.bottom + 10,
+              zIndex: 45,
+            }}
+          >
+            {(() => {
+              const i = hotspotModalIndex;
+              const item = hotspotItems[i];
+              const spotRisk = item?.risk;
+              const f = shapFactors[i % Math.max(shapFactors.length, 1)];
+              const title = f?.label ? `Pattern: ${f.label}` : 'High-risk zone';
+              const body = f?.label
+                ? `${f.label} shows up often on this route${f.pct != null ? ` (~${f.pct}% of scored intersections).` : '.'} Use extra caution when merging or crossing here.`
+                : spotRisk != null
+                  ? 'This stretch ranks higher on the safety model than most of this route. Slow down and scan intersections ahead.'
+                  : 'This location is highlighted from your route risk profile. Use extra caution in this area.';
+              return (
+                <HotspotDetailPanel
+                  docked
+                  onClose={dismissHotspot}
+                  index={i}
+                  reasonTitle={title}
+                  reasonBody={body}
+                  accentColor={T.ACCENT}
+                  riskScore={spotRisk}
+                />
+              );
+            })()}
+          </View>
+        </>
+      ) : null}
 
       <Pressable
         style={[styles.backFab, { top: insets.top + 10, backgroundColor: T.BG }]}
@@ -408,8 +583,12 @@ export default function RouteInsightsScreen() {
             ref={bottomSheetRef}
             index={1}
             snapPoints={snapPoints}
+            topInset={sheetTopInset}
             animatedPosition={animatedPosition}
-            onChange={idx => refitForSheetIndex(idx)}
+            onChange={idx => {
+              lastSheetSnapRef.current = idx;
+              refitForSheetIndex(idx);
+            }}
             backgroundComponent={({ style }) => (
               <Animated.View
                 pointerEvents="none"
@@ -433,7 +612,7 @@ export default function RouteInsightsScreen() {
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={[styles.chipRow, { paddingRight: 20 }]}
+                contentContainerStyle={[styles.chipRow, { paddingRight: 80 }]}
               >
                 {VIZ_OPTIONS.map(opt => {
                   const on = viz === opt.id;
@@ -445,59 +624,111 @@ export default function RouteInsightsScreen() {
                         void Haptics.selectionAsync();
                         setViz(opt.id);
                       }}
-                      style={[
-                        styles.vizChip,
-                        { backgroundColor: T.CARD, borderColor: on ? 'rgba(255,255,255,0.35)' : 'transparent' },
-                      ]}
+                      style={[styles.vizChip, { borderColor: on ? 'rgba(255,255,255,0.35)' : 'transparent' }]}
                     >
+                      {on ? (
+                        <LinearGradient
+                          colors={['#064E3B', '#047857', '#059669']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={[StyleSheet.absoluteFillObject, { borderRadius: 14 }]}
+                        />
+                      ) : (
+                        <View style={[StyleSheet.absoluteFillObject, { borderRadius: 14, backgroundColor: T.CARD }]} />
+                      )}
                       <Text style={{ color: on ? '#FFFFFF' : T.TEXT_MUT, fontSize: 12, fontWeight: '800' }}>
                         {opt.label}
                       </Text>
-                      <Text style={{ color: T.TEXT_MUT, fontSize: 9, marginTop: 2 }}>{opt.hint}</Text>
+                      <Text style={{ color: on ? '#FFFFFF' : T.TEXT_MUT, fontSize: 9, marginTop: 2 }}>{opt.hint}</Text>
                     </Pressable>
                   );
                 })}
               </GHScrollView>
 
-              {viz === 'peak' ? (
-                <View style={{ marginBottom: 4 }}>
-                  <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginBottom: 8, fontWeight: '600' }}>
-                    Time of day (scrub rush intensity)
+              {viz === 'scored' ? (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginBottom: 8, lineHeight: 16, fontWeight: '600' }}>
+                    Each segment is assessed for structural road safety.
                   </Text>
+                </View>
+              ) : null}
+
+              {viz === 'aadt' ? (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginBottom: 8, lineHeight: 16, fontWeight: '600' }}>
+                    AADT risk colors on the map path.
+                  </Text>
+                </View>
+              ) : null}
+
+              {viz === 'peak' ? (
+                <View style={{ marginBottom: 8 }}>
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 11, marginBottom: 8, fontWeight: '600' }}>
+                    Time of day (flow intensity)
+                  </Text>
+                  <View style={[styles.peakTimeRow, { backgroundColor: T.CARD, borderColor: 'rgba(255,255,255,0.08)' }]}>
+                    <View style={[styles.peakTimeIconWrap, { backgroundColor: `${T.ACCENT}22` }]}>
+                      <Ionicons name="time-outline" size={20} color={T.ACCENT} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: T.TEXT_MUT, fontSize: 10, fontWeight: '600' }}>Rush intensity model</Text>
+                      <Text style={{ color: T.TEXT_PRI, fontSize: 15, fontWeight: '800', marginTop: 2 }}>
+                        {formatTimeOfDayLabel(peakMinutesOfDay)}
+                      </Text>
+                    </View>
+                  </View>
                   <GHScrollView
                     horizontal
                     nestedScrollEnabled
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ gap: 6, paddingBottom: 4, paddingRight: 16 }}
+                    contentContainerStyle={{ gap: 8, paddingVertical: 10, paddingRight: 16 }}
                   >
-                    {[7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(h => {
-                      const label = h === 12 ? '12p' : h < 12 ? `${h}a` : `${h - 12}p`;
-                      const on = peakHour === h;
+                    {[
+                      { label: 'Now',       min: new Date().getHours() * 60 + new Date().getMinutes() },
+                      { label: '6 AM',      min: 360  },
+                      { label: '8 AM',      min: 480  },
+                      { label: '12 PM',     min: 720  },
+                      { label: '5 PM',      min: 1020 },
+                      { label: '7 PM',      min: 1140 },
+                      { label: '10 PM',     min: 1320 },
+                    ].map(preset => {
+                      const isActive = Math.abs(peakMinutesOfDay - preset.min) < 15;
                       return (
                         <Pressable
-                          key={h}
+                          key={preset.label}
                           onPress={() => {
                             void Haptics.selectionAsync();
-                            setPeakHour(h);
+                            setPeakMinutesOfDay(preset.min);
+                            setDraftMinutesOfDay(preset.min);
                           }}
                           style={{
-                            paddingHorizontal: 12,
+                            paddingHorizontal: 14,
                             paddingVertical: 8,
-                            borderRadius: 12,
-                            backgroundColor: on ? `${T.ACCENT}40` : T.ITEM,
+                            borderRadius: 20,
+                            backgroundColor: isActive ? T.ACCENT : T.ITEM,
                             borderWidth: 1,
-                            borderColor: on ? T.ACCENT : 'transparent',
+                            borderColor: isActive ? T.ACCENT : 'rgba(255,255,255,0.06)',
                           }}
                         >
-                          <Text style={{ color: on ? '#FFFFFF' : T.TEXT_MUT, fontSize: 12, fontWeight: '700' }}>{label}</Text>
+                          <Text style={{ color: isActive ? '#FFFFFF' : T.TEXT_PRI, fontSize: 12, fontWeight: '700' }}>
+                            {preset.label}
+                          </Text>
                         </Pressable>
                       );
                     })}
                   </GHScrollView>
+                  <Text style={{ color: T.TEXT_MUT, fontSize: 10, lineHeight: 14, marginTop: 8 }}>
+                    {segsCoordArray
+                      ? 'Glow follows each segment’s risk from the backend; the time you pick scales how “busy” the corridor feels.'
+                      : 'No per-segment risk in this response — glow uses a visual estimate along the path; time still scales intensity.'}
+                  </Text>
                 </View>
               ) : null}
 
-              <RouteInsightsMetricsBody activeData={data} />
+              <RouteInsightsMetricsBody
+                activeData={data}
+                activeTab={viz === 'scored' ? 'segments' : viz}
+              />
             </BottomSheetScrollView>
           </BottomSheet>
         </Animated.View>
@@ -530,20 +761,85 @@ const styles = StyleSheet.create({
   sub: { fontSize: 12, marginTop: 2 },
   chipRow: { gap: 10, paddingVertical: 4 },
   vizChip: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 6,
     paddingVertical: 10,
     borderRadius: 14,
     marginRight: 4,
     borderWidth: 1,
-    minWidth: 108,
+    minWidth: 96,
   },
+  originMarkerRow: { flexDirection: 'row', alignItems: 'center' },
   originDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(26,188,147,0.35)',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(74,144,226,0.32)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  originInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: SEAFOAM },
+  originInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4A90E2',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  originHeadingChev: {
+    width: 0,
+    height: 0,
+    marginLeft: -1,
+    borderTopWidth: 6,
+    borderBottomWidth: 6,
+    borderLeftWidth: 9,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderLeftColor: '#4A90E2',
+  },
+  peakTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  peakTimeIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+    paddingBottom: 32,
+  },
+  timeModalCard: {
+    marginHorizontal: 12,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  timeModalTitle: {
+    textAlign: 'center',
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 13,
+    fontWeight: '600',
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  timeModalActions: {
+    flexDirection: 'row',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.2)',
+  },
+  timeModalBtn: { flex: 1, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
+  timeModalDivider: { width: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.2)' },
+  timeModalCancel: { color: '#FFFFFF', fontSize: 17, fontWeight: '600' },
+  timeModalDone: { color: '#5AC8FA', fontSize: 17, fontWeight: '600' },
 });

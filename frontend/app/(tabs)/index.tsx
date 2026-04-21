@@ -40,7 +40,6 @@ import { useTheme } from '@/providers/theme-context';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import MapPegmanStreetView from '@/components/MapPegmanStreetView';
-import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
 import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -465,20 +464,22 @@ const FLOAT_RADIUS = 24;
 function SheetBg({ style, bg }: { style?: any; bg?: string }) {
   return (
     <ReAnimated.View pointerEvents="none"
-      style={[StyleSheet.absoluteFillObject, { backgroundColor: bg ?? '#030427' }, style]} />
+      style={[StyleSheet.absoluteFillObject, { backgroundColor: bg ?? '#000000' /* Previous: '#030427' */ }, style]} />
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Heatmap modal
 // ─────────────────────────────────────────────────────────────────────────────
-function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle, showNearbyUsers, onToggleNearbyUsers }: {  visible: boolean; activeFilter: HeatmapFilter | 'off';
+function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, loading, mapStyleType, onSelectMapStyle, showNearbyUsers, onToggleNearbyUsers, is3DPreview, onToggle3D }: {  visible: boolean; activeFilter: HeatmapFilter | 'off';
   onSelect: (id: HeatmapFilter | 'off') => void; onClose: () => void;
   crashCount: number; loading: boolean;
   mapStyleType: 'standard'|'satellite'|'hybrid'|'terrain';
   onSelectMapStyle: (s: 'standard'|'satellite'|'hybrid'|'terrain') => void;
   showNearbyUsers: boolean;
   onToggleNearbyUsers: (v: boolean) => void;
+  is3DPreview: boolean;
+  onToggle3D: () => void;
 }) {
   const { T } = useTheme();
   return (
@@ -510,6 +511,32 @@ function HeatmapModal({ visible, activeFilter, onSelect, onClose, crashCount, lo
               );
             })}
           </View>
+          <Pressable
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 12,
+              paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14,
+              marginTop: 8, marginBottom: 4,
+              backgroundColor: T.ITEM, borderWidth: 1,
+              borderColor: is3DPreview ? T.ACCENT : T.DIVIDER,
+            }}
+            onPress={onToggle3D}
+          >
+            <View style={{
+              width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: is3DPreview ? 'rgba(26,188,147,0.16)' : T.BG,
+            }}>
+              <Ionicons name="cube-outline" size={18} color={is3DPreview ? T.ACCENT : T.TEXT_MUT} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: is3DPreview ? T.ACCENT : T.TEXT_PRI, fontSize: 13, fontWeight: '700' }}>3D Preview</Text>
+              <Text style={{ color: T.TEXT_MUT, fontSize: 10 }}>Tilted camera view of your area</Text>
+            </View>
+            <Ionicons
+              name={is3DPreview ? 'checkmark-circle' : 'chevron-forward'}
+              size={18}
+              color={is3DPreview ? T.ACCENT : T.TEXT_MUT}
+            />
+          </Pressable>
           <View style={{ height: 1, backgroundColor: T.DIVIDER, marginVertical: 20 }} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <Text style={{ color: T.TEXT_PRI, fontSize: 22, fontWeight: '700' }}>Safety Heatmap</Text>
@@ -666,7 +693,8 @@ export default function HomeScreen() {
 
   const snapPoints = useMemo(() => {
     const searchBarOnly = 86;
-    const mid = Math.round(windowHeight * 0.52);
+    // Main control for the default home-sheet height.
+    const mid = Math.round(windowHeight * 0.44);
     const max = Math.round(windowHeight * 0.92);
     return [searchBarOnly, mid, max];
   }, [windowHeight]);
@@ -679,6 +707,7 @@ export default function HomeScreen() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType]       = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [is3DPreview, setIs3DPreview]         = useState(false);
   const [heatmapFilter, setHeatmapFilter]     = useState<HeatmapFilter | 'off'>('off');
   const [bookmarks, setBookmarks]           = useState<Bookmark[]>([]);
   const [localBookmarks, setLocalBookmarks] = useState<any[]>([]);
@@ -817,6 +846,14 @@ export default function HomeScreen() {
   useEffect(() => {
     scheduleSaveMapSession({ mapStyleType, heatmapFilter });
   }, [mapStyleType, heatmapFilter]);
+
+  useEffect(() => {
+    if (!is3DPreview || !mapRef.current || !userLocation) return;
+    mapRef.current.animateCamera(
+      { center: { latitude: userLocation.lat, longitude: userLocation.lng }, pitch: 58, heading: 0, zoom: 16.2 },
+      { duration: 700 },
+    );
+  }, [is3DPreview, userLocation]);
 
   useEffect(() => {
     const unsubscribe = bookmarkStore.subscribe(() => {
@@ -965,8 +1002,9 @@ export default function HomeScreen() {
       <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE} initialRegion={mapRegion}
         mapType={mapStyleType}
+        pitchEnabled
         showsUserLocation showsMyLocationButton={false}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : []}
+        customMapStyle={[]}
         onRegionChange={r => setCurrentRegion(r)}
         onRegionChangeComplete={r => {
           setCurrentRegion(r);
@@ -1005,11 +1043,13 @@ export default function HomeScreen() {
 )}
       </MapView>
 
-      {/* Vignettes */}
+      {/* Vignettes disabled for no-blue-gradient preview */}
+      {/*
       <LinearGradient colors={[T.isDark ? 'rgba(7,13,72,0.82)' : 'rgba(255,255,255,0.72)', 'transparent']}
         style={{ position:'absolute', top:0, left:0, right:0, height:120, zIndex:5 }} pointerEvents="none" />
       <LinearGradient colors={['transparent', T.isDark ? 'rgba(7,13,72,0.82)' : 'rgba(245,245,255,0.70)']}
         style={{ position:'absolute', bottom:0, left:0, right:0, height:180, zIndex:5 }} pointerEvents="none" />
+      */}
 
       {/* ── Map controls — refined style ── */}
       <View style={{ position:'absolute', right:14, top:TOP_BUTTONS_TOP, borderRadius:14, width:42, backgroundColor:T.BG, zIndex:6, elevation:6, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.18, shadowRadius:6 }}>
@@ -1072,6 +1112,7 @@ export default function HomeScreen() {
   onClose={() => setShowHeatmapModal(false)} crashCount={crashPoints.length}
   loading={crashLoading} mapStyleType={mapStyleType} onSelectMapStyle={setMapStyleType}
   showNearbyUsers={showNearbyUsers} onToggleNearbyUsers={setShowNearbyUsers}
+  is3DPreview={is3DPreview} onToggle3D={() => setIs3DPreview(prev => { if (!prev) setMapStyleType('standard'); return !prev; })}
 />
 
       {/* Place picker */}

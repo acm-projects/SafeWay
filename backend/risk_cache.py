@@ -297,6 +297,8 @@ def score_coordinates(
         "total_exposure": 0, "route_km": 0, "n_high_risk": 0,
         "risk_per_km": None, "top_risk_factors": [], "time_band": None,
         "travel_mode": travel_mode,
+        "segment_risks": [],
+        "high_risk_coords": [],
     }
 
     if not coordinates or not risk_map:
@@ -381,6 +383,23 @@ def score_coordinates(
         for f in top_factors
     ]
 
+    # Per-segment risk (0–100) for maps: each leg is sampled polyline i → i+1
+    segment_risks: list[dict] = []
+    high_risk_coords: list[dict] = []
+    for i in range(len(sampled) - 1):
+        seg_risk = (risks[i] + risks[i + 1]) / 2.0
+        seg_risk = min(100.0, seg_risk)
+        segment_risks.append({
+            "start": {"latitude": lats[i], "longitude": lngs[i]},
+            "end": {"latitude": lats[i + 1], "longitude": lngs[i + 1]},
+            "risk": round(seg_risk, 2),
+        })
+        if seg_risk > 66.0:
+            high_risk_coords.append({
+                "latitude": round((lats[i] + lats[i + 1]) / 2.0, 6),
+                "longitude": round((lngs[i] + lngs[i + 1]) / 2.0, 6),
+            })
+
     return {
         "score": score,
         "label": label,
@@ -393,5 +412,7 @@ def score_coordinates(
         "top_risk_factors": top_risk_factors,
         "time_band": time_band,
         "travel_mode": travel_mode,
+        "segment_risks": segment_risks,
+        "high_risk_coords": high_risk_coords,
     }
 

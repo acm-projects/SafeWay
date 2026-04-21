@@ -3,6 +3,7 @@ import React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  InteractionManager,
   Linking,
   Modal,
   PanResponder,
@@ -18,7 +19,7 @@ import {
   Animated as RNAnimated,
 } from 'react-native';
 import MapView, { Heatmap, Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,7 +40,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { getRoute, getMultipleRoutes, searchPlaces, getRouteDirections } from '@/lib/api';
 import type { AlternativeRoute, DirectionStep, PlaceSearchResult, RoutePoint, RouteTimingInput } from '@/lib/api';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
-import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
 import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
 import { setRouteInsightsPayload } from '@/lib/routeInsightsPayload';
 import MapPegmanStreetView from '@/components/MapPegmanStreetView';
@@ -47,13 +47,16 @@ import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
 import { useTheme } from '@/providers/theme-context';
 import { useTrafficIncidents } from '@/hooks/useTrafficIncidents';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
-import { IncidentDetailPopup, IncidentMarker } from '@/components/IncidentMarker';
+import { IncidentBubble, IncidentDetailPopup, IncidentMarker } from '@/components/IncidentMarker';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
 // ─── Design tokens (aligned with index.tsx + destination.tsx) ─────────────────
+// Previous navy theme (preserved for easy rollback):
+// const NAVY = '#030427'; const NAVY_GLASS = '#06072E'; const NAVY_CARD = '#0D0E3A';
+// const NAVY_ITEM = '#161750'; const GLASS_BORDER = '#1A1B4D'; const DIVIDER = '#1A1B4D';
 const NAVY        = '#030427';
 const NAVY_GLASS  = '#06072E';
 const NAVY_CARD   = '#0D0E3A';
@@ -61,10 +64,9 @@ const NAVY_ITEM   = '#161750';
 const GLASS_BORDER = '#1A1B4D';
 const SEAFOAM     = '#1ABC93';
 const TEXT_PRI    = '#FFFFFF';
-const TEXT_MUT    = '#6B7FA8';
+const TEXT_MUT    = '#7A8FA6';
 const TEXT_SUB    = '#8A9BBF';
 const DIVIDER     = '#1A1B4D';
-// Legacy aliases used by internal helpers
 const BG          = NAVY;
 const SHEET_BG    = NAVY_GLASS;
 const CARD_BG     = NAVY_CARD;
@@ -110,6 +112,74 @@ interface ModeRoutes {
 }
 
 type RouteAltRow = ModeRoutes['alternatives'][number];
+
+type RouteCalloutState = {
+  routeIndex: number;
+  lat: number;
+  lng: number;
+  safetyScore: number | null;
+  durationSecs: number;
+};
+
+const ROUTE_CALLOUT_W = 140;
+const ROUTE_CALLOUT_ANCHOR_H = 64;
+
+function routeCalloutForAlternative(
+  alt: RouteAltRow | undefined,
+  routeIndex: number,
+  /** How many alternatives share the map — used to pick different points along each polyline so cards don’t stack. */
+  routeCount: number,
+): RouteCalloutState | null {
+  if (!alt?.coords?.length) return null;
+  const c = alt.coords;
+  const n = c.length;
+  const count = Math.max(1, routeCount);
+  const frac = (routeIndex + 1) / (count + 1);
+  const along = Math.max(0, Math.min(n - 1, Math.round(frac * (n - 1))));
+  const pt = c[along]!;
+  return {
+    routeIndex,
+    lat: pt.latitude,
+    lng: pt.longitude,
+    safetyScore: alt.safetyScore ?? null,
+    durationSecs: alt.durationSecs,
+  };
+}
+
+/** Model risk score (same bands as route cards): lower = safer. */
+function safetyOutlineForRiskScore(score: number | null): string {
+  if (score == null || !Number.isFinite(score)) return GLASS_BORDER;
+  return score < 33 ? SEAFOAM : score < 66 ? '#FFA500' : '#FF4444';
+}
+
+function buildRouteCalloutsFromMode(md: ModeRoutes | null | undefined): RouteCalloutState[] {
+  if (!md) return [];
+  const alts = md.alternatives ?? [];
+  if (alts.length) {
+    const total = alts.length;
+    return alts
+      .map((alt, i) => routeCalloutForAlternative(alt, i, total))
+      .filter((c): c is RouteCalloutState => c != null);
+  }
+  const p = md.primary;
+  if (p?.coords?.length) {
+    const c = routeCalloutForAlternative(
+      {
+        index: 0,
+        label: '',
+        routeLabels: [],
+        distance: p.distance,
+        durationSecs: p.durationSecs,
+        coords: p.coords,
+        safetyScore: p.safetyScore ?? null,
+      } as RouteAltRow,
+      0,
+      1,
+    );
+    return c ? [c] : [];
+  }
+  return [];
+}
 
 function isCoordSegmentArray(segs: any[] | undefined): segs is Array<{ start: RoutePoint; end: RoutePoint; risk: number }> {
   if (!segs || segs.length === 0) return false;
@@ -159,15 +229,11 @@ const INFO_CONTENT: Record<string, { title: string; body: string }> = {
       + 'This helps normalize crash rates — a highway with more crashes isn\'t necessarily more dangerous per vehicle-mile than a quiet street.',
   },
   shap: {
-    title: 'SHAP — Risk Factor Explanation',
-    body: 'SHAP (SHapley Additive exPlanations) is an AI interpretability technique that shows how much each feature contributed to a prediction.\n\n'
-      + 'For each intersection on your route, the model identifies the top 3 factors that most increased its risk score. These are then aggregated across all intersections on the route.\n\n'
-      + 'Common factors include:\n'
-      + '• High crash history — many past crashes at that intersection\n'
-      + '• Dark conditions — poor lighting correlated with higher risk\n'
-      + '• Pedestrian crashes — history of pedestrian-involved incidents\n'
-      + '• Speed camera violations — frequent speeding in the area\n\n'
-      + 'The percentage shows how many route intersections flagged that factor.',
+    title: 'What makes this route safer or riskier?',
+    body:
+      'SafeWay scores your route segment by segment. For each risky stretch, the model asks: “what patterns best explain why this scored high?” Those explanations are rolled up into the factors you see below.\n\n'
+      + 'The percentage on each row is not a second “safety score.” It means: roughly what share of scored segments on this route flagged that factor when we explained the model’s output (a standard approach called SHAP).\n\n'
+      + 'Examples of factors: crash history, lighting, pedestrian-related risk, speed patterns, and road design cues. Use the bars to see what the model is reacting to—not as a guarantee, but as a transparency aid.',
   },
 };
 
@@ -226,6 +292,21 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
 }
 
+function routeBearingDegrees(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): number {
+  const lat1 = (from.latitude * Math.PI) / 180;
+  const lat2 = (to.latitude * Math.PI) / 180;
+  const dLon = ((to.longitude - from.longitude) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  const deg = (Math.atan2(y, x) * 180) / Math.PI;
+  return (deg + 360) % 360;
+}
+
 /** Min distance (km) from a point to any sampled point along the route polyline. */
 function minDistanceKmToPolyline(
   lat: number,
@@ -248,7 +329,8 @@ function minDistanceKmToPolyline(
 }
 
 /** Only map markers when zoomed in past this latitudeDelta (smaller = more zoomed). */
-const INCIDENT_MAP_MAX_LAT_DELTA = 0.12;
+/** Show markers at city / route overview zoom — after fitToCoordinates latDelta is often ~0.2–0.5. */
+const INCIDENT_MAP_MAX_LAT_DELTA = 0.85;
 const ROUTE_INCIDENT_BUFFER_KM = 1.75;
 const MAX_ROUTE_INCIDENT_MARKERS = 80;
 
@@ -585,6 +667,604 @@ function HourlyLineGraph({
     </View>
   );
 }
+
+// ─── Route Details Modal ──────────────────────────────────────────────────────
+// ─── 3D Route Explorer ────────────────────────────────────────────────────────
+type SafetyCard = {
+  coord: { latitude: number; longitude: number };
+  title: string;
+  body: string;
+  icon: string;
+  color: string;
+  /** Position on the scrub bar (0–1). */
+  t: number;
+};
+
+function buildSafetyCards(data: ModeRouteData | null): SafetyCard[] {
+  if (!data?.coords?.length) return [];
+  const cards: SafetyCard[] = [];
+  const N = data.coords.length;
+  const coordAt = (t: number) => data.coords[Math.min(N - 1, Math.round(t * (N - 1)))]!;
+
+  if (data.safetyScore != null) {
+    const s = Math.round(data.safetyScore);
+    const safe = Math.max(0, Math.min(100, 100 - s));
+    cards.push({
+      coord: coordAt(0.04),
+      title: 'Route Safety',
+      body: `Overall safety score: ${safe}% — ${safe >= 70 ? 'low' : safe >= 40 ? 'moderate' : 'elevated'} risk.`,
+      icon: 'shield-checkmark',
+      color: safe >= 70 ? SEAFOAM : safe >= 40 ? '#FFA500' : '#FF4444',
+      t: 0.04,
+    });
+  }
+
+  if (data.aadtAvg || data.aadtMax) {
+    const peak = data.aadtMax ?? data.aadtAvg ?? 0;
+    cards.push({
+      coord: coordAt(0.22),
+      title: 'High AADT Zone',
+      body: `Peak traffic: ~${peak.toLocaleString()} vehicles/day. Expect heavy merges.`,
+      icon: 'car',
+      color: '#4DA6FF',
+      t: 0.22,
+    });
+  }
+
+  const factors = data.topRiskFactors ?? [];
+  factors.forEach((f: any, i: number) => {
+    const label = f.factor || f.label || 'Risk factor';
+    const t = Math.min(0.88, 0.32 + i * 0.16);
+    cards.push({
+      coord: coordAt(t),
+      title: label,
+      body: f.pct != null
+        ? `Affects ~${f.pct}% of scored intersections. Use extra caution.`
+        : f.weight != null
+          ? `Risk weight: ${f.weight.toFixed(2)}. Stay alert.`
+          : 'Proceed with caution in this area.',
+      icon: 'warning',
+      color: '#FFB830',
+      t,
+    });
+  });
+
+  const hrs = data.highRiskCoords ?? [];
+  hrs.forEach((c, i) => {
+    const t = Math.min(0.96, 0.15 + (i / Math.max(1, hrs.length - 1)) * 0.7);
+    cards.push({
+      coord: c,
+      title: `Hot Spot ${i + 1}`,
+      body: 'High-incident intersection. Reduce speed and watch for turning traffic.',
+      icon: 'alert-circle',
+      color: '#FF4D6A',
+      t,
+    });
+  });
+
+  const now = new Date();
+  const hour = now.getHours();
+  const isNight = hour >= 20 || hour < 6;
+  if (isNight) {
+    cards.push({
+      coord: coordAt(0.6),
+      title: 'Night Driving',
+      body: 'Driving at night — headlights on, watch for reduced visibility.',
+      icon: 'moon',
+      color: '#9B72F7',
+      t: 0.6,
+    });
+  }
+
+  cards.sort((a, b) => a.t - b.t);
+  return cards;
+}
+
+const EX3D_DWELL_AT_INFO_MS = 3000;
+const EX3D_MIN_TRAVEL_MS = 4200;
+const EX3D_MS_PER_PROGRESS = 26000;
+/** Manual scrub: show card when this close to a marker; hide only when farther (stops flicker). */
+const EX3D_CARD_SCRUB_IN = 0.042;
+const EX3D_CARD_SCRUB_OUT = 0.078;
+
+function easeOutQuad(t: number) {
+  return 1 - (1 - t) * (1 - t);
+}
+
+function animateProgressValue(
+  from: number,
+  to: number,
+  durationMs: number,
+  setProgress: (p: number) => void,
+  shouldAbort: () => boolean,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (shouldAbort()) {
+        resolve();
+        return;
+      }
+      const elapsed = Date.now() - start;
+      const u = Math.min(1, elapsed / durationMs);
+      const eased = easeOutQuad(u);
+      setProgress(from + (to - from) * eased);
+      if (u < 1) requestAnimationFrame(tick);
+      else resolve();
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+function sleepWithAbort(ms: number, shouldAbort: () => boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const step = () => {
+      if (shouldAbort()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - t0 >= ms) resolve();
+      else setTimeout(step, 90);
+    };
+    step();
+  });
+}
+
+function Route3DExplorer({
+  visible,
+  onClose,
+  activeData,
+  mapRef,
+  originCoords,
+  destCoords,
+  travelMode,
+  stopsSwapped,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  activeData: ModeRouteData | null;
+  mapRef: React.RefObject<MapView | null>;
+  originCoords: { lat: number; lng: number } | null;
+  destCoords: { lat: number; lng: number } | null;
+  travelMode: TravelMode;
+  stopsSwapped: boolean;
+}) {
+  const insets = useSafeAreaInsets();
+  const { width: screenW } = useWindowDimensions();
+  const [progress, setProgress] = useState(0);
+  const [activeCard, setActiveCard] = useState<SafetyCard | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const cardFade = useRef(new RNAnimated.Value(0)).current;
+  const overlayOpacity = useRef(new RNAnimated.Value(0)).current;
+  const panX = useRef(new RNAnimated.Value(0)).current;
+  const playbackAbortRef = useRef(false);
+  const playbackRunIdRef = useRef(0);
+  const playbackDrivingRef = useRef(false);
+  const progressRef = useRef(0);
+  const scrubCardStickyRef = useRef<SafetyCard | null>(null);
+  const lastScrubCardTRef = useRef<number | null>(null);
+  const cameraIdxRef = useRef(-1);
+  const scrubW = screenW - 48;
+  const coords = activeData?.coords ?? [];
+  const cards = useMemo(() => buildSafetyCards(activeData), [activeData]);
+
+  const stopPlayback = useCallback(() => {
+    playbackAbortRef.current = true;
+    playbackRunIdRef.current += 1;
+    playbackDrivingRef.current = false;
+    lastScrubCardTRef.current = null;
+    setIsPlaying(false);
+  }, []);
+
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  useEffect(() => {
+    if (visible) {
+      RNAnimated.timing(overlayOpacity, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+      setProgress(0);
+      panX.setValue(0);
+      playbackAbortRef.current = true;
+      playbackRunIdRef.current += 1;
+      cameraIdxRef.current = -1;
+      lastScrubCardTRef.current = null;
+      scrubCardStickyRef.current = null;
+      setIsPlaying(false);
+      if (coords.length >= 2 && mapRef.current) {
+        const from = coords[0]!;
+        const to = coords[Math.min(coords.length - 1, 2)]!;
+        const heading = routeBearingDegrees(from, to);
+        mapRef.current.animateCamera({ center: from, pitch: 55, heading, zoom: 16.5 }, { duration: 800 });
+      }
+    } else {
+      playbackAbortRef.current = true;
+      playbackRunIdRef.current += 1;
+      setIsPlaying(false);
+      RNAnimated.timing(overlayOpacity, { toValue: 0, duration: 250, useNativeDriver: true }).start();
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || coords.length < 2 || !mapRef.current) return;
+    const N = coords.length;
+    const idx = Math.min(N - 1, Math.round(progress * (N - 1)));
+
+    if (idx !== cameraIdxRef.current) {
+      cameraIdxRef.current = idx;
+      const nxt = Math.min(N - 1, idx + 2);
+      const pt = coords[idx]!;
+      const to = coords[nxt]!;
+      const heading = routeBearingDegrees(pt, to);
+      mapRef.current.animateCamera({ center: pt, pitch: 55, heading, zoom: 16.5 }, { duration: 280 });
+    }
+
+    if (isPlaying) return;
+
+    let best: SafetyCard | null = null;
+    let bestD = Infinity;
+    for (const c of cards) {
+      const d = Math.abs(c.t - progress);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+
+    const sticky = scrubCardStickyRef.current;
+    let nextCard: SafetyCard | null = null;
+    if (sticky) {
+      const dSticky = Math.abs(sticky.t - progress);
+      if (dSticky <= EX3D_CARD_SCRUB_OUT) nextCard = sticky;
+      else scrubCardStickyRef.current = null;
+    }
+    if (!nextCard && best && bestD < EX3D_CARD_SCRUB_IN) {
+      nextCard = best;
+      scrubCardStickyRef.current = best;
+    }
+
+    const nt = nextCard?.t ?? null;
+    const lt = lastScrubCardTRef.current;
+    if (nt === lt) return;
+
+    lastScrubCardTRef.current = nt;
+    if (nextCard) {
+      setActiveCard(nextCard);
+      cardFade.setValue(0);
+      RNAnimated.spring(cardFade, { toValue: 1, useNativeDriver: true, damping: 16, stiffness: 180 }).start();
+    } else {
+      RNAnimated.timing(cardFade, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+        if (finished) setActiveCard(null);
+      });
+    }
+  }, [progress, visible, isPlaying, cards]);
+
+  const startProgressRef = useRef(0);
+  const panResponder = useMemo(() =>
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        stopPlayback();
+        const touchX = evt.nativeEvent.locationX;
+        const p = Math.max(0, Math.min(1, touchX / scrubW));
+        startProgressRef.current = p;
+        setProgress(p);
+      },
+      onPanResponderMove: (_, gs) => {
+        const raw = startProgressRef.current * scrubW + gs.dx;
+        const clamped = Math.max(0, Math.min(scrubW, raw));
+        setProgress(clamped / scrubW);
+      },
+      onPanResponderRelease: () => {
+        panX.flattenOffset();
+      },
+    }),
+  [scrubW, stopPlayback]);
+
+  const togglePlayback = useCallback(() => {
+    if (isPlaying) {
+      stopPlayback();
+      return;
+    }
+    if (!visible || coords.length < 2) return;
+    playbackAbortRef.current = false;
+    const myRun = ++playbackRunIdRef.current;
+    setIsPlaying(true);
+    lastScrubCardTRef.current = null;
+    const cardTs = [...new Set(cards.map((c) => c.t))].sort((a, b) => a - b);
+    const milestones = [...new Set([0, ...cardTs, 1])].sort((a, b) => a - b);
+    const hasCardNear = (t: number) => cards.some((c) => Math.abs(c.t - t) < 0.008);
+    const cardAtMilestone = (t: number) => cards.find((c) => Math.abs(c.t - t) < 0.008);
+
+    void (async () => {
+      let startP = Math.min(1, Math.max(0, progressRef.current));
+      let i0 = 0;
+      while (i0 < milestones.length - 1 && milestones[i0 + 1]! < startP - 1e-6) {
+        i0++;
+      }
+
+      for (let i = i0; i < milestones.length - 1; i++) {
+        if (playbackAbortRef.current || playbackRunIdRef.current !== myRun) break;
+        const segFrom = milestones[i]!;
+        const segTo = milestones[i + 1]!;
+        const fromP = i === i0 ? Math.max(segFrom, startP) : segFrom;
+
+        playbackDrivingRef.current = true;
+        setActiveCard(null);
+        cardFade.setValue(0);
+
+        const travelMs = Math.max(EX3D_MIN_TRAVEL_MS, (segTo - segFrom) * EX3D_MS_PER_PROGRESS);
+        if (fromP < segTo - 1e-7) {
+          await animateProgressValue(
+            fromP,
+            segTo,
+            travelMs,
+            setProgress,
+            () => playbackAbortRef.current || playbackRunIdRef.current !== myRun,
+          );
+        }
+        if (playbackAbortRef.current || playbackRunIdRef.current !== myRun) break;
+
+        if (segTo < 1 - 1e-6 && hasCardNear(segTo)) {
+          const c = cardAtMilestone(segTo);
+          if (c) {
+            playbackDrivingRef.current = false;
+            setActiveCard(c);
+            cardFade.setValue(0);
+            RNAnimated.spring(cardFade, { toValue: 1, useNativeDriver: true, damping: 16, stiffness: 180 }).start();
+            await sleepWithAbort(EX3D_DWELL_AT_INFO_MS, () => playbackAbortRef.current || playbackRunIdRef.current !== myRun);
+            if (playbackAbortRef.current || playbackRunIdRef.current !== myRun) break;
+            await new Promise<void>((resolve) => {
+              RNAnimated.timing(cardFade, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+                if (finished) setActiveCard(null);
+                resolve();
+              });
+            });
+          }
+        }
+      }
+      playbackDrivingRef.current = false;
+      if (!playbackAbortRef.current && playbackRunIdRef.current === myRun) setIsPlaying(false);
+    })();
+  }, [visible, coords.length, cards, isPlaying, stopPlayback]);
+
+  if (!visible) return null;
+
+  const modeMap: Record<TravelMode, string> = { WALK: 'walking', DRIVE: 'driving', BICYCLE: 'bicycling', BUS: 'transit', RIDESHARE: 'driving' };
+  const from = stopsSwapped ? destCoords : originCoords;
+  const to = stopsSwapped ? originCoords : destCoords;
+
+  return (
+    <RNAnimated.View style={[ex.overlay, { opacity: overlayOpacity }]} pointerEvents={visible ? 'box-none' : 'none'}>
+      {/* Close button */}
+      <Pressable
+        style={[ex.closeBtn, { top: insets.top + 12 }]}
+        onPress={() => {
+          stopPlayback();
+          onClose();
+        }}
+      >
+        <Ionicons name="close" size={22} color="#fff" />
+      </Pressable>
+
+      {/* Title chip — collapsable=false avoids Android map GL compositing flicker */}
+      <View style={[ex.titleChip, { top: insets.top + 12 }]} collapsable={false}>
+        <Ionicons name="cube-outline" size={14} color={SEAFOAM} />
+        <Text style={ex.titleText}>3D Safety Path</Text>
+      </View>
+
+      {/* Dynamic safety card */}
+      {activeCard && (
+        <RNAnimated.View style={[ex.cardWrap, { opacity: cardFade, transform: [{ translateY: cardFade.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) }] }]}>
+          <View style={ex.card}>
+            <View style={ex.cardScanLine} />
+            <View style={ex.cardHeader}>
+              <View style={[ex.cardIconWrap, { backgroundColor: activeCard.color + '22' }]}>
+                <Ionicons name={activeCard.icon as any} size={18} color={activeCard.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={ex.cardTitle}>{activeCard.title}</Text>
+                <Text style={ex.cardBody}>{activeCard.body}</Text>
+              </View>
+            </View>
+          </View>
+        </RNAnimated.View>
+      )}
+
+      {/* Bottom: scrub bar + Google Maps button */}
+      <View style={[ex.bottomWrap, { paddingBottom: insets.bottom + 10 }]}>
+        <View style={ex.playRow}>
+          <Pressable style={ex.playBtn} onPress={togglePlayback} hitSlop={10}>
+            <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+            <Text style={ex.playBtnText}>{isPlaying ? 'Pause' : 'Play route'}</Text>
+          </Pressable>
+          <Text style={ex.playHint}>Pauses at each insight so you can read</Text>
+        </View>
+
+        {/* Scrub bar */}
+        <View style={ex.scrubOuter}>
+          <Text style={ex.scrubLabel}>Scrub to explore route</Text>
+          <View style={[ex.scrubTrack, { width: scrubW }]} {...panResponder.panHandlers}>
+            {/* Route line */}
+            <View style={[ex.scrubLine, { width: scrubW }]}>
+              <View style={[ex.scrubFilled, { width: `${progress * 100}%` }]} />
+            </View>
+            {/* Card markers */}
+            {cards.map((c, i) => (
+              <View key={i} style={[ex.scrubDot, { left: c.t * scrubW - 4, borderColor: c.color }]} />
+            ))}
+            {/* Thumb */}
+            <View style={[ex.scrubThumb, { left: Math.max(0, Math.min(scrubW - 18, progress * scrubW - 9)) }]}>
+              <View style={ex.scrubThumbInner} />
+            </View>
+          </View>
+          <View style={ex.scrubLabels}>
+            <Text style={ex.scrubEndLabel}>Start</Text>
+            <Text style={ex.scrubEndLabel}>End</Text>
+          </View>
+        </View>
+
+        {/* Start in Google Maps */}
+        <Pressable
+          style={ex.launchBtn}
+          onPress={() => {
+            if (from && to) {
+              Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=${modeMap[travelMode]}`);
+            }
+          }}
+        >
+          <LinearGradient colors={['#064E3B', '#047857', '#059669']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[StyleSheet.absoluteFillObject, { borderRadius: 14 }]} />
+          <Ionicons name="navigate" size={18} color="#fff" />
+          <Text style={ex.launchBtnText}>Start in Google Maps</Text>
+        </Pressable>
+      </View>
+    </RNAnimated.View>
+  );
+}
+
+const ex = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 500,
+    elevation: 500,
+  },
+  closeBtn: {
+    position: 'absolute',
+    left: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(5,6,45,0.82)',
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 510,
+  },
+  titleChip: {
+    position: 'absolute',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(5,6,45,0.82)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    zIndex: 510,
+  },
+  titleText: { color: '#fff', fontSize: 13, fontWeight: '800', letterSpacing: -0.2 },
+  cardWrap: {
+    position: 'absolute',
+    top: 100,
+    left: 16,
+    right: 16,
+    zIndex: 505,
+  },
+  card: {
+    backgroundColor: 'rgba(7,9,30,0.88)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    overflow: 'hidden',
+  },
+  cardScanLine: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: SEAFOAM,
+    opacity: 0.7,
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  cardIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: { color: '#EEF2FF', fontSize: 15, fontWeight: '800', marginBottom: 4, letterSpacing: -0.2 },
+  cardBody: { color: '#7A8FA6', fontSize: 13, lineHeight: 19 },
+  bottomWrap: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(3,4,39,0.92)',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingHorizontal: 24,
+    paddingTop: 18,
+    zIndex: 510,
+  },
+  playRow: { marginBottom: 14, alignItems: 'center', gap: 6 },
+  playBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    borderRadius: 14,
+    backgroundColor: 'rgba(26,188,147,0.22)',
+    borderWidth: 1,
+    borderColor: SEAFOAM + '55',
+  },
+  playBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  playHint: { color: TEXT_MUT, fontSize: 11, textAlign: 'center' },
+  scrubOuter: { marginBottom: 16 },
+  scrubLabel: { color: TEXT_MUT, fontSize: 11, fontWeight: '600', marginBottom: 10, textAlign: 'center', letterSpacing: 0.4, textTransform: 'uppercase' },
+  scrubTrack: { height: 28, justifyContent: 'center', position: 'relative' },
+  scrubLine: { position: 'absolute', height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.10)' },
+  scrubFilled: { height: '100%', borderRadius: 2, backgroundColor: SEAFOAM },
+  scrubDot: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: NAVY_CARD,
+    borderWidth: 2,
+    top: 10,
+  },
+  scrubThumb: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: SEAFOAM,
+    top: 5,
+    shadowColor: SEAFOAM,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scrubThumbInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
+  scrubLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  scrubEndLabel: { color: TEXT_MUT, fontSize: 10, fontWeight: '600' },
+  launchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 50,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  launchBtnText: { color: '#fff', fontSize: 15, fontWeight: '800', zIndex: 1 },
+});
 
 // ─── Route Details Modal ──────────────────────────────────────────────────────
 function RouteDetailsModal({
@@ -946,8 +1626,8 @@ function RouteCard({
         deck.card,
         {
           backgroundColor: isSelected ? T.BG : T.CARD,
-          borderColor: isSelected ? safetyColor + '66' : GLASS_BORDER,
-          borderWidth: isSelected ? 1.5 : 1,
+          borderColor: isSelected ? 'rgba(255,255,255,0.15)' : GLASS_BORDER,
+          borderWidth: 1,
           marginBottom: 10,
         },
       ]}>
@@ -967,7 +1647,7 @@ function RouteCard({
             )}
             <View style={deck.safetyBadgeContent}>
               <Text style={[deck.safetyLabel, { color: isSafeWay ? 'rgba(255,255,255,0.7)' : safetyColor }]}>
-                {isSafeWay ? 'SAFEWAY' : 'SAFETY'}
+                SAFETY
               </Text>
               {safetyPct != null ? (
                 <Text style={[deck.safetyPct, { color: '#fff' }]}>{safetyPct}%</Text>
@@ -1188,11 +1868,107 @@ export default function DirectionsScreen() {
   const [zoomDelta, setZoomDelta] = useState(0.05);
   const [mapLatDelta, setMapLatDelta] = useState(0.05);
   const [selectedIncident, setSelectedIncident] = useState<TrafficIncident | null>(null);
+  const [routeCallouts, setRouteCallouts] = useState<RouteCalloutState[]>([]);
+  const routeCalloutsRef = useRef<RouteCalloutState[]>([]);
+  routeCalloutsRef.current = routeCallouts;
+  const [routeCalloutScreens, setRouteCalloutScreens] = useState<Array<{ x: number; y: number } | null>>([]);
+  /** Coalesce screen-point updates during pan/zoom to one RAF (matches earlier, smoother behavior). */
+  const routeCalloutMoveRafRef = useRef<number | null>(null);
+  /** MapView onPress often fires right after a polyline onPress; ignore briefly so the route tooltip stays visible. */
+  const routePolylinePressAtRef = useRef(0);
+  /** After the user dismisses the tooltip via map tap, do not auto-restore until they change route / refetch / mode. */
+  const calloutUserDismissedRef = useRef(false);
+  const routeCalloutOpacity = useRef(new RNAnimated.Value(0)).current;
+
+  const refreshRouteCalloutScreens = useCallback(() => {
+    const list = routeCalloutsRef.current;
+    const map = mapRef.current as unknown as {
+      pointForCoordinate?: (c: { latitude: number; longitude: number }) => Promise<{ x: number; y: number }>;
+    } | null;
+    if (!list.length || !map?.pointForCoordinate) {
+      setRouteCalloutScreens([]);
+      return;
+    }
+    void Promise.all(
+      list.map(rc =>
+        map
+          .pointForCoordinate!({ latitude: rc.lat, longitude: rc.lng })
+          .then(pt =>
+            pt && Number.isFinite(pt.x) && Number.isFinite(pt.y) ? { x: pt.x, y: pt.y } : null,
+          )
+          .catch(() => null),
+      ),
+    ).then(pts => {
+      setRouteCalloutScreens(pts);
+    });
+  }, []);
+
+  const scheduleRouteCalloutScreenRefresh = useCallback(() => {
+    if (!routeCalloutsRef.current.length) return;
+    if (routeCalloutMoveRafRef.current != null) return;
+    routeCalloutMoveRafRef.current = requestAnimationFrame(() => {
+      routeCalloutMoveRafRef.current = null;
+      refreshRouteCalloutScreens();
+    });
+  }, [refreshRouteCalloutScreens]);
+
+  useEffect(() => {
+    return () => {
+      if (routeCalloutMoveRafRef.current != null) {
+        cancelAnimationFrame(routeCalloutMoveRafRef.current);
+        routeCalloutMoveRafRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!routeCallouts.length) {
+      routeCalloutOpacity.setValue(0);
+      return;
+    }
+    RNAnimated.timing(routeCalloutOpacity, {
+      toValue: 1,
+      duration: 280,
+      useNativeDriver: true,
+    }).start();
+  }, [routeCallouts.length]);
+
+  useEffect(() => {
+    if (!routeCallouts.length) {
+      setRouteCalloutScreens([]);
+      return;
+    }
+    let delayed: ReturnType<typeof setTimeout> | undefined;
+    const h = InteractionManager.runAfterInteractions(() => {
+      refreshRouteCalloutScreens();
+      delayed = setTimeout(refreshRouteCalloutScreens, 450);
+    });
+    return () => {
+      h.cancel?.();
+      if (delayed) clearTimeout(delayed);
+    };
+  }, [routeCallouts, refreshRouteCalloutScreens]);
+
+  /** Show one floating card per alternative (or single primary) when routes are ready. */
+  useEffect(() => {
+    if (routeBusy) return;
+    if (calloutUserDismissedRef.current) return;
+    const md = routeByMode[travelMode];
+    if (!md) {
+      setRouteCallouts([]);
+      return;
+    }
+    setRouteCallouts(buildRouteCalloutsFromMode(md));
+  }, [routeBusy, travelMode, routeByMode]);
+
   const [showTraffic, setShowTraffic] = useState(true);
+  const [showIncidentLegend, setShowIncidentLegend] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [show3DExplorer, setShow3DExplorer] = useState(false);
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [is3DPreview, setIs3DPreview] = useState(false);
   const [mapViewport, setMapViewport] = useState<{
     latitude: number;
     longitude: number;
@@ -1246,7 +2022,7 @@ export default function DirectionsScreen() {
     return { lat: c.lat, lng: c.lng, radiusKm: 16 };
   }, [originCoords, destCoords]);
 
-  const { incidents: rawIncidents, loading: trafficLoading } = useTrafficIncidents({
+  const { incidents: rawIncidents, loading: trafficLoading, refetch: refetchTrafficIncidents } = useTrafficIncidents({
     lat: trafficIncidentsQuery?.lat ?? null,
     lng: trafficIncidentsQuery?.lng ?? null,
     radiusKm: trafficIncidentsQuery?.radiusKm ?? 15,
@@ -1286,6 +2062,8 @@ export default function DirectionsScreen() {
     if (!originCoords || !destCoords) return;
     setRouteBusy(true);
     setSelectedRouteIndex(0);
+    calloutUserDismissedRef.current = false;
+    setRouteCallouts([]);
     const from = stopsSwapped ? destCoords : originCoords;
     const to   = stopsSwapped ? originCoords! : destCoords;
 
@@ -1438,6 +2216,7 @@ export default function DirectionsScreen() {
   useEffect(() => {
     const modeData = routeByMode[travelMode];
     if (!mapRef.current) return;
+    if (is3DPreview) return;
     const selected = modeData?.alternatives[selectedRouteIndex];
     const coords = selected?.coords?.length ? selected.coords
       : modeData?.primary?.coords?.length ? modeData.primary.coords
@@ -1454,7 +2233,7 @@ export default function DirectionsScreen() {
       edgePadding: { top: topPad, right: 56, bottom: bottomPad, left: 56 },
       animated: true,
     });
-  }, [travelMode, routeByMode, selectedRouteIndex, sheetIndex, windowHeight, insets.top, insets.bottom, originCoords, destCoords]);
+  }, [travelMode, routeByMode, selectedRouteIndex, sheetIndex, windowHeight, insets.top, insets.bottom, originCoords, destCoords, is3DPreview]);
 
   function handleSelectOrigin(place: PlaceSearchResult) {
     setOriginLabel(place.name);
@@ -1502,6 +2281,25 @@ export default function DirectionsScreen() {
     : modeData?.primary ?? null;
   const activeSecs = activeData?.durationSecs ?? 0;
 
+  useEffect(() => {
+    if (!is3DPreview || !mapRef.current) return;
+    const coords = activeData?.coords;
+    if (!coords || coords.length < 2) return;
+    const baseIdx = Math.min(coords.length - 2, Math.max(0, Math.floor(coords.length * 0.18)));
+    const from = coords[baseIdx]!;
+    const to = coords[Math.min(coords.length - 1, baseIdx + 2)]!;
+    const heading = routeBearingDegrees(from, to);
+    mapRef.current.animateCamera(
+      {
+        center: from,
+        pitch: 58,
+        heading,
+        zoom: 16.2,
+      },
+      { duration: 700 },
+    );
+  }, [is3DPreview, activeData?.coords, selectedRouteIndex, travelMode]);
+
   const routePolylineLists = React.useMemo(() => {
     const lists: Array<Array<{ latitude: number; longitude: number }>> = [];
     for (const alt of alternatives) {
@@ -1513,9 +2311,32 @@ export default function DirectionsScreen() {
     return lists;
   }, [alternatives, modeData?.primary?.coords]);
 
+  /** When the route polyline first appears, refresh incidents so markers match the corridor after fit. */
+  const hadPolylineRef = React.useRef(false);
+  useEffect(() => {
+    const n = routePolylineLists.length;
+    if (n === 0) {
+      hadPolylineRef.current = false;
+      return;
+    }
+    if (!showTraffic || !trafficIncidentsQuery) return;
+    if (!hadPolylineRef.current) {
+      hadPolylineRef.current = true;
+      void refetchTrafficIncidents();
+    }
+  }, [routePolylineLists.length, showTraffic, trafficIncidentsQuery, refetchTrafficIncidents]);
+
   const incidents = React.useMemo(() => {
     const seen = new Set<string>();
     const deduped = rawIncidents.filter(inc => {
+      if (
+        !Number.isFinite(inc.latitude) ||
+        !Number.isFinite(inc.longitude) ||
+        Math.abs(inc.latitude) < 0.01 ||
+        Math.abs(inc.longitude) < 0.01
+      ) {
+        return false;
+      }
       const key = inc.id || `${inc.latitude}-${inc.longitude}-${inc.category}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -1557,10 +2378,27 @@ export default function DirectionsScreen() {
     <View style={[styles.container, { backgroundColor: T.BG }]}>
       <MapView ref={mapRef} style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : undefined}
-        mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
-        initialRegion={mapRegion} showsUserLocation showsMyLocationButton={false}
-        onRegionChange={(r) => setMapLatDelta(r.latitudeDelta)}
+        customMapStyle={undefined}
+        mapType={show3DExplorer ? 'standard' : (mapStyleType === 'standard' ? 'standard' : mapStyleType)}
+        pitchEnabled
+        rotateEnabled
+        showsBuildings
+        initialRegion={mapRegion}
+        showsUserLocation={false}
+        showsMyLocationButton={false}
+        showsCompass={!show3DExplorer}
+        showsScale={!show3DExplorer}
+        zoomControlEnabled={!show3DExplorer}
+        toolbarEnabled={!show3DExplorer}
+        onPress={() => {
+          if (Date.now() - routePolylinePressAtRef.current < 450) return;
+          calloutUserDismissedRef.current = true;
+          setRouteCallouts([]);
+        }}
+        onRegionChange={(r) => {
+          setMapLatDelta(r.latitudeDelta);
+          scheduleRouteCalloutScreenRefresh();
+        }}
         onRegionChangeComplete={r => {
           setMapLatDelta(r.latitudeDelta);
           setMapViewport(r);
@@ -1572,29 +2410,59 @@ export default function DirectionsScreen() {
             mapStyleType,
             heatmapFilter,
           });
+          if (routeCalloutsRef.current.length) {
+            refreshRouteCalloutScreens();
+          }
         }}>
 
         {originCoords && (
-          <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.originDot}><View style={styles.originDotInner} /></View>
+          <Marker coordinate={{ latitude: originCoords.lat, longitude: originCoords.lng }} anchor={{ x: 0.35, y: 0.5 }}>
+            <View style={styles.originMarkerRow}>
+              <View style={styles.originDot}>
+                <View style={styles.originDotInner} />
+              </View>
+              <View style={styles.originHeadingChev} />
+            </View>
           </Marker>
         )}
         {destCoords && <Marker coordinate={{ latitude: destCoords.lat, longitude: destCoords.lng }} pinColor="#FF4444" />}
 
+        {/* Glow halo behind selected route in 3D explorer */}
+        {show3DExplorer && activeData?.coords?.length ? (
+          <Polyline
+            key="glow-3d"
+            coordinates={activeData.coords}
+            strokeColor="rgba(74, 144, 226, 0.22)"
+            strokeWidth={22}
+            lineCap="round"
+            lineJoin="round"
+            zIndex={0}
+          />
+        ) : null}
+
         {alternatives.map((alt, i) => {
           if (!alt.coords?.length) return null;
           const isSelected = i === selectedRouteIndex;
+          const is3DActive = show3DExplorer && isSelected;
           return (
             <Polyline
               key={`${travelMode}-alt-${i}`}
               coordinates={alt.coords}
-              strokeColor={isSelected ? '#4A90E2' : 'rgba(74, 144, 226, 0.34)'}
-              strokeWidth={isSelected ? 9 : 7}
+              strokeColor={is3DActive ? '#4A90E2' : isSelected ? '#4A90E2' : 'rgba(74, 144, 226, 0.34)'}
+              strokeWidth={is3DActive ? 12 : isSelected ? 9 : 7}
               lineCap="round"
               lineJoin="round"
               zIndex={isSelected ? 2 : 0}
               tappable
-              onPress={() => setSelectedRouteIndex(i)}
+              onPress={() => {
+                routePolylinePressAtRef.current = Date.now();
+                calloutUserDismissedRef.current = false;
+                setSelectedRouteIndex(i);
+                const md = routeByMode[travelMode];
+                if (md && !routeCalloutsRef.current.length) {
+                  setRouteCallouts(buildRouteCalloutsFromMode(md));
+                }
+              }}
             />
           );
         })}
@@ -1604,18 +2472,21 @@ export default function DirectionsScreen() {
             key={travelMode}
             coordinates={activeData.coords}
             strokeColor="#4A90E2"
-            strokeWidth={9}
+            strokeWidth={show3DExplorer ? 12 : 9}
             lineCap="round"
             lineJoin="round"
             zIndex={2}
+            tappable
+            onPress={() => {
+              routePolylinePressAtRef.current = Date.now();
+              calloutUserDismissedRef.current = false;
+              const md = routeByMode[travelMode];
+              if (md && !routeCalloutsRef.current.length) {
+                setRouteCallouts(buildRouteCalloutsFromMode(md));
+              }
+            }}
           />
         ) : null}
-
-        {(alternatives[selectedRouteIndex]?.highRiskCoords as any[] ?? []).map((coord: any, i: number) => (
-          <Marker key={`hs-${i}`} coordinate={coord} anchor={{ x: 0.5, y: 1.0 }} tracksViewChanges={false}>
-            <Text style={{ fontSize: 16 }}>⚠️</Text>
-          </Marker>
-        ))}
 
         {heatmapFilter !== 'off' && crashPoints.length > 0 && (
           <Heatmap points={crashPoints} opacity={0.72} radius={20}
@@ -1632,14 +2503,88 @@ export default function DirectionsScreen() {
               key={stableKey}
               incident={inc}
               latDelta={mapLatDelta}
-              zIndex={900 + idx}
+              zIndex={2000 + idx}
               onPress={() => setSelectedIncident(inc)}
             />
           );
         })}
       </MapView>
 
-      {/* ── Vignette gradients ── */}
+      {/* Route tooltips: one per alternative; fixed width/anchor height avoids layout-driven jump while panning. */}
+      {routeCallouts.length > 0 &&
+      routeCalloutScreens.some(s => s != null) &&
+      !show3DExplorer ? (
+        <View pointerEvents="box-none" style={styles.routeCalloutOverlayFill}>
+          {routeCallouts
+            .map((rc, idx) => ({ rc, idx, screen: routeCalloutScreens[idx] }))
+            .filter((row): row is { rc: RouteCalloutState; idx: number; screen: { x: number; y: number } } => row.screen != null)
+            .sort((a, b) => {
+              const aSel = a.rc.routeIndex === selectedRouteIndex ? 1 : 0;
+              const bSel = b.rc.routeIndex === selectedRouteIndex ? 1 : 0;
+              return aSel - bSel;
+            })
+            .map(({ rc, screen }) => {
+            const nCards = routeCallouts.length;
+            const staggerX =
+              nCards > 1 ? (rc.routeIndex - (nCards - 1) / 2) * 22 : 0;
+            const selected = rc.routeIndex === selectedRouteIndex;
+            const cardBg = selected ? 'rgba(74, 144, 226, 0.92)' : 'rgba(42, 42, 42, 0.92)';
+            const mainCol = '#FFFFFF';
+            const subCol = selected ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.55)';
+            const iconCol = selected ? '#FFFFFF' : 'rgba(255,255,255,0.6)';
+            const tailCol = selected ? 'rgba(74, 144, 226, 0.92)' : 'rgba(42, 42, 42, 0.92)';
+            const safePct =
+              rc.safetyScore != null && Number.isFinite(rc.safetyScore)
+                ? Math.max(0, Math.min(100, 100 - Math.round(rc.safetyScore)))
+                : null;
+            return (
+              <RNAnimated.View
+                key={`callout-${rc.routeIndex}`}
+                pointerEvents="none"
+                style={[
+                  styles.routeCalloutOverlayAnchor,
+                  {
+                    left: screen.x,
+                    top: screen.y,
+                    opacity: routeCalloutOpacity,
+                    transform: [
+                      { translateX: -ROUTE_CALLOUT_W / 2 + staggerX },
+                      { translateY: -ROUTE_CALLOUT_ANCHOR_H },
+                    ],
+                  },
+                ]}
+              >
+                <View style={[styles.routeCalloutCluster, { width: ROUTE_CALLOUT_W }]}>
+                  <View
+                    style={[
+                      styles.routeCalloutCard,
+                      {
+                        backgroundColor: cardBg,
+                        borderWidth: 0,
+                        shadowColor: '#000',
+                      },
+                    ]}
+                  >
+                    <Ionicons name="car" size={15} color={iconCol} style={styles.routeCalloutIcon} />
+                    <View style={styles.routeCalloutTextCol}>
+                      <Text style={[styles.routeCalloutMain, { color: mainCol }]} numberOfLines={1}>
+                        {fmtSecs(rc.durationSecs)}
+                      </Text>
+                      <Text style={[styles.routeCalloutSub, { color: subCol }]} numberOfLines={1}>
+                        {safePct != null ? `${safePct}% safe` : ''}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={[styles.routeCalloutTail, { borderTopColor: tailCol }]} />
+                </View>
+              </RNAnimated.View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {/* ── Vignette gradients disabled for no-blue-gradient preview ── */}
+      {/*
       <LinearGradient
         colors={['rgba(3,4,39,0.90)', 'transparent']}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 140, zIndex: 5 }}
@@ -1650,6 +2595,7 @@ export default function DirectionsScreen() {
         style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 240, zIndex: 5 }}
         pointerEvents="none"
       />
+      */}
 
       {/* ── Incident detail popup ── */}
       <IncidentDetailPopup
@@ -1658,15 +2604,17 @@ export default function DirectionsScreen() {
       />
 
       {/* ── Back button ── */}
+      {!show3DExplorer && (
       <Pressable
         style={[styles.backBtn, { top: insets.top + 10 }]}
         onPress={() => router.back()}
       >
         <Ionicons name="arrow-back" size={20} color={TEXT_PRI} />
       </Pressable>
+      )}
 
       {/* ── Top search card ── */}
-      <View style={[styles.topRouteCard, { top: insets.top + 10, backgroundColor: NAVY_GLASS, borderColor: GLASS_BORDER }]}>
+      <View style={[styles.topRouteCard, { top: insets.top + 10, backgroundColor: NAVY_GLASS, borderColor: GLASS_BORDER, opacity: show3DExplorer ? 0 : 1 }]} pointerEvents={show3DExplorer ? 'none' : 'auto'}>
         <View style={styles.topRouteInner}>
           <View style={styles.topRouteDotCol}>
             <View style={styles.originDotSmall} />
@@ -1779,8 +2727,10 @@ export default function DirectionsScreen() {
         )}
       </View>
 
-      {/* ── Map chrome (right rail): z-index under bottom sheet so sheet covers when expanded ── */}
-      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.BG, zIndex: 6, elevation: 6 }}>
+      {/* ── Map chrome (right rail): hidden during 3D Steps flyover ── */}
+      {!show3DExplorer && (
+        <>
+          <View style={{ position: 'absolute', right: 14, top: TOP_BTNS, borderRadius: 14, overflow: 'hidden', width: 42, backgroundColor: T.BG, zIndex: 6, elevation: 6 }}>
         <Pressable style={styles.zoomBtn} onPress={() => doZoom(0.5)}>
           <Ionicons name="add" size={22} color="#FFFFFF" />
         </Pressable>
@@ -1851,6 +2801,17 @@ export default function DirectionsScreen() {
         </Pressable>
       </View>
 
+      <View style={{ position: 'absolute', right: 14, top: TOP_BTNS + 308, zIndex: 6, elevation: 6 }}>
+        <Pressable
+          style={[styles.heatmapInner, { backgroundColor: T.BG }]}
+          onPress={() => setShowIncidentLegend(true)}
+        >
+          <Ionicons name="list-outline" size={14} color="#FFFFFF" />
+        </Pressable>
+      </View>
+        </>
+      )}
+
       {/* ── Modals ── */}
       <Modal visible={showHeatmapModal} transparent animationType="slide" onRequestClose={() => setShowHeatmapModal(false)}>
         <Pressable style={hm.backdrop} onPress={() => setShowHeatmapModal(false)}>
@@ -1869,6 +2830,32 @@ export default function DirectionsScreen() {
                 );
               })}
             </View>
+            <Pressable
+              style={[hm.mapStyle3dRow, { backgroundColor: T.ITEM, borderColor: is3DPreview ? T.ACCENT : T.DIVIDER }]}
+              onPress={() => {
+                setIs3DPreview((prev) => {
+                  const next = !prev;
+                  if (next) setMapStyleType('standard');
+                  return next;
+                });
+                setShowHeatmapModal(false);
+              }}
+            >
+              <View style={[hm.mapStyle3dIcon, { backgroundColor: is3DPreview ? 'rgba(26,188,147,0.16)' : T.BG }]}>
+                <Ionicons name="cube-outline" size={18} color={is3DPreview ? T.ACCENT : T.TEXT_MUT} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[hm.mapStyle3dTitle, { color: is3DPreview ? T.ACCENT : T.TEXT_PRI }]}>3D Preview</Text>
+                <Text style={[hm.mapStyle3dSub, { color: T.TEXT_MUT }]}>
+                  Tilted camera here; full flyover with insights is under Steps.
+                </Text>
+              </View>
+              <Ionicons
+                name={is3DPreview ? 'checkmark-circle' : 'chevron-forward'}
+                size={18}
+                color={is3DPreview ? T.ACCENT : T.TEXT_MUT}
+              />
+            </Pressable>
             <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
             <View style={hm.header}>
               <Text style={[hm.title, { color: T.TEXT_PRI }]}>Safety Heatmap</Text>
@@ -1993,9 +2980,73 @@ export default function DirectionsScreen() {
         originLng={originCoords?.lng}
       />
 
+      <Modal visible={showIncidentLegend} transparent animationType="fade" onRequestClose={() => setShowIncidentLegend(false)}>
+        <Pressable style={hm.backdrop} onPress={() => setShowIncidentLegend(false)}>
+          <Pressable style={[hm.card, { backgroundColor: T.BG, borderWidth: 1, borderColor: T.DIVIDER }]} onPress={() => {}}>
+            <Text style={[hm.title, { color: TEXT_PRI }]}>Live Incident Types</Text>
+            <Text style={[hm.subtitle, { color: TEXT_MUT }]}>Map marker meaning</Text>
+            <View style={[hm.filterList, { backgroundColor: T.ITEM }]}>
+              {[
+                { cat: 6, label: 'Traffic Jam' },
+                { cat: 1, label: 'Accident' },
+                { cat: 3, label: 'Hazard' },
+                { cat: 8, label: 'Road Closed' },
+                { cat: 9, label: 'Road Works' },
+                { cat: 11, label: 'Flooding' },
+              ].map((row, i, arr) => (
+                <View key={row.label}>
+                  <View style={hm.filterRow}>
+                    <View style={[hm.filterIcon, { backgroundColor: 'transparent' }]}>
+                      <IncidentBubble
+                        incident={{
+                          id: `legend-${row.cat}`,
+                          category: row.cat,
+                          type: row.label,
+                          latitude: 0,
+                          longitude: 0,
+                          description: '',
+                          delay_seconds: 0,
+                          road: [],
+                        }}
+                        latDelta={0.02}
+                      />
+                    </View>
+                    <Text style={[hm.filterLabel, { color: TEXT_PRI, flex: 1 }]}>{row.label}</Text>
+                  </View>
+                  {i < arr.length - 1 && <View style={[hm.filterDiv, { backgroundColor: DIVIDER }]} />}
+                </View>
+              ))}
+            </View>
+            <Pressable style={[styles.doneBtn, { backgroundColor: SEAFOAM, marginTop: 16 }]} onPress={() => setShowIncidentLegend(false)}>
+              <Text style={styles.doneBtnText}>Close</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── 3D Route Explorer (replaces old Steps modal) ── */}
+      <Route3DExplorer
+        visible={show3DExplorer}
+        onClose={() => {
+          setShow3DExplorer(false);
+          if (mapRef.current && activeData?.coords?.length) {
+            mapRef.current.fitToCoordinates(activeData.coords, {
+              edgePadding: { top: insets.top + 158, right: 56, bottom: Math.round(windowHeight * 0.2) + insets.bottom, left: 56 },
+              animated: true,
+            });
+          }
+        }}
+        activeData={activeData}
+        mapRef={mapRef}
+        originCoords={originCoords}
+        destCoords={destCoords}
+        travelMode={travelMode}
+        stopsSwapped={stopsSwapped}
+      />
+
       {/* ── Floating bottom sheet ── */}
       <Animated.View
-        pointerEvents="box-none"
+        pointerEvents={show3DExplorer ? 'none' : 'box-none'}
         style={{
           position: 'absolute',
           left: FLOAT_SIDE,
@@ -2004,6 +3055,7 @@ export default function DirectionsScreen() {
           top: 0,
           zIndex: 32,
           elevation: 32,
+          opacity: show3DExplorer ? 0 : 1,
         }}
       >
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFillObject, { overflow: 'hidden', borderRadius: FLOAT_RADIUS }]}>
@@ -2062,7 +3114,11 @@ export default function DirectionsScreen() {
                   <Pressable
                     key={mode}
                     style={[styles.modeOption, active && { backgroundColor: T.BG }]}
-                    onPress={() => { setTravelMode(mode); setSelectedRouteIndex(0); }}
+                    onPress={() => {
+                      calloutUserDismissedRef.current = false;
+                      setTravelMode(mode);
+                      setSelectedRouteIndex(0);
+                    }}
                   >
                     {active && (
                       <LinearGradient
@@ -2109,8 +3165,15 @@ export default function DirectionsScreen() {
             <StackedRouteDeck
               alternatives={alternatives}
               selectedRouteIndex={selectedRouteIndex}
-              onSelectRoute={setSelectedRouteIndex}
-              onShowDetails={() => setShowDetailsModal(true)}
+              onSelectRoute={i => {
+                calloutUserDismissedRef.current = false;
+                setSelectedRouteIndex(i);
+                const md = routeByMode[travelMode];
+                if (md && !routeCalloutsRef.current.length) {
+                  setRouteCallouts(buildRouteCalloutsFromMode(md));
+                }
+              }}
+              onShowDetails={() => setShow3DExplorer(true)}
               onShowInsights={() => {
                 setRouteInsightsPayload({
                   activeData: activeData ?? null,
@@ -2119,7 +3182,7 @@ export default function DirectionsScreen() {
                   destLat: destCoords?.lat,
                   destLng: destCoords?.lng,
                 });
-                router.push('/route-insights');
+                router.push('/route-insights' as Href);
               }}
               travelMode={travelMode}
               originCoords={originCoords}
@@ -2175,8 +3238,20 @@ const styles = StyleSheet.create({
   floatBtnInner: { flex: 1, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
   heatmapInner: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 22, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'transparent' },
   heatmapText: { fontSize: 12, fontWeight: '600' },
+  originMarkerRow: { flexDirection: 'row', alignItems: 'center' },
   originDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(74,144,226,0.3)', justifyContent: 'center', alignItems: 'center' },
   originDotInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4A90E2', borderWidth: 2, borderColor: '#fff' },
+  originHeadingChev: {
+    width: 0,
+    height: 0,
+    marginLeft: -1,
+    borderTopWidth: 6,
+    borderBottomWidth: 6,
+    borderLeftWidth: 9,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderLeftColor: '#4A90E2',
+  },
   sheetContent: { paddingHorizontal: 14, paddingTop: 6 },
 
   // Greeting row (mirrors index.tsx)
@@ -2234,6 +3309,45 @@ const styles = StyleSheet.create({
   dragHandle: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
   doneBtn: { borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   doneBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  routeCalloutOverlayFill: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 22,
+    elevation: 12,
+  },
+  routeCalloutOverlayAnchor: {
+    position: 'absolute',
+  },
+  routeCalloutCluster: { alignItems: 'center', paddingBottom: 3 },
+  routeCalloutCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    borderRadius: 10,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  routeCalloutIcon: { marginRight: 4 },
+  routeCalloutTextCol: {
+    justifyContent: 'center',
+    flexShrink: 1,
+  },
+  routeCalloutMain: { fontSize: 12, fontWeight: '800', letterSpacing: -0.15 },
+  routeCalloutSub: { fontSize: 10, fontWeight: '600', marginTop: 1 },
+  routeCalloutTail: {
+    marginTop: -1,
+    alignSelf: 'center',
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 7,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
 });
 
 // ─── Deck styles ──────────────────────────────────────────────────────────────
@@ -2323,6 +3437,19 @@ const hm = StyleSheet.create({
   mapStyleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 8 },
   mapStyleBtn: { flex: 1, borderRadius: 14, paddingVertical: 12, alignItems: 'center', gap: 5, borderWidth: 1.5, borderColor: 'transparent' },
   mapStyleLabel: { fontSize: 11, fontWeight: '600' },
+  mapStyle3dRow: {
+    borderRadius: 14,
+    borderWidth: 1.2,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 6,
+  },
+  mapStyle3dIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  mapStyle3dTitle: { fontSize: 13, fontWeight: '700' },
+  mapStyle3dSub: { fontSize: 11, marginTop: 1 },
   sectionDiv: { height: 1, marginVertical: 18 },
   filterList: { borderRadius: 18, overflow: 'hidden' },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 16, paddingVertical: 14 },

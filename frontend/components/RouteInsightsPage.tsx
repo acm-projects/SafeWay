@@ -50,13 +50,16 @@ export interface ModeRouteData {
 }
 
 // ─── Design tokens (matching app theme) ──────────────────────────────────────
+// Previous navy theme: NAVY='#030427', NAVY_CARD='#0D0E3A', NAVY_ITEM='#161750', GLASS_BORDER='#1A1B4D'
 const NAVY        = '#030427';
 const NAVY_CARD   = '#0D0E3A';
 const NAVY_ITEM   = '#161750';
 const GLASS_BORDER = '#1A1B4D';
 const SEAFOAM     = '#1ABC93';
 const TEXT_PRI    = '#FFFFFF';
-const TEXT_MUT    = '#6B7FA8';
+const TEXT_MUT    = '#7A8FA6';
+const TEXT_SUB    = '#8A9BBF';
+const SCALE_COLORS = ['#000000', '#4B1D7E', '#8D2E6C', '#D4573A', '#F6C23E'] as const;
 
 // ─── INFO content ─────────────────────────────────────────────────────────────
 const INFO_CONTENT: Record<string, { title: string; body: string }> = {
@@ -69,16 +72,11 @@ const INFO_CONTENT: Record<string, { title: string; body: string }> = {
       "This helps normalize crash rates — a highway with more crashes isn't necessarily more dangerous per vehicle-mile than a quiet street.",
   },
   shap: {
-    title: 'SHAP — Risk Factor Explanation',
+    title: 'What makes this route safer or riskier?',
     body:
-      'SHAP (SHapley Additive exPlanations) is an AI interpretability technique that shows how much each feature contributed to a prediction.\n\n' +
-      'For each intersection on your route, the model identifies the top 3 factors that most increased its risk score. These are then aggregated across all intersections on the route.\n\n' +
-      'Common factors include:\n' +
-      '• High crash history — many past crashes at that intersection\n' +
-      '• Dark conditions — poor lighting correlated with higher risk\n' +
-      '• Pedestrian crashes — history of pedestrian-involved incidents\n' +
-      '• Speed camera violations — frequent speeding in the area\n\n' +
-      'The percentage shows how many route intersections flagged that factor.',
+      'SafeWay scores your route segment by segment. For each risky stretch, the model asks which real-world patterns best explain the score. Those explanations are summarized in the factors below.\n\n' +
+      'The % on each row is not a second safety grade. It means roughly what share of assessed segments on this route flagged that factor when we explained the model (standard SHAP-style attribution).\n\n' +
+      'Examples: crash history, lighting, pedestrian-related risk, speed patterns, road layout. Use this as transparency into what the model reacts to—not a guarantee of conditions on the ground.',
   },
 };
 
@@ -89,7 +87,21 @@ const STAT_INFO: Record<string, string> = {
     'Estimated vehicles per hour, derived from the AADT daily average using time-of-day distribution factors. Dashed = projected for the rest of today.',
   TRAVEL_TIME:
     'Estimated total travel time from origin to destination under current traffic conditions.',
+  SCORED_SEGMENTS:
+    'Route Segments evaluates structural road safety for each segment — factoring in pavement condition, lane geometry, intersection density, and historical incident patterns.',
 };
+
+function extractSegmentRiskValues(segmentRisks: unknown): number[] {
+  if (!Array.isArray(segmentRisks) || segmentRisks.length === 0) return [];
+  const first = segmentRisks[0] as any;
+  if (typeof first === 'number') {
+    return (segmentRisks as number[]).filter(n => typeof n === 'number' && Number.isFinite(n));
+  }
+  if (first && typeof first === 'object' && typeof first.risk === 'number') {
+    return (segmentRisks as { risk: number }[]).map(s => s.risk).filter(n => Number.isFinite(n));
+  }
+  return [];
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtSecs(s: number): string {
@@ -458,12 +470,15 @@ function AvgSpeedGauge({ mph, accent }: { mph: number; accent: string }) {
 function ShapRiskFactors({ factors, infoKey, setInfoKey }: { factors: any[]; infoKey: string | null; setInfoKey: (k: string | null) => void }) {
   return (
     <View style={[s.statCardWide]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-        <Text style={[s.statLabel, { color: TEXT_MUT }]}>🔍  RISK FACTORS (SHAP)</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <Text style={[s.statLabel, { color: TEXT_MUT }]}>What shaped this safety score?</Text>
         <Pressable onPress={() => setInfoKey(infoKey === 'shap' ? null : 'shap')} hitSlop={8}>
           <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
         </Pressable>
       </View>
+      <Text style={{ color: TEXT_SUB, fontSize: 11, lineHeight: 16, marginBottom: 12 }}>
+        Bars show how often each pattern showed up among assessed segments—not a separate safety rating.
+      </Text>
 
       {infoKey === 'shap' && (
         <View style={s.infoBubble}>
@@ -476,11 +491,15 @@ function ShapRiskFactors({ factors, infoKey, setInfoKey }: { factors: any[]; inf
           const label = f.label ?? f.factor ?? `Factor ${i + 1}`;
           const pct = f.pct ?? (f.weight != null ? Math.round(f.weight * 100) : 0);
           const barColor = pct > 50 ? '#FF4444' : pct > 25 ? '#FFA500' : SEAFOAM;
+          const pctNote = f.pct != null ? 'of assessed segments' : 'relative weight';
           return (
             <View key={i}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                 <Text style={{ color: TEXT_PRI, fontSize: 13, fontWeight: '600', flex: 1 }} numberOfLines={1}>{label}</Text>
-                <Text style={{ color: barColor, fontSize: 12, fontWeight: '700' }}>{pct.toFixed(0)}%</Text>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: barColor, fontSize: 12, fontWeight: '800' }}>{pct.toFixed(0)}%</Text>
+                  <Text style={{ color: TEXT_MUT, fontSize: 9, fontWeight: '600', marginTop: 1 }}>{pctNote}</Text>
+                </View>
               </View>
               <View style={{ height: 6, borderRadius: 3, backgroundColor: '#FFFFFF14', overflow: 'hidden' }}>
                 <View style={{ height: '100%', width: `${Math.min(100, pct)}%`, backgroundColor: barColor, borderRadius: 3 }} />
@@ -513,7 +532,13 @@ function RouteSourceCard({ routeSource }: { routeSource: 'google' | 'safeway' })
 }
 
 // ─── Metrics body (shared by modal + /route-insights screen) ────────────────
-export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRouteData | null }) {
+export function RouteInsightsMetricsBody({
+  activeData,
+  activeTab = 'overview',
+}: {
+  activeData: ModeRouteData | null;
+  activeTab?: 'overview' | 'aadt' | 'peak' | 'segments' | 'hotspots';
+}) {
   const { T } = useTheme();
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [tooltipVisible, setTooltipVisible] = useState<string | null>(null);
@@ -588,6 +613,18 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
     : -1;
   const peakFlowNow = peakFlowHourly[nowHour]?.val ?? 0;
 
+  // ── Scored segments (API segment risks) ───────────────────────────────────
+  const segmentRiskValues = useMemo(
+    () => extractSegmentRiskValues(activeData?.segmentRisks as unknown),
+    [activeData?.segmentRisks],
+  );
+  const hasSegScores = segmentRiskValues.length > 0;
+  const segMin = hasSegScores ? Math.min(...segmentRiskValues) : null;
+  const segMax = hasSegScores ? Math.max(...segmentRiskValues) : null;
+  const segMean = hasSegScores
+    ? Math.round(segmentRiskValues.reduce((a, b) => a + b, 0) / segmentRiskValues.length)
+    : null;
+
   // ── SHAP factors ──────────────────────────────────────────────────────────
   const shapFactors = Array.isArray(activeData?.topRiskFactors) ? (activeData!.topRiskFactors as any[]) : [];
 
@@ -597,7 +634,7 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
   return (
     <>
             {/* ── Safety Score Hero with route summary ── */}
-            {safetyPct != null ? (
+            {activeTab === 'overview' && safetyPct != null ? (
               <LinearGradient
                 colors={['#0D3B2E', '#0A1F3A', '#1A1B4D']}
                 start={{ x: 0, y: 0 }}
@@ -635,7 +672,7 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   </View>
                 </View>
               </LinearGradient>
-            ) : (
+            ) : activeTab === 'overview' ? (
               <View style={[s.heroCard, { backgroundColor: T.CARD, borderColor: GLASS_BORDER }]}>
                 <View style={s.heroRow}>
                   <View style={s.heroCircle}>
@@ -654,10 +691,10 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   </View>
                 </View>
               </View>
-            )}
+            ) : null}
 
             {/* ── AADT Hourly Graph (moved to top) ── */}
-            <View style={s.statCardWide}>
+            {activeTab === 'aadt' && <View style={s.statCardWide}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -719,10 +756,10 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   <Text style={{ color: TEXT_MUT, fontSize: 12 }}>No route length — cannot estimate AADT</Text>
                 </View>
               )}
-            </View>
+            </View>}
 
             {/* ── Peak Flow Hourly Graph (moved to top alongside AADT) ── */}
-            <View style={s.statCardWide}>
+            {activeTab === 'peak' && <View style={s.statCardWide}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -751,7 +788,7 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                 {hasAadt && (
                   <View style={{ backgroundColor: aadtSource === 'backend' ? '#22C55E22' : '#A855F722', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 }}>
                     <Text style={{ color: aadtSource === 'backend' ? '#22C55E' : '#C084FC', fontSize: 11, fontWeight: '700' }}>
-                      {aadtSource === 'backend' ? '✓ Live AADT' : '~ Estimated'}
+                      {aadtSource === 'backend' ? '✓ Live Flow' : '~ Estimated'}
                     </Text>
                   </View>
                 )}
@@ -776,10 +813,68 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   <Text style={{ color: TEXT_MUT, fontSize: 12 }}>Need AADT (or route distance) for flow curve</Text>
                 </View>
               )}
-            </View>
+            </View>}
+
+            {/* ── Path Integrity (backend segment risk) ── */}
+            {activeTab === 'segments' && <View style={s.statCardWide}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>◧  ROUTE SEGMENTS</Text>
+                    <Pressable
+                      onPress={() => setTooltipVisible(tooltipVisible === 'SCORED_SEGMENTS' ? null : 'SCORED_SEGMENTS')}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="information-circle-outline" size={15} color={TEXT_MUT} />
+                    </Pressable>
+                  </View>
+
+                  {tooltipVisible === 'SCORED_SEGMENTS' && (
+                    <View style={s.infoBubble}>
+                      <Text style={s.infoBubbleText}>{STAT_INFO.SCORED_SEGMENTS}</Text>
+                    </View>
+                  )}
+
+                  <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>
+                    {hasSegScores ? segmentRiskValues.length.toLocaleString() : '–'}
+                  </Text>
+                  <Text style={{ color: TEXT_MUT, fontSize: 10, marginTop: 2 }}>
+                    {hasSegScores ? 'segments with model risk scores' : 'No segment geometry in payload — open from Directions after a fresh route'}
+                  </Text>
+                  <View style={{ marginTop: 10, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: GLASS_BORDER }}>
+                    <LinearGradient colors={[...SCALE_COLORS]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ height: 10 }} />
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                    <Text style={{ color: TEXT_MUT, fontSize: 10 }}>0</Text>
+                    <Text style={{ color: TEXT_MUT, fontSize: 10 }}>250</Text>
+                  </View>
+                </View>
+
+                {hasSegScores && (
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={{ color: TEXT_MUT, fontSize: 10 }}>mean · range</Text>
+                    <Text style={{ color: TEXT_PRI, fontSize: 15, fontWeight: '800' }}>
+                      {segMean} · {Math.round(segMin!)}–{Math.round(segMax!)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {hasSegScores ? (
+                <Text style={{ color: TEXT_MUT, fontSize: 11, lineHeight: 16 }}>
+                  On the Route Insights map, select "Route Segments" to view the structural segment risk legend colors along your route.
+                </Text>
+              ) : (
+                <View style={{ minHeight: 44, justifyContent: 'center' }}>
+                  <Text style={{ color: TEXT_MUT, fontSize: 12 }}>
+                    When the API returns segment polylines, counts and averages appear here automatically.
+                  </Text>
+                </View>
+              )}
+            </View>}
 
             {/* ── Avg Speed Gauge (moved lower) ── */}
-            <LinearGradient
+            {activeTab === 'overview' && <LinearGradient
               colors={['#1E1B4B', '#312E81']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
@@ -823,18 +918,18 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   </View>
                 </View>
               </View>
-            </LinearGradient>
+            </LinearGradient>}
 
             {/* ── SHAP Risk Factors ── */}
-            {shapFactors.length > 0 && (
+            {activeTab === 'overview' && shapFactors.length > 0 && (
               <ShapRiskFactors factors={shapFactors} infoKey={infoKey} setInfoKey={setInfoKey} />
             )}
 
             {/* ── Route Source Badge ── */}
-            {activeData?.routeSource && <RouteSourceCard routeSource={activeData.routeSource} />}
+            {activeTab === 'overview' && activeData?.routeSource && <RouteSourceCard routeSource={activeData.routeSource} />}
 
             {/* ── Travel Time Card ── */}
-            <View style={s.statCardWide}>
+            {activeTab === 'overview' && <View style={s.statCardWide}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>⏱  TRAVEL TIME</Text>
                 <Pressable onPress={() => setTooltipVisible(tooltipVisible === 'TRAVEL_TIME' ? null : 'TRAVEL_TIME')} hitSlop={8}>
@@ -855,20 +950,20 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
               </View>
 
               <View style={{ marginTop: 12 }}>
-                <View style={{ height: 6, backgroundColor: '#FFFFFF18', borderRadius: 3, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', width: `${Math.round((nowHour / 23) * 100)}%`, backgroundColor: '#4A90E2', borderRadius: 3 }} />
+                  <View style={{ height: 6, backgroundColor: '#FFFFFF18', borderRadius: 3, overflow: 'hidden' }}>
+                    <View style={{ height: '100%', width: `${Math.round((nowHour / 23) * 100)}%`, backgroundColor: SEAFOAM, borderRadius: 3 }} />
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
                   <Text style={{ color: TEXT_MUT, fontSize: 10 }}>Depart now</Text>
-                  <Text style={{ color: '#4A90E2', fontSize: 10, fontWeight: '600' }}>
+                    <Text style={{ color: SEAFOAM, fontSize: 10, fontWeight: '600' }}>
                     Arrive ~{effectiveDurationSecs > 0 ? arrivalFrom(effectiveDurationSecs) : '–'}
                   </Text>
                 </View>
               </View>
-            </View>
+            </View>}
 
             {/* ── Hot Spots + Distance stats row ── */}
-            <View style={{ flexDirection: 'row', gap: 12 }}>
+            {(activeTab === 'overview' || activeTab === 'hotspots') && <View style={{ flexDirection: 'row', gap: 12 }}>
               <View style={s.statCardHalf}>
                 <Text style={[s.statLabel, { color: T.TEXT_MUT }]}>📏  DISTANCE</Text>
                 <Text style={[s.statValue, { color: TEXT_PRI, fontSize: 22 }]}>{fmtDist(distM)}</Text>
@@ -880,7 +975,7 @@ export function RouteInsightsMetricsBody({ activeData }: { activeData: ModeRoute
                   {(activeData?.nHighRisk ?? 0) === 0 ? '✅ Clear route' : (activeData?.nHighRisk ?? 0) > 3 ? '⚠ Use caution' : 'Manageable'}
                 </Text>
               </View>
-            </View>
+            </View>}
 
     </>
   );
@@ -926,7 +1021,7 @@ export function RouteInsightsPage({
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ gap: 14, paddingBottom: 30 }}
           >
-            <RouteInsightsMetricsBody activeData={activeData} />
+            <RouteInsightsMetricsBody activeData={activeData} activeTab="overview" />
           </ScrollView>
         </View>
       </View>

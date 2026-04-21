@@ -74,8 +74,8 @@ export default function LoginScreen() {
   // Light mode: purple-accented white theme
   const inputBg       = T.isDark ? '#F0F4F8' : '#EEF0F8';
   const inputColor    = '#1A2B3C';
-  const googleBtnBg   = T.isDark ? '#141D2E' : '#FFFFFF';
-  const googleBorder  = T.isDark ? '#1E2D45' : '#DDE0F0';
+  const googleBtnBg   = T.isDark ? '#1A1A1A' : '#FFFFFF'; /* Previous: '#141D2E' */
+  const googleBorder  = T.isDark ? '#2A2A2A' : '#DDE0F0'; /* Previous: '#1E2D45' */
   const googleTextCol = T.isDark ? '#FFFFFF' : T.TEXT_PRI;
   const dividerCol    = T.isDark ? '#1E2D45' : '#DDE0F0';
   const faceBorderCol = T.isDark ? '#FFFFFF' : T.PURPLE;

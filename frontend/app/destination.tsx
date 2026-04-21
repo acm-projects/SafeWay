@@ -25,7 +25,6 @@ import { useAuth } from '@/providers/auth-provider';
 import { useTheme } from '@/providers/theme-context';
 import { useCrashHeatmap } from '@/lib/useCrashHeatmap';
 import type { HeatmapFilter } from '@/lib/useCrashHeatmap';
-import { GOOGLE_MAPS_DARK_STYLE } from '@/constants/googleMapDarkStyle';
 import { loadMapSession, scheduleSaveMapSession } from '@/lib/mapSession';
 import MapPegmanStreetView from '@/components/MapPegmanStreetView';
 
@@ -46,6 +45,9 @@ const _apiBase = _resolveBase(
 );
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
+// Previous navy theme (preserved for easy rollback):
+// const NAVY = '#030427'; const NAVY_GLASS = '#06072E'; const NAVY_CARD = '#0D0E3A';
+// const NAVY_ITEM = '#161750'; const GLASS_BORDER = '#1A1B4D'; const DIVIDER = '#1A1B4D';
 const NAVY           = '#030427';
 const NAVY_GLASS     = '#06072E';
 const NAVY_CARD      = '#0D0E3A';
@@ -53,12 +55,11 @@ const NAVY_ITEM      = '#161750';
 const GLASS_BORDER   = '#1A1B4D';
 const SEAFOAM        = '#1ABC93';
 const SEAFOAM_DIM    = 'rgba(26, 188, 147, 0.15)';
-// Midnight Emerald palette for the View Routes button
 const EMERALD_DEEP   = '#064E3B';
 const EMERALD_MID    = '#047857';
 const EMERALD_LIGHT  = '#059669';
 const TEXT_PRI       = '#FFFFFF';
-const TEXT_MUT       = '#6B7FA8';
+const TEXT_MUT       = '#7A8FA6';
 const TEXT_SUB       = '#8A9BBF';
 const DIVIDER        = '#1A1B4D';
 const GOLD           = '#FFD700';
@@ -292,6 +293,7 @@ export default function DestinationScreen() {
   const [heatmapFilter, setHeatmapFilter] = useState<HeatmapFilter | 'off'>('off');
   const [showHeatmapModal, setShowHeatmapModal] = useState(false);
   const [mapStyleType, setMapStyleType] = useState<'standard'|'satellite'|'hybrid'|'terrain'>('standard');
+  const [is3DPreview, setIs3DPreview] = useState(false);
   const [mapViewport, setMapViewport] = useState<{
     latitude: number;
     longitude: number;
@@ -339,6 +341,16 @@ export default function DestinationScreen() {
   useEffect(() => {
     scheduleSaveMapSession({ mapStyleType, heatmapFilter });
   }, [mapStyleType, heatmapFilter]);
+
+  useEffect(() => {
+    if (!is3DPreview || !mapRef.current) return;
+    const dLat = ((lat + 0.001) - lat) * Math.PI / 180;
+    const heading = 0;
+    mapRef.current.animateCamera(
+      { center: { latitude: lat, longitude: lng }, pitch: 58, heading, zoom: 16.2 },
+      { duration: 700 },
+    );
+  }, [is3DPreview, lat, lng]);
 
   useEffect(() => {
     if (!lat || !lng) return;
@@ -550,13 +562,14 @@ export default function DestinationScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_GOOGLE}
-        customMapStyle={mapStyleType === 'standard' ? (T.isDark ? GOOGLE_MAPS_DARK_STYLE : []) : undefined}
+        customMapStyle={undefined}
         mapType={mapStyleType === 'standard' ? 'standard' : mapStyleType}
         initialRegion={{ latitude: lat, longitude: lng, latitudeDelta: zoomDelta, longitudeDelta: zoomDelta }}
         showsUserLocation={false}
         showsMyLocationButton={false}
         scrollEnabled
         zoomEnabled
+        pitchEnabled
         onRegionChangeComplete={r => {
           setMapViewport(r);
           setZoomDelta(r.latitudeDelta);
@@ -599,19 +612,20 @@ export default function DestinationScreen() {
         )}
       </MapView>
 
-      {/* ── Top gradient vignette ── */}
+      {/* ── Top/Bottom gradient vignettes disabled for no-blue-gradient preview ── */}
+      {/*
       <LinearGradient
         colors={['rgba(3,4,39,0.90)', 'transparent']}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 140, zIndex: 5 }}
         pointerEvents="none"
       />
 
-      {/* ── Bottom gradient vignette ── */}
       <LinearGradient
         colors={['transparent', 'rgba(3,4,39,0.55)']}
         style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 240, zIndex: 5 }}
         pointerEvents="none"
       />
+      */}
 
       {/* ── Back button ── */}
       <Pressable
@@ -809,6 +823,38 @@ export default function DestinationScreen() {
                 );
               })}
             </View>
+
+            <Pressable
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                paddingHorizontal: 14, paddingVertical: 12, borderRadius: 14,
+                marginTop: 8, marginBottom: 4,
+                backgroundColor: T.ITEM, borderWidth: 1,
+                borderColor: is3DPreview ? T.ACCENT : T.DIVIDER,
+              }}
+              onPress={() => {
+                setIs3DPreview(prev => {
+                  if (!prev) setMapStyleType('standard');
+                  return !prev;
+                });
+              }}
+            >
+              <View style={{
+                width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+                backgroundColor: is3DPreview ? 'rgba(26,188,147,0.16)' : T.BG,
+              }}>
+                <Ionicons name="cube-outline" size={18} color={is3DPreview ? T.ACCENT : T.TEXT_MUT} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: is3DPreview ? T.ACCENT : T.TEXT_PRI, fontSize: 13, fontWeight: '700' }}>3D Preview</Text>
+                <Text style={{ color: T.TEXT_MUT, fontSize: 10 }}>Tilted camera view of the destination</Text>
+              </View>
+              <Ionicons
+                name={is3DPreview ? 'checkmark-circle' : 'chevron-forward'}
+                size={18}
+                color={is3DPreview ? T.ACCENT : T.TEXT_MUT}
+              />
+            </Pressable>
 
             <View style={[hm.sectionDiv, { backgroundColor: T.DIVIDER }]} />
 

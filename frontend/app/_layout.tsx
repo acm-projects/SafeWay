@@ -21,6 +21,8 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 
+const launchSurfaceColor = '#030427';
+
 function AppSplash({ onFinish }: { onFinish: () => void }) {
   const opacity     = useSharedValue(0);
   const scale       = useSharedValue(0.72);
@@ -54,7 +56,7 @@ function AppSplash({ onFinish }: { onFinish: () => void }) {
     <Animated.View style={[sp.container, containerStyle]}>
       <Animated.View style={[sp.logoWrap, logoStyle]}>
         <Image
-          source={require('../assets/safeway-logo.png')}
+          source={require('../assets/safeway-logo-transparent.png')}
           style={sp.logo}
           resizeMode="contain"
         />
@@ -70,7 +72,7 @@ function AppSplash({ onFinish }: { onFinish: () => void }) {
 const sp = StyleSheet.create({
   container: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#030427',
+    backgroundColor: launchSurfaceColor,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 999,
@@ -91,7 +93,7 @@ export default function RootLayout() {
   const [splashDone, setSplashDone] = useState(false);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: launchSurfaceColor }}>
       <AuthProvider>
         <AppThemeProvider>
           <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

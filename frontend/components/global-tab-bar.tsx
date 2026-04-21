@@ -39,7 +39,8 @@ export function GlobalTabBar() {
       <View style={s.capsuleWrapper}>
         <View style={[s.capsule, { borderColor: glass.border }]}>
           {Platform.OS === 'android' ? (
-            <View style={[StyleSheet.absoluteFill, s.capsuleRadius, { backgroundColor: isDark ? 'rgba(45, 27, 78, 0.92)' : 'rgba(255, 255, 255, 0.92)' }]} />
+            {/* Previous: 'rgba(45, 27, 78, 0.92)' */}
+            <View style={[StyleSheet.absoluteFill, s.capsuleRadius, { backgroundColor: isDark ? 'rgba(20, 20, 20, 0.94)' : 'rgba(255, 255, 255, 0.92)' }]} />
           ) : (
             <BlurView intensity={glass.intensity} tint={isDark ? 'dark' : 'light'} style={[StyleSheet.absoluteFill, s.capsuleRadius]} />
           )}

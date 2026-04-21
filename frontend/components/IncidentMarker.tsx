@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Marker } from 'react-native-maps';
 import {
   Animated,
@@ -9,8 +9,15 @@ import {
   Text,
   View,
 } from 'react-native';
-import Svg, { Polygon, Circle, Rect, Path, Defs, RadialGradient, Stop } from 'react-native-svg';
+import { Image } from 'react-native';
+import Svg, { Circle, Rect, Path } from 'react-native-svg';
 import type { TrafficIncident } from '@/hooks/useTrafficIncidents';
+
+const TRAFFIC_JAM_MARKER = require('@/assets/images/traffic-jam-marker.png');
+const TRAFFIC_CRASH_MARKER = require('@/assets/images/traffic-crash-marker.png');
+const ROAD_WORK_MARKER = require('@/assets/images/road-work-marker.png');
+const HAZARD_MARKER = require('@/assets/images/hazard-marker.png');
+const FLOODING_MARKER = require('@/assets/images/flooding-marker.png');
 
 // ─── Per-category config ──────────────────────────────────────────────────────
 type IncidentShape = 'diamond' | 'circle' | 'triangle' | 'square' | 'hexagon' | 'shield';
@@ -39,19 +46,28 @@ const S: Record<number, IncidentStyle> = {
   10: { color: '#5DC8E8', darkBg: '#071A22', symbol: '~',  emoji: '💨', label: 'Wind',                 shape: 'circle',   detail: 'High winds are affecting the road. Be alert for debris and maintain firm grip.' },
   11: { color: '#22AAEE', darkBg: '#061422', symbol: '~',  emoji: '💧', label: 'Flooding',             shape: 'hexagon',  detail: 'Flooding has been reported. Do not attempt to drive through standing water.' },
   14: { color: '#C084FC', darkBg: '#160A2A', symbol: '□',  emoji: '🚙', label: 'Broken Down Vehicle',  shape: 'diamond',  detail: 'A broken down vehicle is blocking part of the road. Watch for occupants on the shoulder.' },
+  12: { color: '#94A3B8', darkBg: '#0F1623', symbol: '⋯',  emoji: '📍', label: 'Traffic',              shape: 'circle',   detail: 'Traffic-related road event reported in this area. Proceed with caution.' },
+  13: { color: '#F472B6', darkBg: '#1A0A14', symbol: '⋯',  emoji: '🌀', label: 'Road condition',       shape: 'circle',   detail: 'A road condition has been reported. Adjust speed and stay alert.' },
 };
 
-function getStyle(cat: number): IncidentStyle {
-  return S[cat] ?? S[0];
+export function normalizeIncidentCategory(cat: unknown): number {
+  if (typeof cat === 'number' && Number.isFinite(cat)) return cat;
+  const n = parseInt(String(cat ?? ''), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getStyle(cat: unknown): IncidentStyle {
+  const n = normalizeIncidentCategory(cat);
+  return S[n] ?? S[0];
 }
 
 // ─── Sizing: compact when zoomed out, capped when zoomed in (never invisible) ─
 const MAX_DELTA = 0.45;
 const MIN_DELTA = 0.003;
-const SIZE_MAX = 26;
-const SIZE_MIN = 14;
+const SIZE_MAX = 34;
+const SIZE_MIN = 16;
 /** Smallest sticker size when very zoomed out — still tappable */
-const SIZE_FAR = 20;
+const SIZE_FAR = 18;
 
 function markerSize(latDelta: number): number {
   if (latDelta >= MAX_DELTA) return SIZE_FAR;
@@ -60,39 +76,195 @@ function markerSize(latDelta: number): number {
   return Math.round(SIZE_MAX - t * (SIZE_MAX - SIZE_MIN));
 }
 
-/** Sticker-style traffic jam icon (static, no animation) */
-function TrafficJamSticker({ size }: { size: number }) {
-  const vb = 48;
+/** Traffic jam — minimal white ring; RN Image + numeric layout (expo-image inside Map Marker often paints empty on Android). */
+function TrafficJamSticker({ diameter }: { diameter: number }) {
+  const d = Math.max(22, Math.round(diameter));
+  const bw = 1;
+  const zoom = 1.0;
+  const img = Math.round(d * zoom);
+  const shift = (d - img) / 2;
   return (
-    <Svg width={size} height={size} viewBox={`0 0 ${vb} ${vb}`}>
-      <Circle cx={24} cy={24} r={20} fill="#E57373" stroke="#FFFFFF" strokeWidth={3} />
-      {/* three simple cars, back to front */}
-      <Path
-        d="M10 32 L14 28 L22 28 L24 30 L24 34 L10 34 Z"
-        fill="#F9A825"
-        stroke="#1a1a1a"
-        strokeWidth={1.2}
-        strokeLinejoin="round"
+    <View
+      style={{
+        width: d,
+        height: d,
+        borderRadius: d / 2,
+        borderWidth: bw,
+        borderColor: 'rgba(255,255,255,0.94)',
+        overflow: 'hidden',
+        backgroundColor: '#0E1228',
+      }}
+    >
+      <Image
+        source={TRAFFIC_JAM_MARKER}
+        style={{ position: 'absolute', left: shift, top: shift, width: img, height: img }}
+        resizeMode="cover"
       />
-      <Circle cx={17} cy={33} r={1.6} fill="#FFF" />
-      <Path
-        d="M14 29 L18 25 L28 25 L30 27 L30 32 L14 32 Z"
-        fill="#FF7043"
-        stroke="#1a1a1a"
-        strokeWidth={1.2}
-        strokeLinejoin="round"
-      />
-      <Circle cx={22} cy={30.5} r={1.6} fill="#FFF" />
-      <Path
-        d="M18 26 L22 22 L34 22 L36 24 L36 30 L18 30 Z"
-        fill="#E53935"
-        stroke="#1a1a1a"
-        strokeWidth={1.2}
-        strokeLinejoin="round"
-      />
-      <Circle cx={28} cy={28} r={1.6} fill="#FFF" />
-    </Svg>
+    </View>
   );
+}
+
+function IncidentImageSticker({
+  diameter,
+  source,
+  resizeMode = 'cover',
+  padding = 0,
+  zoom = 1,
+  offsetY = 0,
+}: {
+  diameter: number;
+  source: any;
+  resizeMode?: 'cover' | 'contain';
+  padding?: number;
+  zoom?: number;
+  offsetY?: number;
+}) {
+  const d = Math.max(22, Math.round(diameter));
+  const bw = 1;
+  const img = Math.round(Math.max(10, (d - padding * 2) * zoom));
+  const off = Math.round((d - img) / 2);
+  return (
+    <View
+      style={{
+        width: d,
+        height: d,
+        borderRadius: d / 2,
+        borderWidth: bw,
+        borderColor: 'rgba(255,255,255,0.94)',
+        overflow: 'hidden',
+        backgroundColor: '#0E1228',
+      }}
+    >
+      <Image source={source} style={{ position: 'absolute', left: off, top: off + offsetY, width: img, height: img }} resizeMode={resizeMode} />
+    </View>
+  );
+}
+
+const VB = 40;
+
+/** White glyph on colored circle — one style for all non–traffic-jam incidents on the map. */
+function IncidentMapGlyph({ cat, dim }: { cat: number; dim: number }) {
+  const s = Math.max(13, dim * 0.62);
+  const W = '#FFFFFF';
+  const sw = 2;
+  const cap = 'round' as const;
+
+  switch (cat) {
+    case 1:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M11 25 V17 L14 13 H26 L29 17 V25" stroke={W} strokeWidth={sw} fill="none" strokeLinejoin="round" />
+          <Path d="M9 27 H31" stroke={W} strokeWidth={sw + 0.5} strokeLinecap={cap} />
+          <Path d="M14 13 L16 9 H24 L26 13" stroke={W} strokeWidth={sw} fill="none" strokeLinejoin="round" />
+        </Svg>
+      );
+    case 2:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M6 17 Q10 13 14 17 T22 17 T30 17" stroke={W} strokeWidth={1.8} fill="none" />
+          <Path d="M6 23 Q10 19 14 23 T22 23 T30 23" stroke={W} strokeWidth={1.8} fill="none" />
+          <Path d="M6 29 Q11 25 16 29 T26 29 T34 29" stroke={W} strokeWidth={1.8} fill="none" />
+        </Svg>
+      );
+    case 3:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Circle cx={20} cy={20} r={11} stroke={W} strokeWidth={sw} fill="none" />
+          <Path d="M20 13 L20 22" stroke={W} strokeWidth={2.4} strokeLinecap={cap} />
+          <Circle cx={20} cy={26.5} r={1.8} fill={W} />
+        </Svg>
+      );
+    case 4:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M11 9 L7 21" stroke={W} strokeWidth={sw} strokeLinecap={cap} />
+          <Path d="M20 7 L16 19" stroke={W} strokeWidth={sw} strokeLinecap={cap} />
+          <Path d="M29 10 L25 22" stroke={W} strokeWidth={sw} strokeLinecap={cap} />
+        </Svg>
+      );
+    case 5:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M20 8 V32 M8 20 H32 M11 11 L29 29 M29 11 L11 29" stroke={W} strokeWidth={1.8} strokeLinecap={cap} />
+        </Svg>
+      );
+    case 7:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Rect x={10} y={14} width={6} height={16} rx={1} fill={W} />
+          <Rect x={24} y={14} width={6} height={16} rx={1} fill={W} />
+          <Rect x={8} y={12} width={24} height={4} rx={1} fill={W} />
+        </Svg>
+      );
+    case 8:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Circle cx={20} cy={20} r={14} fill="none" stroke={W} strokeWidth={sw} />
+          <Path d="M12 20 H28" stroke={W} strokeWidth={sw + 1} strokeLinecap={cap} />
+        </Svg>
+      );
+    case 9:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M14 28 L20 10 L26 28" fill="none" stroke={W} strokeWidth={sw} strokeLinejoin="round" />
+          <Circle cx={20} cy={24} r={2.5} fill={W} />
+        </Svg>
+      );
+    case 10:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M7 15 Q15 11 33 15" stroke={W} strokeWidth={sw} fill="none" />
+          <Path d="M7 23 Q17 19 33 23" stroke={W} strokeWidth={sw} fill="none" />
+        </Svg>
+      );
+    case 11:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M6 27 Q11 24 16 27 T26 27 T34 27" stroke="#2DA8FF" strokeWidth={2.2} fill="none" />
+          <Path d="M6 31 Q11 28 16 31 T26 31 T34 31" stroke="#2DA8FF" strokeWidth={2.2} fill="none" />
+          <Rect x={12} y={16} width={16} height={8} rx={2} fill="#FF6B6B" />
+          <Rect x={15} y={13} width={10} height={4} rx={1.5} fill="#B3EFFF" />
+          <Circle cx={15} cy={25} r={2} fill="#4B2E53" />
+          <Circle cx={25} cy={25} r={2} fill="#4B2E53" />
+        </Svg>
+      );
+    case 12:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Circle cx={14} cy={20} r={3.2} fill={W} />
+          <Circle cx={20} cy={20} r={3.2} fill={W} />
+          <Circle cx={26} cy={20} r={3.2} fill={W} />
+        </Svg>
+      );
+    case 13:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M8 22 Q12 12 18 22 T28 22 T34 20" stroke={W} strokeWidth={sw} fill="none" strokeLinecap={cap} />
+        </Svg>
+      );
+    case 14:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Path d="M10 25 V15 H28 V25 Z" stroke={W} strokeWidth={sw} fill="none" strokeLinejoin="round" />
+          <Path d="M12 25 V28 H26 V25" stroke={W} strokeWidth={sw} fill="none" />
+          <Path d="M30 11 L34 19" stroke={W} strokeWidth={sw} strokeLinecap={cap} />
+          <Path d="M32 10 L36 18" stroke={W} strokeWidth={sw} strokeLinecap={cap} />
+        </Svg>
+      );
+    default:
+      return (
+        <Svg width={s} height={s} viewBox={`0 0 ${VB} ${VB}`}>
+          <Circle cx={20} cy={20} r={11} stroke={W} strokeWidth={sw} fill="none" />
+          <Path
+            d="M20 12 Q25 12 25 16 Q25 19 20 21 V24 M20 27 V29"
+            stroke={W}
+            strokeWidth={2.2}
+            fill="none"
+            strokeLinecap={cap}
+          />
+        </Svg>
+      );
+  }
 }
 
 // ─── Map marker bubble (emoji / sticker, no pulse) ───────────────────────────
@@ -103,53 +275,70 @@ export function IncidentBubble({
   incident: TrafficIncident;
   latDelta?: number;
 }) {
-  const st = getStyle(incident.category);
+  const cat = normalizeIncidentCategory(incident.category);
+  const st = getStyle(cat);
   const size = markerSize(latDelta);
   if (size === 0) return null;
 
-  const pad = 2;
+  const pad = 6;
   const outer = size + pad * 2;
 
-  if (incident.category === 6) {
+  if (cat === 6) {
     return (
       <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
-        <TrafficJamSticker size={size} />
+        <TrafficJamSticker diameter={Math.round(size * 1.06)} />
+      </View>
+    );
+  }
+  if (cat === 1) {
+    return (
+      <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+        <IncidentImageSticker diameter={Math.round(size * 1.06)} source={TRAFFIC_CRASH_MARKER} resizeMode="contain" padding={2} />
+      </View>
+    );
+  }
+  if (cat === 3) {
+    return (
+      <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+        <IncidentImageSticker diameter={Math.round(size * 1.06)} source={HAZARD_MARKER} resizeMode="contain" zoom={1.22} offsetY={-1} />
+      </View>
+    );
+  }
+  if (cat === 9) {
+    return (
+      <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+        <IncidentImageSticker diameter={Math.round(size * 1.06)} source={ROAD_WORK_MARKER} resizeMode="contain" zoom={1.22} offsetY={-1} />
+      </View>
+    );
+  }
+  if (cat === 11) {
+    return (
+      <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
+        <IncidentImageSticker diameter={Math.round(size * 1.06)} source={FLOODING_MARKER} resizeMode="contain" zoom={1.18} />
       </View>
     );
   }
 
-  const fontSize = Math.max(11, Math.round(size * 0.42));
-
   return (
-    <View
-      style={{
-        width: outer,
-        height: outer,
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'visible',
-      }}
-    >
+    <View style={{ width: outer, height: outer, alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}>
       <View
         style={{
           width: size,
           height: size,
           borderRadius: size / 2,
           backgroundColor: st.color,
-          borderWidth: 3,
-          borderColor: '#FFFFFF',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.94)',
           alignItems: 'center',
           justifyContent: 'center',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
+          shadowColor: '#00E5FF',
+          shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.35,
-          shadowRadius: 3,
-          elevation: 4,
+          shadowRadius: 5,
+          elevation: 6,
         }}
       >
-        <Text style={{ fontSize, lineHeight: fontSize + 1 }} allowFontScaling={false}>
-          {st.emoji}
-        </Text>
+        <IncidentMapGlyph cat={cat} dim={size} />
       </View>
     </View>
   );
@@ -168,120 +357,27 @@ export function IncidentMarker({
   /** Keep incidents above route polylines / heatmap on Google Maps. */
   zIndex?: number;
 }) {
-  const st = getStyle(incident.category);
-  const anchorY = st.shape === 'diamond' || st.shape === 'triangle' || st.shape === 'shield' ? 0.88 : 0.5;
+  const cat = normalizeIncidentCategory(incident.category);
+  const st = getStyle(cat);
+  const anchorY = 0.5;
 
   return (
     <Marker
       coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
       anchor={{ x: 0.5, y: anchorY }}
-      tracksViewChanges={false}
+      tracksViewChanges
       zIndex={zIndex}
       onPress={onPress}
     >
-      <IncidentBubble incident={incident} latDelta={latDelta} />
+      <Pressable
+        onPress={onPress}
+        hitSlop={12}
+        accessibilityRole="button"
+        accessibilityLabel={st.label}
+      >
+        <IncidentBubble incident={incident} latDelta={latDelta} />
+      </Pressable>
     </Marker>
-  );
-}
-
-// ─── Shape renderers (detail popup) ─────────────────────────────────────────
-function DiamondShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const half = canvas / 2;
-  const pad = 6;
-  const pts = [
-    `${half},${pad}`,
-    `${canvas - pad},${half - 1}`,
-    `${half},${canvas - pad + 4}`,
-    `${pad},${half - 1}`,
-  ].join(' ');
-  const iPts = [
-    `${half},${pad + 3}`,
-    `${canvas - pad - 3},${half - 1}`,
-    `${half},${canvas - pad + 1}`,
-    `${pad + 3},${half - 1}`,
-  ].join(' ');
-  return (
-    <>
-      <Polygon points={pts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      <Polygon points={iPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
-      {size >= 22 && <Circle cx={half + size * 0.14} cy={half - size * 0.15} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
-  );
-}
-
-function CircleShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const cx = canvas / 2;
-  const cy = canvas / 2;
-  const r = (canvas - 10) / 2;
-  return (
-    <>
-      <Circle cx={cx} cy={cy} r={r} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      <Circle cx={cx} cy={cy} r={r - 3} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
-      {size >= 22 && <Circle cx={cx + size * 0.12} cy={cy - size * 0.15} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
-  );
-}
-
-function TriangleShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const half = canvas / 2;
-  const pad = 6;
-  const pts = [`${half},${pad}`, `${canvas - pad},${canvas - pad}`, `${pad},${canvas - pad}`].join(' ');
-  const iPts = [`${half},${pad + 4}`, `${canvas - pad - 4},${canvas - pad - 2}`, `${pad + 4},${canvas - pad - 2}`].join(' ');
-  return (
-    <>
-      <Polygon points={pts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      <Polygon points={iPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
-      {size >= 22 && <Circle cx={half + size * 0.1} cy={half + size * 0.05} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
-  );
-}
-
-function SquareShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const pad = 6;
-  const r = 4;
-  const w = canvas - pad * 2;
-  return (
-    <>
-      <Rect x={pad} y={pad} width={w} height={w} rx={r} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      <Rect x={pad + 3} y={pad + 3} width={w - 6} height={w - 6} rx={r - 1} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
-      {size >= 22 && <Circle cx={canvas / 2 + size * 0.12} cy={canvas / 2 - size * 0.12} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
-  );
-}
-
-function HexagonShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const cx = canvas / 2;
-  const cy = canvas / 2;
-  const r = (canvas - 10) / 2;
-  const hexPts = Array.from({ length: 6 }, (_, i) => {
-    const angle = (Math.PI / 3) * i - Math.PI / 6;
-    return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
-  }).join(' ');
-  const iHexPts = Array.from({ length: 6 }, (_, i) => {
-    const angle = (Math.PI / 3) * i - Math.PI / 6;
-    return `${cx + (r - 3) * Math.cos(angle)},${cy + (r - 3) * Math.sin(angle)}`;
-  }).join(' ');
-  return (
-    <>
-      <Polygon points={hexPts} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      <Polygon points={iHexPts} fill="none" stroke={style.color} strokeWidth={0.7} strokeOpacity={0.30} />
-      {size >= 22 && <Circle cx={cx + size * 0.1} cy={cy - size * 0.12} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
-  );
-}
-
-function ShieldShape({ canvas, s: style, size, gradId }: { canvas: number; s: IncidentStyle; size: number; gradId: string }) {
-  const pad = 6;
-  const w = canvas - pad * 2;
-  const h = canvas - pad * 2;
-  const cx = canvas / 2;
-  const top = pad;
-  const d = `M ${pad + 4} ${top} H ${pad + w - 4} Q ${pad + w} ${top} ${pad + w} ${top + 4} V ${top + h * 0.55} Q ${pad + w} ${top + h * 0.85} ${cx} ${top + h} Q ${pad} ${top + h * 0.85} ${pad} ${top + h * 0.55} V ${top + 4} Q ${pad} ${top} ${pad + 4} ${top} Z`;
-  return (
-    <>
-      <Path d={d} fill={`url(#${gradId})`} stroke={style.color} strokeWidth={size >= 24 ? 1.8 : 1.2} />
-      {size >= 22 && <Circle cx={cx + size * 0.10} cy={canvas / 2 - size * 0.10} r={size * 0.09} fill="rgba(255,255,255,0.22)" />}
-    </>
   );
 }
 
@@ -315,7 +411,8 @@ export function IncidentDetailPopup({
 
   if (!incident) return null;
 
-  const st = getStyle(incident.category);
+  const cat = normalizeIncidentCategory(incident.category);
+  const st = getStyle(cat);
 
   const delayLabel = incident.delay_seconds
     ? incident.delay_seconds >= 60
@@ -326,11 +423,9 @@ export function IncidentDetailPopup({
   const road = incident.road?.length ? incident.road.join(' · ') : null;
 
   const D = 56;
-  const gradIdPop = `rgpop_${incident.category ?? 0}`;
-  const iconShapeProps = { canvas: D, s: st, size: D - 16, gradId: gradIdPop };
 
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={pop.backdrop} onPress={onClose}>
         <Animated.View style={[pop.sheet, { opacity, transform: [{ translateY: slideY }, { scale: sc }] }]}>
 
@@ -342,21 +437,24 @@ export function IncidentDetailPopup({
 
             <View style={pop.iconWrap}>
               <View style={[pop.iconGlow, { backgroundColor: st.color + '14', borderColor: st.color + '2E' }]} />
-              <Svg width={D} height={D + 4} style={{ position: 'absolute' }}>
-                <Defs>
-                  <RadialGradient id={gradIdPop} cx="50%" cy="36%" r="62%">
-                    <Stop offset="0%"   stopColor={st.color}  stopOpacity="0.30" />
-                    <Stop offset="100%" stopColor={st.darkBg} stopOpacity="1.0"  />
-                  </RadialGradient>
-                </Defs>
-                {st.shape === 'diamond'  && <DiamondShape  {...iconShapeProps} />}
-                {st.shape === 'circle'   && <CircleShape   {...iconShapeProps} />}
-                {st.shape === 'triangle' && <TriangleShape {...iconShapeProps} />}
-                {st.shape === 'square'   && <SquareShape   {...iconShapeProps} />}
-                {st.shape === 'hexagon'  && <HexagonShape  {...iconShapeProps} />}
-                {st.shape === 'shield'   && <ShieldShape   {...iconShapeProps} />}
-              </Svg>
-              <Text style={[pop.iconSymbol, { color: st.color }]}>{st.symbol}</Text>
+              {cat === 6 ? (
+                <TrafficJamSticker diameter={D - 4} />
+              ) : (
+                <View
+                  style={{
+                    width: D,
+                    height: D,
+                    borderRadius: D / 2,
+                    backgroundColor: st.color,
+                    borderWidth: 1.5,
+                    borderColor: 'rgba(255,255,255,0.95)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <IncidentMapGlyph cat={cat} dim={D} />
+                </View>
+              )}
             </View>
 
             <View style={{ flex: 1 }}>
@@ -369,7 +467,7 @@ export function IncidentDetailPopup({
               </View>
               {road && <Text style={pop.roadText} numberOfLines={1}>{road}</Text>}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
-                <View style={{ width: 8, height: 8, borderRadius: st.shape === 'circle' ? 4 : 2, backgroundColor: st.color, transform: st.shape === 'diamond' ? [{ rotate: '45deg' }] : [] }} />
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: st.color }} />
                 <Text style={[pop.severityText, { color: st.color }]}>
                   ADVISORY
                 </Text>
@@ -417,11 +515,13 @@ export function IncidentDetailPopup({
 const pop = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(2,3,22,0.60)',
+    /* Previous: 'rgba(2,3,22,0.60)' */
+    backgroundColor: 'rgba(0,0,0,0.65)',
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#07091E',
+    /* Previous: '#07091E' */
+    backgroundColor: '#111111',
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     paddingHorizontal: 20,
@@ -468,13 +568,6 @@ const pop = StyleSheet.create({
     width: 58, height: 58,
     borderRadius: 29,
     borderWidth: 1,
-  },
-  iconSymbol: {
-    position: 'absolute',
-    fontSize: 19,
-    fontWeight: '800',
-    includeFontPadding: false,
-    marginTop: -6,
   },
   titleRow: {
     flexDirection: 'row',

@@ -69,11 +69,17 @@ def score_coordinates_generic(
     Works anywhere in the world.
     """
     if not coordinates:
-        return {"score": None, "label": "unknown", "source": "generic"}
+        return {
+            "score": None, "label": "unknown", "source": "generic",
+            "segment_risks": [], "high_risk_coords": [],
+        }
 
     sampled = coordinates[::sample_every] if sample_every > 1 else coordinates
     if not sampled:
-        return {"score": None, "label": "unknown", "source": "generic"}
+        return {
+            "score": None, "label": "unknown", "source": "generic",
+            "segment_risks": [], "high_risk_coords": [],
+        }
 
     # Get weather for midpoint of route
     mid = len(sampled) // 2
@@ -102,8 +108,9 @@ def score_coordinates_generic(
     else:
         label = "high"
 
-    # Distance calculation
+    # Distance calculation + per-segment geometry (uniform risk = overall score)
     total_km = 0.0
+    segment_risks: list[dict] = []
     for i in range(len(sampled) - 1):
         lat1, lng1 = sampled[i]["latitude"], sampled[i]["longitude"]
         lat2, lng2 = sampled[i + 1]["latitude"], sampled[i + 1]["longitude"]
@@ -114,6 +121,19 @@ def score_coordinates_generic(
              math.cos(math.radians(lat2)) *
              math.sin(dlng/2)**2)
         total_km += 6371 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        segment_risks.append({
+            "start": {"latitude": lat1, "longitude": lng1},
+            "end": {"latitude": lat2, "longitude": lng2},
+            "risk": score,
+        })
+
+    high_risk_coords: list[dict] = []
+    if score > 66.0 and sampled:
+        mid = len(sampled) // 2
+        high_risk_coords.append({
+            "latitude": sampled[mid]["latitude"],
+            "longitude": sampled[mid]["longitude"],
+        })
 
     return {
         "score": score,
@@ -121,12 +141,14 @@ def score_coordinates_generic(
         "risk_per_km": score,
         "total_exposure": round(score * total_km, 2),
         "route_km": round(total_km, 3),
-        "n_high_risk": 0,
+        "n_high_risk": 1 if score > 66.0 else 0,
         "weather_multiplier": weather_mult,
         "weather_code": weather.get("weather_code", 0),
         "top_risk_factors": [],
         "time_band": None,
         "source": "generic",
         "note": "Safety score based on live weather. Enhanced scoring available for Chicago.",
+        "segment_risks": segment_risks,
+        "high_risk_coords": high_risk_coords,
     }
 

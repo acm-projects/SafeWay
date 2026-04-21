@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional, Tuple
 
 
 import psycopg2
@@ -1145,23 +1145,49 @@ def get_traffic_incidents(
 
         raw_incidents = response.json().get("incidents", [])
 
+        def _tomtom_incident_center(geometry: dict) -> Optional[Tuple[float, float]]:
+            """Return (lng, lat) for Point, LineString, or MultiLineString."""
+            gtype = geometry.get("type")
+            coords = geometry.get("coordinates") or []
+            if not coords:
+                return None
+            if gtype == "Point" and len(coords) >= 2:
+                return float(coords[0]), float(coords[1])
+            if gtype == "LineString" and coords:
+                mid = len(coords) // 2
+                pt = coords[mid]
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    return float(pt[0]), float(pt[1])
+                return None
+            if gtype == "MultiLineString" and coords:
+                lines = [c for c in coords if c]
+                if not lines:
+                    return None
+                best = max(lines, key=len)
+                mid = len(best) // 2
+                pt = best[mid]
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    return float(pt[0]), float(pt[1])
+            # Fallback: first coordinate pair we can interpret
+            first = coords[0]
+            if isinstance(first, (list, tuple)) and len(first) >= 2 and not isinstance(first[0], (list, tuple)):
+                return float(first[0]), float(first[1])
+            if isinstance(first, (list, tuple)) and first and isinstance(first[0], (list, tuple)):
+                line = first[0]
+                if len(line) >= 2:
+                    return float(line[0]), float(line[1])
+            return None
+
         incidents = []
         for incident in raw_incidents:
             props = incident.get("properties", {})
             geometry = incident.get("geometry", {})
-            coords = geometry.get("coordinates", [])
             category = props.get("iconCategory", 0)
 
-            # Get center point of incident
-            if coords:
-                if geometry.get("type") == "Point":
-                    inc_lng, inc_lat = coords[0], coords[1]
-                else:
-                    # For LineString take midpoint
-                    mid = len(coords) // 2
-                    inc_lng, inc_lat = coords[mid][0], coords[mid][1]
-            else:
+            center = _tomtom_incident_center(geometry)
+            if not center:
                 continue
+            inc_lng, inc_lat = center
 
             incidents.append({
                 "id": props.get("id", ""),
