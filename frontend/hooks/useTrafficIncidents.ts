@@ -28,15 +28,19 @@ export function useTrafficIncidents(params: {
   const [incidents, setIncidents] = useState<TrafficIncident[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Prevent re-fetching once we have a successful result
+  const hasFetchedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  async function fetchIncidents(silent = false) {
+  async function fetchIncidents() {
     if (!lat || !lng || !enabled) return;
-    if (!silent) setLoading(true);
+
+    setLoading(true);
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+
     try {
       const url = `${apiBaseUrl}/traffic/incidents?lat=${lat}&lng=${lng}&radius_km=${radiusKm}`;
       const res = await fetch(url, { signal: ctrl.signal });
@@ -56,28 +60,32 @@ export function useTrafficIncidents(params: {
         })),
       );
       setError(null);
+      hasFetchedRef.current = true;
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         setError(e?.message ?? 'Failed to fetch incidents');
       }
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   }
 
   useEffect(() => {
     if (!enabled || !lat || !lng) {
       setIncidents([]);
+      hasFetchedRef.current = false;
       return;
     }
-    fetchIncidents(false);
-    // Refresh every 2 minutes (matches backend cache TTL)
-    intervalRef.current = setInterval(() => fetchIncidents(true), 120_000);
+
+    // Only fetch if we haven't successfully loaded incidents yet
+    if (!hasFetchedRef.current) {
+      fetchIncidents();
+    }
+
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
       abortRef.current?.abort();
     };
   }, [lat, lng, radiusKm, enabled]);
 
-  return { incidents, loading, error, refetch: () => fetchIncidents(false) };
+  return { incidents, loading, error, refetch: () => fetchIncidents() };
 }

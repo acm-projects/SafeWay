@@ -361,11 +361,17 @@ export function IncidentMarker({
   const st = getStyle(cat);
   const anchorY = 0.5;
 
+  // tracksViewChanges={true} tells the native Google Maps layer to re-snapshot
+  // the custom view on every render — this is what causes the white flash.
+  // Start true so the initial bitmap is captured, then permanently flip to
+  // false after the first layout so no further re-snapshots ever occur.
+  const [tracksViewChanges, setTracksViewChanges] = React.useState(true);
+
   return (
     <Marker
       coordinate={{ latitude: incident.latitude, longitude: incident.longitude }}
       anchor={{ x: 0.5, y: anchorY }}
-      tracksViewChanges
+      tracksViewChanges={tracksViewChanges}
       zIndex={zIndex}
       onPress={onPress}
     >
@@ -374,6 +380,9 @@ export function IncidentMarker({
         hitSlop={12}
         accessibilityRole="button"
         accessibilityLabel={st.label}
+        onLayout={() => {
+          if (tracksViewChanges) setTracksViewChanges(false);
+        }}
       >
         <IncidentBubble incident={incident} latDelta={latDelta} />
       </Pressable>

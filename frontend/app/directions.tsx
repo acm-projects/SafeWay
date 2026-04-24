@@ -332,7 +332,7 @@ function minDistanceKmToPolyline(
 /** Show markers at city / route overview zoom — after fitToCoordinates latDelta is often ~0.2–0.5. */
 const INCIDENT_MAP_MAX_LAT_DELTA = 0.85;
 const ROUTE_INCIDENT_BUFFER_KM = 1.75;
-const MAX_ROUTE_INCIDENT_MARKERS = 80;
+const MAX_ROUTE_INCIDENT_MARKERS = 20;
 
 function mapSafetyRoutesToAlternatives(safetyRoutes: SafetyRoute[]): RouteAltRow[] {
   return safetyRoutes.map((r: SafetyRoute, i: number) => {
@@ -1620,21 +1620,34 @@ function RouteCard({
   const safetyColor = score == null ? TEXT_MUT
     : score < 33 ? SEAFOAM : score < 66 ? '#FFA500' : '#FF4444';
 
+  const badgeColor = isSafeWay ? SEAFOAM : (safetyPct != null ? safetyColor : 'rgba(255,255,255,0.25)');
+
   return (
     <Pressable onPress={onSelect}>
       <View style={[
         deck.card,
         {
-          backgroundColor: isSelected ? T.BG : T.CARD,
+          backgroundColor: isSelected ? T.CARD : T.BG,
           borderColor: isSelected ? 'rgba(255,255,255,0.15)' : GLASS_BORDER,
           borderWidth: 1,
           marginBottom: 10,
+          overflow: 'hidden',
         },
       ]}>
+        {/* Top strip — full color when selected, invisible when not */}
+        <View style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+          backgroundColor: isSelected ? badgeColor : 'transparent',
+          borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        }} />
+
         {/* Card header: safety badge + timing */}
-        <View style={deck.cardHeader}>
-          {/* Safety badge */}
-          <View style={[deck.safetyBadge, { borderColor: safetyColor + '40' }]}>
+        <View style={[deck.cardHeader, { marginTop: 6 }]}>
+          {/* Safety badge — lit up with color when selected, dim when not */}
+          <View style={[deck.safetyBadge, {
+            borderColor: isSelected ? badgeColor : safetyColor + '40',
+            borderWidth: isSelected ? 2 : 1,
+          }]}>
             {isSafeWay ? (
               <LinearGradient
                 colors={['#064E3B', '#047857']}
