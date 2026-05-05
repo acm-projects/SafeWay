@@ -36,7 +36,7 @@ export default function GuideScreen() {
         <ThemedText style={styles.cardTitle}>Frontend env</ThemedText>
         <ThemedText style={styles.cardBody}>
           Set EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_API_BASE_URL, and
-          EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in frontend/.env
+          GOOGLE_MAPS_API_KEY in frontend/.env
         </ThemedText>
       </View>
 

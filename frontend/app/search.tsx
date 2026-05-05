@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  FlatList,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,286 +13,288 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withRepeat, withTiming,
+  withSequence, Easing,
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 
-import { AppTheme } from '@/constants/theme';
 import { searchPlaces } from '@/lib/api';
 import type { PlaceSearchResult } from '@/lib/api';
+import { useTheme } from '@/providers/theme-context';
 
-const CATEGORIES = [
-  { label: 'Gas', icon: 'car-outline' as const, query: 'gas station' },
-  { label: 'Food', icon: 'restaurant-outline' as const, query: 'restaurant' },
-  { label: 'Parks', icon: 'leaf-outline' as const, query: 'park' },
-  { label: 'Coffee', icon: 'cafe-outline' as const, query: 'coffee shop' },
+const NEARBY = [
+  { label: 'Restaurants', icon: 'restaurant-outline' as const, q: 'restaurant' },
+  { label: 'Gas Stations', icon: 'car-outline'        as const, q: 'gas station' },
+  { label: 'Coffee',       icon: 'cafe-outline'        as const, q: 'coffee shop' },
+  { label: 'Parks',        icon: 'leaf-outline'        as const, q: 'park' },
 ];
+
+function placeIconFor(name: string): { icon: string; bg: string } {
+  const t = name.toLowerCase();
+  if (t.includes('university') || t.includes('college') || t.includes('school'))
+    return { icon: 'school-outline', bg: '#3A7BD5' };
+  if (t.includes('restaurant') || t.includes('food') || t.includes('burger') || t.includes('pizza') || t.includes('grill') || t.includes('kitchen'))
+    return { icon: 'restaurant-outline', bg: '#E05C5C' };
+  if (t.includes('coffee') || t.includes('cafe') || t.includes('starbucks'))
+    return { icon: 'cafe-outline', bg: '#A0522D' };
+  if (t.includes('smoothie') || t.includes('juice') || t.includes('boba'))
+    return { icon: 'nutrition-outline', bg: '#C06090' };
+  if (t.includes('gas') || t.includes('fuel') || t.includes('shell') || t.includes('chevron'))
+    return { icon: 'car-outline', bg: '#5A8A5A' };
+  if (t.includes('park') || t.includes('trail') || t.includes('nature'))
+    return { icon: 'leaf-outline', bg: '#4A9A4A' };
+  if (t.includes('library') || t.includes('museum'))
+    return { icon: 'library-outline', bg: '#3A7BD5' };
+  if (t.includes('target') || t.includes('walmart') || t.includes('costco') || t.includes('store') || t.includes('wholesale'))
+    return { icon: 'cart-outline', bg: '#C05050' };
+  if (t.includes('hospital') || t.includes('medical') || t.includes('clinic'))
+    return { icon: 'medical-outline', bg: '#E05C5C' };
+  return { icon: 'location-outline', bg: '#4A5FC4' };
+}
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
   const inputRef = useRef<TextInput>(null);
+  const debRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { T } = useTheme();
 
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<PlaceSearchResult[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [query, setQuery]           = useState('');
+  const [results, setResults]       = useState<PlaceSearchResult[]>([]);
+  const [suggestions, setSugg]      = useState<PlaceSearchResult[]>([]);
+  const [busy, setBusy]             = useState(false);
+  const [suggBusy, setSuggBusy]     = useState(false);
+  const [searched, setSearched]     = useState(false);
+  const [recents, setRecents]       = useState<string[]>([]);
+  const [showDrop, setShowDrop]     = useState(false);
+  const [isListening, setIsListening] = useState(false);
 
-  async function runSearch(searchText: string) {
-    const trimmed = searchText.trim();
-    if (!trimmed) return;
-    setQuery(trimmed);
-    setBusy(true);
-    setHasSearched(true);
-    try {
-      const data = await searchPlaces(trimmed);
-      setResults(data);
-      // Add to recent searches (deduplicate, keep last 3)
-      setRecentSearches((prev) => {
-        const filtered = prev.filter((s) => s.toLowerCase() !== trimmed.toLowerCase());
-        return [trimmed, ...filtered].slice(0, 3);
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('429')) {
-        Alert.alert('Rate limit reached', 'Daily API limit exceeded. Please try again tomorrow.');
-      } else {
-        Alert.alert('Search failed', error instanceof Error ? error.message : 'Unable to search places.');
-      }
-    } finally {
-      setBusy(false);
-    }
+  const micScale   = useSharedValue(1);
+  const micOpacity = useSharedValue(1);
+  const micAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: micScale.value }],
+    opacity: micOpacity.value,
+  }));
+
+  function startListening() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsListening(true);
+    micScale.value   = withRepeat(withSequence(withTiming(1.3, { duration: 400, easing: Easing.inOut(Easing.ease) }), withTiming(1, { duration: 400 })), -1, false);
+    micOpacity.value = withRepeat(withSequence(withTiming(0.5, { duration: 400 }), withTiming(1, { duration: 400 })), -1, false);
+    inputRef.current?.focus();
+    setTimeout(() => stopListening(), 6000);
   }
 
-  function handleSelectPlace(place: PlaceSearchResult) {
+  function stopListening() {
+    setIsListening(false);
+    micScale.value   = withTiming(1, { duration: 200 });
+    micOpacity.value = withTiming(1, { duration: 200 });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }
+
+  useEffect(() => {
+    if (debRef.current) clearTimeout(debRef.current);
+    const t = query.trim();
+    if (t.length < 2) { setSugg([]); setShowDrop(false); return; }
+    debRef.current = setTimeout(async () => {
+      setSuggBusy(true);
+      try {
+        const data = await searchPlaces(t);
+        setSugg(data.slice(0, 5));
+        setShowDrop(data.length > 0);
+      } catch { setSugg([]); setShowDrop(false); }
+      finally { setSuggBusy(false); }
+    }, 350);
+    return () => { if (debRef.current) clearTimeout(debRef.current); };
+  }, [query]);
+
+  async function runSearch(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    setShowDrop(false); setQuery(t); setBusy(true); setSearched(true);
+    try {
+      const data = await searchPlaces(t);
+      setResults(data);
+      setRecents(prev => [t, ...prev.filter(s => s.toLowerCase() !== t.toLowerCase())].slice(0, 5));
+    } catch { setResults([]); }
+    finally { setBusy(false); }
+  }
+
+  function goToPlace(place: PlaceSearchResult) {
+    setShowDrop(false);
     router.replace({
       pathname: '/destination',
-      params: {
-        placeId: place.place_id,
-        name: place.name,
-        address: place.address,
-        lat: String(place.lat),
-        lng: String(place.lng),
-      },
+      params: { placeId: place.place_id, name: place.name, address: place.address, lat: String(place.lat), lng: String(place.lng) },
     });
   }
 
+  function handleClear() {
+    setQuery(''); setResults([]); setSugg([]); setSearched(false); setShowDrop(false);
+    inputRef.current?.focus();
+  }
+
+  const showResults = searched && !showDrop && results.length > 0;
+  const showEmpty   = searched && !busy && !showDrop && results.length === 0;
+  const showPre     = !searched && !showDrop;
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
-      {/* Search header */}
-      <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color={AppTheme.palette.midnightViolet} />
-        </Pressable>
-        <View style={styles.inputWrapper}>
-          <Ionicons name="search" size={18} color="#7A6B85" />
-          <TextInput
-            ref={inputRef}
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search a destination"
-            placeholderTextColor="#7A6B85"
-            autoFocus
-            returnKeyType="search"
-            onSubmitEditing={() => runSearch(query)}
-            style={styles.input}
-          />
-          {query.length > 0 && (
-            <Pressable onPress={() => { setQuery(''); setResults([]); setHasSearched(false); }}>
-              <Ionicons name="close-circle" size={20} color="#7A6B85" />
-            </Pressable>
-          )}
-        </View>
-      </View>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: T.BG }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
+      <View style={{ flex: 1, paddingTop: insets.top }}>
 
-      {/* Results */}
-      {results.length > 0 ? (
-        <FlatList
-          data={results}
-          keyExtractor={(item) => item.place_id}
-          contentContainerStyle={styles.resultsList}
-          renderItem={({ item }) => (
-            <Pressable style={styles.resultItem} onPress={() => handleSelectPlace(item)}>
-              <View style={styles.resultIcon}>
-                <Ionicons name="location-outline" size={20} color={AppTheme.palette.teal} />
-              </View>
-              <View style={styles.resultContent}>
-                <Text style={styles.resultName}>{item.name}</Text>
-                <Text style={styles.resultAddress}>{item.address}</Text>
-              </View>
-            </Pressable>
-          )}
-        />
-      ) : hasSearched && !busy ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="search-outline" size={48} color="#D7CFDB" />
-          <Text style={styles.emptyText}>No results found</Text>
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.suggestionsContent}>
-          {/* Title */}
-          <Text style={styles.sectionTitle}>Search destinations</Text>
-
-          {/* Category chips */}
-          <View style={styles.categoryRow}>
-            {CATEGORIES.map((cat) => (
-              <Pressable
-                key={cat.label}
-                style={styles.categoryChip}
-                onPress={() => runSearch(cat.query)}>
-                <Ionicons name={cat.icon} size={18} color={AppTheme.palette.teal} />
-                <Text style={styles.categoryLabel}>{cat.label}</Text>
-              </Pressable>
-            ))}
+        {/* Search bar */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, gap: 10 }}>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 28, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: T.CARD }}>
+            <Ionicons name="search" size={18} color={T.TEXT_MUT} />
+            <TextInput
+              ref={inputRef}
+              value={query}
+              onChangeText={t => {
+                setQuery(t);
+                if (searched) { setSearched(false); setResults([]); }
+                if (isListening && t.length > 0) stopListening();
+              }}
+              placeholder="Where to?"
+              placeholderTextColor={T.TEXT_MUT}
+              autoFocus
+              returnKeyType="search"
+              onSubmitEditing={() => runSearch(query)}
+              style={{ flex: 1, fontSize: 16, color: T.TEXT_PRI }}
+              selectionColor={T.ACCENT}
+              underlineColorAndroid="transparent"
+            />
+            {suggBusy
+              ? <ActivityIndicator size="small" color={T.ACCENT} />
+              : query.length > 0
+                ? <Pressable onPress={handleClear}><Ionicons name="close-circle" size={18} color={T.TEXT_MUT} /></Pressable>
+                : (
+                  <Pressable onPress={isListening ? stopListening : startListening} hitSlop={10}>
+                    <Animated.View style={[{ width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
+                      isListening && { backgroundColor: T.ACCENT }, micAnimStyle]}>
+                      <Ionicons name={isListening ? 'mic' : 'mic-outline'} size={18} color={isListening ? '#FFFFFF' : T.TEXT_MUT} />
+                    </Animated.View>
+                  </Pressable>
+                )
+            }
           </View>
+          <Pressable style={{ paddingHorizontal: 4, paddingVertical: 8 }} onPress={() => router.back()}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#FFFFFF' }}>Cancel</Text>
+          </Pressable>
+        </View>
 
-          {/* Recent searches */}
-          {recentSearches.length > 0 && (
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
+          contentContainerStyle={{ flexGrow: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Autocomplete dropdown */}
+          {showDrop && suggestions.length > 0 && (
+            <View style={{ marginHorizontal: 16, marginBottom: 8, borderRadius: 18, overflow: 'hidden', elevation: 8, backgroundColor: T.CARD }}>
+              {suggestions.map((item, i) => {
+                const { icon, bg } = placeIconFor(item.name);
+                return (
+                  <View key={item.place_id}>
+                    <Pressable style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13, gap: 12 }} onPress={() => goToPlace(item)}>
+                      <View style={{ width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center', backgroundColor: bg }}>
+                        <Ionicons name={icon as any} size={16} color="#fff" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: T.TEXT_PRI }} numberOfLines={1}>{item.name}</Text>
+                        <Text style={{ fontSize: 12, marginTop: 1, color: T.TEXT_MUT }} numberOfLines={1}>{item.address}</Text>
+                      </View>
+                      <Pressable onPress={() => { setQuery(item.name); setShowDrop(false); }}>
+                        <Ionicons name="return-up-back-outline" size={16} color={T.TEXT_MUT} />
+                      </Pressable>
+                    </Pressable>
+                    {i < suggestions.length - 1 && <View style={{ height: 1, backgroundColor: T.DIVIDER, marginLeft: 60 }} />}
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Pre-search */}
+          {showPre && (
             <>
-              <Text style={styles.sectionTitle}>Recent</Text>
-              {recentSearches.map((term) => (
-                <Pressable
-                  key={term}
-                  style={styles.recentItem}
-                  onPress={() => runSearch(term)}>
-                  <Ionicons name="time-outline" size={18} color="#7A6B85" />
-                  <Text style={styles.recentText}>{term}</Text>
-                </Pressable>
-              ))}
+              {recents.length > 0 && (
+                <>
+                  <Text style={{ fontSize: 11, fontWeight: '700', letterSpacing: 1.2, paddingHorizontal: 20, marginBottom: 10, color: T.TEXT_MUT }}>RECENTS</Text>
+                  <View style={{ marginHorizontal: 16, borderRadius: 18, overflow: 'hidden', backgroundColor: T.CARD }}>
+                    {recents.map((term, i) => (
+                      <View key={term}>
+                        <Pressable style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, gap: 14 }} onPress={() => runSearch(term)}>
+                          <View style={{ width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', backgroundColor: T.ITEM }}>
+                            <Ionicons name="time-outline" size={18} color={T.TEXT_MUT} />
+                          </View>
+                          <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: T.TEXT_PRI }}>{term}</Text>
+                        </Pressable>
+                        {i < recents.length - 1 && <View style={{ height: 1, backgroundColor: T.DIVIDER, marginLeft: 68 }} />}
+                      </View>
+                    ))}
+                  </View>
+                </>
+              )}
+              <Text style={[{ fontSize: 11, fontWeight: '700', letterSpacing: 1.2, paddingHorizontal: 20, marginBottom: 10, color: T.TEXT_MUT }, recents.length > 0 && { marginTop: 22 }]}>FIND NEARBY</Text>
+              <View style={{ marginHorizontal: 16, borderRadius: 18, overflow: 'hidden', backgroundColor: T.CARD }}>
+                {NEARBY.map((item, i) => (
+                  <View key={item.label}>
+                    <Pressable style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, gap: 14 }} onPress={() => runSearch(item.q)}>
+                      {/* Icon circle uses T.ITEM bg, icon color uses T.ACCENT so it's purple in light mode */}
+                      <View style={{ width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', backgroundColor: T.ITEM }}>
+                        <Ionicons name={item.icon} size={18} color="#1ABC93" />
+                      </View>
+                      <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: T.TEXT_PRI }}>{item.label}</Text>
+                      <Ionicons name="chevron-forward" size={16} color={T.TEXT_MUT} />
+                    </Pressable>
+                    {i < NEARBY.length - 1 && <View style={{ height: 1, backgroundColor: T.DIVIDER, marginLeft: 68 }} />}
+                  </View>
+                ))}
+              </View>
             </>
           )}
 
-        </ScrollView>
-      )}
+          {/* Full results */}
+          {showResults && (
+            <>
+              <Text style={{ fontSize: 11, fontWeight: '700', letterSpacing: 1.2, paddingHorizontal: 20, marginBottom: 10, color: T.TEXT_MUT }}>RESULTS</Text>
+              {results.map((item, i) => {
+                const { icon, bg } = placeIconFor(item.name);
+                return (
+                  <View key={item.place_id}>
+                    <Pressable style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 15, gap: 14 }} onPress={() => goToPlace(item)}>
+                      <View style={{ width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', backgroundColor: bg }}>
+                        <Ionicons name={icon as any} size={18} color="#fff" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: T.TEXT_PRI }} numberOfLines={1}>{item.name}</Text>
+                        <Text style={{ fontSize: 12, marginTop: 1, color: T.TEXT_MUT }} numberOfLines={1}>{item.address}</Text>
+                      </View>
+                    </Pressable>
+                    {i < results.length - 1 && <View style={{ height: 1, backgroundColor: T.DIVIDER }} />}
+                  </View>
+                );
+              })}
+            </>
+          )}
 
-      {/* Loading overlay */}
-      {busy && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={AppTheme.palette.teal} />
-        </View>
-      )}
-    </View>
+          {showEmpty && (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 }}>
+              <Ionicons name="search-outline" size={48} color={T.TEXT_MUT} />
+              <Text style={{ fontSize: 16, color: T.TEXT_MUT }}>No results found</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        {busy && (
+          <View style={[StyleSheet.absoluteFillObject, { justifyContent: 'center', alignItems: 'center', backgroundColor: T.isDark ? 'rgba(11,17,32,0.7)' : 'rgba(242,244,248,0.85)' }]}>
+            <ActivityIndicator size="large" color={T.ACCENT} />
+          </View>
+        )}
+      </View>
+    </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: AppTheme.palette.white,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: AppTheme.spacing.md,
-    gap: AppTheme.spacing.sm,
-    paddingBottom: AppTheme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8DEE9',
-  },
-  backButton: {
-    padding: AppTheme.spacing.xs,
-  },
-  inputWrapper: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F0F6',
-    borderRadius: AppTheme.radius.md,
-    paddingHorizontal: AppTheme.spacing.md,
-    paddingVertical: 10,
-    gap: AppTheme.spacing.sm,
-  },
-  input: {
-    flex: 1,
-    color: AppTheme.palette.midnightViolet,
-    fontSize: AppTheme.typography.body,
-  },
-
-  /* Suggestions (before search) */
-  suggestionsContent: {
-    padding: AppTheme.spacing.lg,
-    gap: AppTheme.spacing.lg,
-  },
-  sectionTitle: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    gap: AppTheme.spacing.sm,
-  },
-  categoryChip: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#E8F5F6',
-    borderRadius: AppTheme.radius.md,
-    paddingVertical: 14,
-  },
-  categoryLabel: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-
-  /* Recent searches */
-  recentItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-    paddingVertical: AppTheme.spacing.sm,
-  },
-  recentText: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 15,
-  },
-
-  /* Results */
-  resultsList: {
-    paddingHorizontal: AppTheme.spacing.md,
-  },
-  resultItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-    paddingVertical: AppTheme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0EBF1',
-  },
-  resultIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#E8F5F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resultContent: {
-    flex: 1,
-  },
-  resultName: {
-    color: AppTheme.palette.midnightViolet,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  resultAddress: {
-    color: '#7A6B85',
-    fontSize: AppTheme.typography.caption,
-    marginTop: 2,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: AppTheme.spacing.md,
-  },
-  emptyText: {
-    color: '#7A6B85',
-    fontSize: AppTheme.typography.body,
-  },
-
-  /* Loading */
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(252, 252, 252, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-});
