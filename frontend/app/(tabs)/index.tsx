@@ -1,4 +1,4 @@
-import HexHeatmap from '@/app/HexHeatmap';
+import RoadHeatmap from '@/app/RoadHeatmap';
 import { useNearbyUsers } from '@/lib/useNearbyUsers';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import React from 'react';
@@ -1030,16 +1030,7 @@ export default function HomeScreen() {
   </Marker>
 ))}
         {heatmapFilter !== 'off' && (
-  currentRegion.latitudeDelta > 0.05
-    ? <HexHeatmap points={crashPoints} region={currentRegion} filter={heatmapFilter} />
-    : crashPoints.slice(0, 500).map((pt, i) => (
-        <Marker
-          key={`crash-${i}`}
-          coordinate={{ latitude: pt.latitude, longitude: pt.longitude }}
-          pinColor="red"
-          anchor={{ x: 0.5, y: 0.5 }}
-        />
-      ))
+  <RoadHeatmap filter={heatmapFilter} opacity={1.0} />
 )}
       </MapView>
 
